@@ -7,7 +7,15 @@ import * as Effect from "effect/Effect";
 const DEFAULT_MAX_DEPTH = 3;
 // Bounds a scan of a huge non-umbrella folder; a client folder holds far fewer directories.
 const DEFAULT_MAX_DIRECTORIES = 1_000;
-const SKIPPED_DIRECTORY_NAMES = new Set(["node_modules"]);
+// Package managers and vendored trees hold checkouts that are dependencies, not the user's work.
+const SKIPPED_DIRECTORY_NAMES = new Set([
+  "node_modules",
+  "venv",
+  "vendor",
+  "site-packages",
+  "third_party",
+  "Pods",
+]);
 
 export interface NestedRepositoryDiscoveryOptions {
   readonly maxDepth?: number;
@@ -20,7 +28,7 @@ const readDirectoryEntries = (directory: string) =>
 /**
  * Git checkouts under `root`, at most `maxDepth` levels down. A checkout's own folders are not
  * searched, and linked worktrees and submodules (a `.git` file) are skipped: they belong to
- * another repository. Hidden folders, `node_modules`, and symlinks are never entered.
+ * another repository. Hidden, dependency, and vendored folders and symlinks are never entered.
  */
 export const discoverNestedRepositories = Effect.fn("umbrellaDiscovery.discoverNestedRepositories")(
   function* (root: string, options: NestedRepositoryDiscoveryOptions = {}) {

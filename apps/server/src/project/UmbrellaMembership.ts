@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -28,24 +29,37 @@ interface UmbrellaProject {
   readonly workspaceRoot: string;
 }
 
-const EMPTY_PATHS: ReadonlyArray<string> = [];
+export interface UmbrellaState {
+  readonly members: ReadonlyArray<UmbrellaMember>;
+  readonly suggestions: ReadonlyArray<UmbrellaMember>;
+  readonly enclosingRepository: string | null;
+}
 
+const EMPTY_PATHS: ReadonlyArray<string> = [];
+const EMPTY_STATE: UmbrellaState = { members: [], suggestions: [], enclosingRepository: null };
+
+/** Adopting a checkout turns the umbrella on, so only discovery waits for the user's confirmation. */
 function umbrellaSettingsOf(
   overrides:
-    | Pick<ProjectSettingsOverrides, "umbrellaAdoptedPaths" | "umbrellaExcludedPaths">
+    | Pick<
+        ProjectSettingsOverrides,
+        "umbrellaEnabled" | "umbrellaAdoptedPaths" | "umbrellaExcludedPaths"
+      >
     | undefined,
 ) {
   return {
+    enabled: overrides?.umbrellaEnabled === true,
     adopted: overrides?.umbrellaAdoptedPaths ?? EMPTY_PATHS,
     excluded: overrides?.umbrellaExcludedPaths ?? EMPTY_PATHS,
   };
 }
+type UmbrellaSettings = ReturnType<typeof umbrellaSettingsOf>;
 
 /**
  * Discovered checkouts plus adopted ones, minus exclusions, ordered by relative path. Relative
  * settings paths resolve against the root; a checkout found both ways counts as nested.
  */
-export function resolveUmbrellaMembers(input: {
+function resolveUmbrellaMembers(input: {
   readonly path: Path.Path;
   readonly workspaceRoot: string;
   readonly nested: ReadonlyArray<string>;
@@ -74,21 +88,50 @@ export function resolveUmbrellaMembers(input: {
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
-const sameSettings = (
-  left: ReturnType<typeof umbrellaSettingsOf>,
-  right: ReturnType<typeof umbrellaSettingsOf>,
-) =>
+/**
+ * Members take effect only once the user turns the umbrella on; until then they are suggestions.
+ * A root inside another repository's work tree cannot be an umbrella: that repository's paths
+ * are relative to its own top level, not to the umbrella.
+ */
+export function umbrellaStateOf(input: {
+  readonly path: Path.Path;
+  readonly workspaceRoot: string;
+  readonly nested: ReadonlyArray<string>;
+  readonly settings: UmbrellaSettings;
+  readonly enclosingRepository: string | null;
+}): UmbrellaState {
+  if (input.enclosingRepository !== null) {
+    return { ...EMPTY_STATE, enclosingRepository: input.enclosingRepository };
+  }
+  const candidates = resolveUmbrellaMembers({
+    path: input.path,
+    workspaceRoot: input.workspaceRoot,
+    nested: input.nested,
+    adopted: input.settings.adopted,
+    excluded: input.settings.excluded,
+    identityOf: () => null,
+  });
+  if (candidates.length === 0) return EMPTY_STATE;
+  return input.settings.enabled
+    ? { ...EMPTY_STATE, members: candidates }
+    : { ...EMPTY_STATE, suggestions: candidates };
+}
+
+const sameSettings = (left: UmbrellaSettings, right: UmbrellaSettings) =>
+  left.enabled === right.enabled &&
   left.adopted.join("\0") === right.adopted.join("\0") &&
   left.excluded.join("\0") === right.excluded.join("\0");
 
 export class UmbrellaMembership extends Context.Service<
   UmbrellaMembership,
   {
-    /** From cached discovery and identities, never scanning inline; undefined before the root's first scan. */
-    readonly membersOf: (
-      project: UmbrellaProject,
-    ) => Effect.Effect<ReadonlyArray<UmbrellaMember> | undefined>;
-    /** Projects whose adopted or excluded checkouts changed in settings. */
+    /** From cached scans and identities, never scanning inline; undefined before the root's first scan. */
+    readonly stateOf: (project: UmbrellaProject) => Effect.Effect<UmbrellaState | undefined>;
+    /** Umbrella projects with a member checked out at this path. */
+    readonly umbrellasWithMember: (memberPath: string) => ReadonlyArray<ProjectId>;
+    /** Recomputes which checkouts git leaves out, after projects move or go away. */
+    readonly refreshIndex: Effect.Effect<void>;
+    /** Projects whose umbrella settings changed. */
     readonly subscribeChanges: Effect.Effect<
       PubSub.Subscription<ReadonlyArray<ProjectId>>,
       never,
@@ -115,78 +158,98 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed((): ServerSettingsSchema["projectSettingsOverrides"] => ({})),
   );
 
-  const resolveFor = (
+  // A folder rarely moves into or out of a repository, so the answer is kept per root.
+  const enclosingRepositories = new Map<string, string | null>();
+  const enclosingRepositoryOf = Effect.fnUntraced(function* (workspaceRoot: string) {
+    const cached = enclosingRepositories.get(workspaceRoot);
+    if (cached !== undefined) return cached;
+    const hasGit = (directory: string) =>
+      fileSystem.exists(path.join(directory, ".git")).pipe(Effect.orElseSucceed(() => false));
+    let enclosing: string | null = null;
+    if (!(yield* hasGit(workspaceRoot))) {
+      let directory = path.dirname(path.resolve(workspaceRoot));
+      while (enclosing === null) {
+        if (yield* hasGit(directory)) enclosing = directory;
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
+    }
+    enclosingRepositories.set(workspaceRoot, enclosing);
+    return enclosing;
+  });
+
+  const stateFor = Effect.fnUntraced(function* (
     project: UmbrellaProject,
-    nested: ReadonlyArray<string>,
     overrides: ServerSettingsSchema["projectSettingsOverrides"],
-    identityOf: (memberPath: string) => RepositoryIdentity | null,
-  ) =>
-    resolveUmbrellaMembers({
+    scan: "peek" | "read",
+  ) {
+    const settings = umbrellaSettingsOf(overrides[project.id]);
+    const nested =
+      scan === "read"
+        ? yield* enrichment.readNestedRepositories(project.workspaceRoot)
+        : yield* enrichment.peekNestedRepositories(project.workspaceRoot, {
+            rescanWhenStale: settings.enabled,
+          });
+    if (nested === null) return undefined;
+    return umbrellaStateOf({
       path,
       workspaceRoot: project.workspaceRoot,
       nested,
-      ...umbrellaSettingsOf(overrides[project.id]),
-      identityOf,
+      settings,
+      enclosingRepository: yield* enclosingRepositoryOf(project.workspaceRoot),
     });
+  });
 
-  const membersOf: UmbrellaMembership["Service"]["membersOf"] = Effect.fnUntraced(
-    function* (project) {
-      const nested = yield* enrichment.peekNestedRepositories(project.workspaceRoot);
-      if (nested === null) return undefined;
-      const overrides = yield* readSettings;
-      const { adopted } = umbrellaSettingsOf(overrides[project.id]);
-      if (nested.length === 0 && adopted.length === 0) return [];
-      const candidates = resolveFor(project, nested, overrides, () => null);
-      const identities = new Map(
-        yield* Effect.forEach(candidates, (member) =>
-          enrichment
-            .getAvailable(member.path)
-            .pipe(
-              Effect.map(({ repositoryIdentity }) => [member.path, repositoryIdentity] as const),
-            ),
-        ),
-      );
-      return candidates.map((member) => ({
-        ...member,
-        repositoryIdentity: identities.get(member.path) ?? null,
-      }));
-    },
-  );
+  const stateOf: UmbrellaMembership["Service"]["stateOf"] = Effect.fnUntraced(function* (project) {
+    const state = yield* stateFor(project, yield* readSettings, "peek");
+    if (state === undefined || state.members.length === 0) return state;
+    const members = yield* Effect.forEach(state.members, (member) =>
+      enrichment
+        .getAvailable(member.path)
+        .pipe(Effect.map(({ repositoryIdentity }) => ({ ...member, repositoryIdentity }))),
+    );
+    return { ...state, members };
+  });
 
   const realPath = (value: string) =>
     fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
 
-  // Git consults the index on every read, so it holds only the members' resolved paths.
-  const rebuildIndex = Effect.fn("UmbrellaMembership.rebuildIndex")(function* (options: {
-    readonly scan: boolean;
-  }) {
-    const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
-    const overrides = yield* readSettings;
-    const umbrellas = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
-    yield* Effect.forEach(
-      projects,
-      (project) =>
-        Effect.gen(function* () {
-          const nested = options.scan
-            ? yield* enrichment.readNestedRepositories(project.workspaceRoot)
-            : ((yield* enrichment.peekNestedRepositories(project.workspaceRoot)) ?? EMPTY_PATHS);
-          const members = resolveFor(project, nested, overrides, () => null);
-          if (members.length === 0) return;
-          const root = yield* realPath(project.workspaceRoot);
-          const checkouts = yield* Effect.forEach(members, (member) =>
-            realPath(member.path).pipe(
-              Effect.map((resolved) => ({
-                path: resolved,
-                relativePath: member.relativePath,
-              })),
-            ),
-          );
-          umbrellas.set(root, [...(umbrellas.get(root) ?? []), ...checkouts]);
-        }),
-      { concurrency: 2, discard: true },
-    );
-    yield* index.replace(umbrellas);
-  });
+  let umbrellasByMemberPath = new Map<string, ReadonlyArray<ProjectId>>();
+  // Serialized, with settings read inside, so a slow rebuild cannot restore what a later one dropped.
+  const rebuildLock = yield* Semaphore.make(1);
+  const rebuildIndex = Effect.fn("UmbrellaMembership.rebuildIndex")(
+    function* (options: { readonly scan: boolean }) {
+      const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
+      const overrides = yield* readSettings;
+      const umbrellas = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
+      const byMemberPath = new Map<string, ProjectId[]>();
+      yield* Effect.forEach(
+        projects,
+        (project) =>
+          Effect.gen(function* () {
+            // Git only leaves out the members of umbrellas the user turned on.
+            if (!umbrellaSettingsOf(overrides[project.id]).enabled) return;
+            const state = yield* stateFor(project, overrides, options.scan ? "read" : "peek");
+            if (state === undefined || state.members.length === 0) return;
+            for (const member of state.members) {
+              byMemberPath.set(member.path, [...(byMemberPath.get(member.path) ?? []), project.id]);
+            }
+            const root = yield* realPath(project.workspaceRoot);
+            const checkouts = yield* Effect.forEach(state.members, (member) =>
+              realPath(member.path).pipe(
+                Effect.map((resolved) => ({ path: resolved, relativePath: member.relativePath })),
+              ),
+            );
+            umbrellas.set(root, [...(umbrellas.get(root) ?? []), ...checkouts]);
+          }),
+        { concurrency: 2, discard: true },
+      );
+      yield* index.replace(umbrellas);
+      umbrellasByMemberPath = byMemberPath;
+    },
+    (effect) => rebuildLock.withPermits(1)(effect),
+  );
 
   const settingsChanges = yield* settingsService.subscribeChanges;
   const enrichmentChanges = yield* enrichment.subscribeChanges;
@@ -229,7 +292,7 @@ export const make = Effect.gen(function* () {
             Stream.groupedWithin(64, Duration.millis(250)),
             Stream.runForEach(() => rebuildIndex({ scan: false })),
           ),
-          // Catches projects removed or moved since, which publish no membership change.
+          // Rescans enabled umbrellas and drops projects removed or moved since.
           rebuildIndex({ scan: false }).pipe(
             Effect.repeat(Schedule.spaced(Duration.minutes(5))),
             Effect.delay(Duration.minutes(5)),
@@ -245,14 +308,16 @@ export const make = Effect.gen(function* () {
   );
 
   return UmbrellaMembership.of({
-    membersOf,
+    stateOf,
+    umbrellasWithMember: (memberPath) => umbrellasByMemberPath.get(memberPath) ?? [],
+    refreshIndex: rebuildIndex({ scan: false }),
     subscribeChanges: PubSub.subscribe(changes),
   });
 });
 
 export const layer = Layer.effect(UmbrellaMembership, make);
 
-/** Adds `umbrellaMembers` once the root has been scanned. Runtimes without the umbrella layer keep plain shells. */
+/** Adds umbrella members or suggestions once the root has been scanned. Runtimes without the umbrella layer keep plain shells. */
 export const attachUmbrellaMembers = Effect.fnUntraced(function* <P extends UmbrellaProject>(
   projects: ReadonlyArray<P>,
 ) {
@@ -261,13 +326,27 @@ export const attachUmbrellaMembers = Effect.fnUntraced(function* <P extends Umbr
   return yield* Effect.forEach(
     projects,
     (project) =>
-      membership.value
-        .membersOf(project)
-        .pipe(
-          Effect.map((umbrellaMembers) =>
-            umbrellaMembers === undefined ? project : { ...project, umbrellaMembers },
-          ),
+      membership.value.stateOf(project).pipe(
+        Effect.map((state) =>
+          state === undefined
+            ? project
+            : {
+                ...project,
+                umbrellaMembers: state.members,
+                ...(state.suggestions.length > 0 ? { umbrellaSuggestions: state.suggestions } : {}),
+                ...(state.enclosingRepository === null
+                  ? {}
+                  : { umbrellaEnclosingRepository: state.enclosingRepository }),
+              },
         ),
+      ),
     { concurrency: 16 },
   );
 });
+
+/** A moved or deleted project stops git leaving out its members right away. */
+export const refreshUmbrellaIndex = Effect.serviceOption(UmbrellaMembership).pipe(
+  Effect.flatMap(
+    Option.match({ onNone: () => Effect.void, onSome: (membership) => membership.refreshIndex }),
+  ),
+);

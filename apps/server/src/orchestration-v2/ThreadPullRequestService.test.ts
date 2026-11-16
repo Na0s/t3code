@@ -184,7 +184,22 @@ describe("ThreadPullRequestServiceV2 reads", () => {
 
   it.effect("links the branch pull request of each umbrella member a turn edited", () =>
     Effect.gen(function* () {
-      const thread = threadShell("umbrella-thread");
+      // The user unlinked this member's pull request earlier; it stays unlinked and is not looked up.
+      const thread: OrchestrationV2ThreadShell = {
+        ...threadShell("umbrella-thread"),
+        pullRequests: [
+          {
+            host: "github.com",
+            repository: "acme/linked",
+            number: 3,
+            url: "https://github.com/acme/linked/pull/3",
+            source: "stack-dismissed",
+            linkedAt: "2026-09-01T00:00:00.000Z",
+            snapshot: null,
+            stack: null,
+          },
+        ],
+      };
       const project: OrchestrationProjectShell = {
         id: thread.projectId,
         title: "Client",
@@ -197,7 +212,15 @@ describe("ThreadPullRequestServiceV2 reads", () => {
       const member = (relativePath: string) => ({
         path: `/clients/acme/${relativePath}`,
         relativePath,
-        repositoryIdentity: null,
+        repositoryIdentity:
+          relativePath === "apps/linked"
+            ? {
+                canonicalKey: "github.com/acme/linked",
+                locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl: "x" },
+                owner: "acme",
+                name: "linked",
+              }
+            : null,
         source: "nested" as const,
       });
       const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
@@ -258,7 +281,13 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           shouldRunOpportunisticWork: Effect.succeed(false),
         }),
         Layer.mock(UmbrellaMembership.UmbrellaMembership)({
-          membersOf: () => Effect.succeed([member("apps/api"), member("apps/web")]),
+          stateOf: () =>
+            Effect.succeed({
+              members: [member("apps/api"), member("apps/web"), member("apps/linked")],
+              suggestions: [],
+              enclosingRepository: null,
+            }),
+          umbrellasWithMember: () => [],
         }),
         Layer.succeed(
           SecureRandom.SecureRandom,
@@ -273,7 +302,13 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         yield* Queue.offer(domainEvents, {
           type: "checkpoint.captured",
           threadId: thread.id,
-          payload: { files: [{ path: "apps/api/src/server.ts" }, { path: "README.md" }] },
+          payload: {
+            files: [
+              { path: "apps/api/src/server.ts" },
+              { path: "apps/linked/index.ts" },
+              { path: "README.md" },
+            ],
+          },
         } as unknown as OrchestrationV2DomainEvent);
         yield* Deferred.await(linked);
         yield* service.drain;

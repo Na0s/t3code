@@ -1303,7 +1303,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         if (umbrellaAction?.kind === "remove") {
-          umbrellaEdits.remove(umbrellaAction.umbrella, umbrellaAction.member);
+          umbrellaEdits.leave(umbrellaAction);
           return;
         }
         switch (clicked.value) {

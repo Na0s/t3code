@@ -191,12 +191,23 @@ describe("applyShellStreamEvent", () => {
     });
     expect(renamed.projects[0]?.umbrellaMembers).toEqual(umbrellaMembers);
 
+    // Turning the umbrella off turns its members back into suggestions.
     const dissolved = mergeShellSnapshotProjects(
       renamed,
-      { ...renamed, projects: [{ ...v2Project, umbrellaMembers: [] }] },
+      {
+        ...renamed,
+        projects: [{ ...v2Project, umbrellaMembers: [], umbrellaSuggestions: umbrellaMembers }],
+      },
       { resolvedRepositoryIdentityRoots: [] },
     );
     expect(dissolved.projects[0]?.umbrellaMembers).toEqual([]);
+    expect(dissolved.projects[0]?.umbrellaSuggestions).toEqual(umbrellaMembers);
+    const enabledAgain = mergeShellSnapshotProjects(
+      dissolved,
+      { ...dissolved, projects: [{ ...v2Project, umbrellaMembers }] },
+      { resolvedRepositoryIdentityRoots: [] },
+    );
+    expect(enabledAgain.projects[0]?.umbrellaSuggestions).toBeUndefined();
   });
 
   it("lower-sequence enrichment cannot resurrect empty structural state", () => {

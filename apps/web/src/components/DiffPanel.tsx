@@ -114,6 +114,7 @@ import {
   vcsEnvironment,
 } from "../state/vcs";
 import { umbrellaDiffSections } from "./diffs/umbrellaDiffSections.logic";
+import { useUmbrellaMembershipEdits } from "../hooks/useUmbrellaMembershipEdits";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
@@ -291,6 +292,12 @@ export default function DiffPanel({
     activeThread && !activeThread.worktreePath
       ? (activeProject?.umbrellaMembers ?? NO_UMBRELLA_MEMBERS)
       : NO_UMBRELLA_MEMBERS;
+  // Repositories found under a project that is not an umbrella yet wait for the user to confirm.
+  const umbrellaSuggestions =
+    activeThread && !activeThread.worktreePath && umbrellaMembers.length === 0
+      ? (activeProject?.umbrellaSuggestions ?? NO_UMBRELLA_MEMBERS)
+      : NO_UMBRELLA_MEMBERS;
+  const umbrellaEdits = useUmbrellaMembershipEdits();
   const umbrellaMemberStatuses = useAtomValue(
     visible && activeThread && umbrellaMembers.length > 0
       ? umbrellaMemberStatusesAtom(
@@ -1362,6 +1369,23 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
+      {activeProject && umbrellaSuggestions.length > 0 ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">
+            {umbrellaSuggestions.length === 1
+              ? "Found a repository in this folder."
+              : `Found ${umbrellaSuggestions.length} repositories in this folder.`}
+          </span>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => void umbrellaEdits.confirmEnable(activeProject)}
+          >
+            Use as umbrella
+          </Button>
+        </div>
+      ) : null}
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.

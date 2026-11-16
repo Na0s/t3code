@@ -63,13 +63,19 @@ describe("umbrella settings edits", () => {
       { umbrellaAdoptedPaths: ["/work/site"], umbrellaExcludedPaths: ["legacy"] },
       "/clients/acme/legacy",
     );
+    // Adopting a checkout is the user's confirmation, so it turns the umbrella on.
     expect(adopted).toEqual({
+      umbrellaEnabled: true,
       umbrellaAdoptedPaths: ["/work/site", "/clients/acme/legacy"],
       umbrellaExcludedPaths: [],
     });
     expect(
       removeUmbrellaMember(umbrella, adopted, { path: "/work/site", source: "adopted" }),
-    ).toEqual({ umbrellaAdoptedPaths: ["/clients/acme/legacy"], umbrellaExcludedPaths: [] });
+    ).toEqual({
+      umbrellaEnabled: true,
+      umbrellaAdoptedPaths: ["/clients/acme/legacy"],
+      umbrellaExcludedPaths: [],
+    });
   });
 });
 
@@ -85,8 +91,16 @@ describe("umbrella membership", () => {
     });
     const projects = [umbrella, here, laptop, elsewhere];
 
-    expect(findUmbrellaMembership(here, projects)?.umbrella.id).toBe(umbrella.id);
-    expect(findUmbrellaMembership(laptop, projects)?.member.relativePath).toBe("api");
+    expect(findUmbrellaMembership(here, projects)).toMatchObject({
+      umbrella: { id: umbrella.id },
+      match: "folder",
+    });
+    // Another machine's clone only groups under the umbrella; removing it must not exclude the
+    // umbrella's own checkout.
+    expect(findUmbrellaMembership(laptop, projects)).toMatchObject({
+      member: { relativePath: "api" },
+      match: "repository",
+    });
     expect(findUmbrellaMembership(elsewhere, projects)).toBeNull();
     expect(umbrellaAdoptionTargets(here, projects)).toEqual([]);
     expect(umbrellaAdoptionTargets(project("site", "/work/site"), projects)).toEqual([umbrella]);

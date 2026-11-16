@@ -15,6 +15,10 @@ export const OrchestrationProjectShell = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   // Absent until the server has scanned the root; empty means the project is not an umbrella.
   umbrellaMembers: Schema.optional(Schema.Array(UmbrellaMember)),
+  // Checkouts found under the root while the umbrella is off, offered for the user to confirm.
+  umbrellaSuggestions: Schema.optional(Schema.Array(UmbrellaMember)),
+  // The repository whose work tree holds the root; umbrella mode is unavailable there.
+  umbrellaEnclosingRepository: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   // Opt-in because background sync performs network I/O and may move the checkout.

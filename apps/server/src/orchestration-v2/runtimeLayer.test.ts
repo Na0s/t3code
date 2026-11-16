@@ -4102,6 +4102,30 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
         "manual",
       );
+
+      // A pull request found for an umbrella member stays unlinked once the user unlinks it.
+      const memberKey = { host: "github.com", repository: "acme/api", number: 12 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make("multi-pr-member-link"),
+        threadId,
+        ...memberKey,
+        url: "https://github.com/acme/api/pull/12",
+        source: "agent",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.unlink",
+        commandId: CommandId.make("multi-pr-member-unlink"),
+        threadId,
+        ...memberKey,
+      });
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests
+          ?.filter((link) => link.repository === "acme/api")
+          .map(({ number, source }) => ({ number, source })),
+        [{ number: 12, source: "stack-dismissed" }],
+      );
     }),
   );
 

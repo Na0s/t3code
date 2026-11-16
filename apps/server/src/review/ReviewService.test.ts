@@ -93,7 +93,10 @@ function layer(input: {
           ? {}
           : {
               projectSettingsOverrides: {
-                [ProjectId.make("project-0")]: { umbrellaAdoptedPaths: [...input.adoptedPaths] },
+                [ProjectId.make("project-0")]: {
+                  umbrellaEnabled: true,
+                  umbrellaAdoptedPaths: [...input.adoptedPaths],
+                },
               },
             }),
       }),

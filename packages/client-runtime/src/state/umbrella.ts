@@ -14,7 +14,7 @@ type UmbrellaProject = Pick<
 >;
 type UmbrellaOverrides = Pick<
   ProjectSettingsOverrides,
-  "umbrellaAdoptedPaths" | "umbrellaExcludedPaths"
+  "umbrellaEnabled" | "umbrellaAdoptedPaths" | "umbrellaExcludedPaths"
 >;
 
 /** How a member reads in a list: its path under the umbrella, or its folder name when adopted from outside. */
@@ -48,7 +48,15 @@ function withPaths(
   };
 }
 
-/** Adds a checkout, lifting an exclusion that hid it. */
+/** Turns the umbrella on or off; discovered checkouts wait for this, adopted ones turn it on. */
+export function setUmbrellaEnabled(
+  overrides: UmbrellaOverrides | undefined,
+  enabled: boolean,
+): UmbrellaOverrides {
+  return { ...overrides, umbrellaEnabled: enabled };
+}
+
+/** Adds a checkout, lifting an exclusion that hid it, and turns the umbrella on. */
 export function adoptUmbrellaMember(
   umbrella: Pick<UmbrellaProject, "workspaceRoot">,
   overrides: UmbrellaOverrides | undefined,
@@ -56,7 +64,7 @@ export function adoptUmbrellaMember(
 ): UmbrellaOverrides {
   const root = umbrella.workspaceRoot;
   return withPaths(
-    overrides,
+    setUmbrellaEnabled(overrides, true),
     [...without(root, overrides?.umbrellaAdoptedPaths, path), path],
     without(root, overrides?.umbrellaExcludedPaths, path),
   );
@@ -91,8 +99,9 @@ export function restoreUmbrellaMember(
 }
 
 /**
- * The umbrella a project belongs to as a member: its folder on the umbrella's environment, or
- * its repository on any environment, matching how the sidebar folds it.
+ * The umbrella a project belongs to as a member, matching how the sidebar folds it: its folder
+ * on the umbrella's environment, or else its repository on any environment. Only a folder match
+ * is the umbrella's own checkout; a repository match is a separate clone that merely groups there.
  */
 export function findUmbrellaMembership<TProject extends UmbrellaProject>(
   project: Pick<
@@ -100,28 +109,33 @@ export function findUmbrellaMembership<TProject extends UmbrellaProject>(
     "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
   >,
   projects: ReadonlyArray<TProject>,
-): { readonly umbrella: TProject; readonly member: UmbrellaMember } | null {
+): {
+  readonly umbrella: TProject;
+  readonly member: UmbrellaMember;
+  readonly match: "folder" | "repository";
+} | null {
   const projectPath = normalizeProjectPathForComparison(project.workspaceRoot);
   const repositoryKey = project.repositoryIdentity
     ? repositoryGroupingKeyOf(project.repositoryIdentity)
     : null;
-  for (const umbrella of projects) {
-    if (umbrella.id === project.id && umbrella.environmentId === project.environmentId) continue;
-    for (const member of umbrella.umbrellaMembers ?? []) {
-      if (
-        umbrella.environmentId === project.environmentId &&
-        normalizeProjectPathForComparison(member.path) === projectPath
-      ) {
-        return { umbrella, member };
-      }
-      if (
-        repositoryKey !== null &&
-        member.repositoryIdentity &&
-        repositoryGroupingKeyOf(member.repositoryIdentity) === repositoryKey
-      ) {
-        return { umbrella, member };
-      }
-    }
+  const umbrellas = projects.filter(
+    (umbrella) => !(umbrella.id === project.id && umbrella.environmentId === project.environmentId),
+  );
+  for (const umbrella of umbrellas) {
+    if (umbrella.environmentId !== project.environmentId) continue;
+    const member = umbrella.umbrellaMembers?.find(
+      (candidate) => normalizeProjectPathForComparison(candidate.path) === projectPath,
+    );
+    if (member) return { umbrella, member, match: "folder" };
+  }
+  if (repositoryKey === null) return null;
+  for (const umbrella of umbrellas) {
+    const member = umbrella.umbrellaMembers?.find(
+      (candidate) =>
+        candidate.repositoryIdentity &&
+        repositoryGroupingKeyOf(candidate.repositoryIdentity) === repositoryKey,
+    );
+    if (member) return { umbrella, member, match: "repository" };
   }
   return null;
 }

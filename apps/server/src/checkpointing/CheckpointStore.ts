@@ -1,8 +1,9 @@
-import { type CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef, VcsProcessExitError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 
 import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 import type { CheckpointStoreError } from "./Errors.ts";
@@ -106,6 +107,18 @@ function routeComponentPaths(
   return routed;
 }
 
+function partitionComponents(
+  components: ReadonlyArray<CheckpointComponent>,
+): readonly [CheckpointComponent | undefined, ReadonlyArray<CheckpointComponent>] {
+  return [
+    components.find((component) => component.prefix === ""),
+    components.filter((component) => component.prefix !== ""),
+  ];
+}
+
+const componentLabel = (component: CheckpointComponent) =>
+  component.prefix === "" ? "the umbrella folder" : component.prefix.slice(0, -1);
+
 /** @public */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
@@ -168,9 +181,15 @@ export const make = Effect.gen(function* () {
       const checkpoints = yield* resolveCheckpoints(input.cwd);
       return yield* checkpoints.captureCheckpoint(input);
     }
-    // A member that cannot be captured drops its ref, so diffs and restores leave it alone.
+    // The umbrella's own repository fails the checkpoint as a plain workspace would. A member that
+    // cannot be captured drops its ref instead, so diffs and restores leave it alone.
+    const [own, members] = partitionComponents(components);
+    if (own !== undefined) {
+      const checkpoints = yield* resolveCheckpoints(own.cwd);
+      yield* checkpoints.captureCheckpoint({ ...input, cwd: own.cwd });
+    }
     yield* Effect.forEach(
-      components,
+      members,
       (component) =>
         resolveCheckpoints(component.cwd).pipe(
           Effect.flatMap((checkpoints) =>
@@ -213,6 +232,35 @@ export const make = Effect.gen(function* () {
     return false;
   });
 
+  // A capture of the member as it is now, diffed against the target, tells whether restoring it
+  // would change anything; one that already matches keeps any unrelated state untouched.
+  const matchesCheckpoint = Effect.fn("CheckpointStore.matchesCheckpoint")(function* (
+    component: CheckpointComponent,
+    checkpointRef: CheckpointRef,
+  ) {
+    const checkpoints = yield* resolveCheckpoints(component.cwd);
+    const probeRef = CheckpointRef.make(checkpointRef.replace("/checkpoints/", "/restore-probes/"));
+    return yield* checkpoints
+      .captureCheckpoint({ cwd: component.cwd, checkpointRef: probeRef })
+      .pipe(
+        Effect.andThen(
+          checkpoints.diffCheckpoints({
+            cwd: component.cwd,
+            fromCheckpointRef: checkpointRef,
+            toCheckpointRef: probeRef,
+            ignoreWhitespace: false,
+            format: "numstat",
+          }),
+        ),
+        Effect.map((numstat) => numstat.length === 0),
+        Effect.ensuring(
+          checkpoints
+            .deleteCheckpointRefs({ cwd: component.cwd, checkpointRefs: [probeRef] })
+            .pipe(Effect.ignore),
+        ),
+      );
+  });
+
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
     "restoreCheckpoint",
   )(function* (input) {
@@ -221,21 +269,54 @@ export const make = Effect.gen(function* () {
       const checkpoints = yield* resolveCheckpoints(input.cwd);
       return yield* checkpoints.restoreCheckpoint(input);
     }
-    let restored = false;
-    for (const component of components) {
-      const checkpoints = yield* resolveCheckpoints(component.cwd);
-      // Falling back to HEAD would discard a member's edits it never checkpointed.
-      if (
-        yield* checkpoints.restoreCheckpoint({
-          cwd: component.cwd,
-          checkpointRef: input.checkpointRef,
-          fallbackToHead: component.prefix === "" && input.fallbackToHead === true,
-        })
-      ) {
-        restored = true;
+    // Every ref is checked before anything is written. The umbrella's own repository must have
+    // it, as a plain workspace must; a member added after the checkpoint has none and is skipped.
+    const [own, members] = partitionComponents(components);
+    if (own !== undefined && !(yield* hasRef(own.cwd, input.checkpointRef))) {
+      if (input.fallbackToHead !== true) return false;
+    }
+    const captured = yield* Effect.filter(members, (member) =>
+      hasRef(member.cwd, input.checkpointRef),
+    );
+    if (own === undefined && captured.length === 0) return false;
+    const targets = [
+      ...(own === undefined ? [] : [own]),
+      ...(yield* Effect.filter(captured, (member) =>
+        matchesCheckpoint(member, input.checkpointRef).pipe(
+          Effect.map((matches) => !matches),
+          Effect.orElseSucceed(() => true),
+        ),
+      )),
+    ];
+    const failures: Array<string> = [];
+    for (const component of targets) {
+      const result = yield* resolveCheckpoints(component.cwd).pipe(
+        // Falling back to HEAD would discard a member's edits it never checkpointed.
+        Effect.flatMap((checkpoints) =>
+          checkpoints.restoreCheckpoint({
+            cwd: component.cwd,
+            checkpointRef: input.checkpointRef,
+            fallbackToHead: component.prefix === "" && input.fallbackToHead === true,
+          }),
+        ),
+        Effect.result,
+      );
+      if (Result.isFailure(result)) {
+        failures.push(`${componentLabel(component)}: ${result.failure.message}`);
+      } else if (!result.success && component.prefix === "") {
+        failures.push(`${componentLabel(component)}: the checkpoint is unavailable`);
       }
     }
-    return restored;
+    if (failures.length > 0) {
+      return yield* new VcsProcessExitError({
+        operation: "CheckpointStore.restoreCheckpoint",
+        command: "git restore",
+        cwd: input.cwd,
+        exitCode: 0,
+        detail: `Could not restore ${failures.join("; ")}.`,
+      });
+    }
+    return true;
   });
 
   const diffComponent = Effect.fn("CheckpointStore.diffComponent")(function* (
@@ -243,7 +324,6 @@ export const make = Effect.gen(function* () {
     input: DiffCheckpointsInput,
   ) {
     if (
-      component.prefix !== "" &&
       !(
         (yield* hasRef(component.cwd, input.fromCheckpointRef)) &&
         (yield* hasRef(component.cwd, input.toCheckpointRef))
@@ -336,9 +416,31 @@ export const make = Effect.gen(function* () {
     "deleteCheckpointRefs",
   )(function* (input) {
     const components = yield* componentsOf(input.cwd);
-    for (const component of components ?? [{ cwd: input.cwd, prefix: "" }]) {
-      const checkpoints = yield* resolveCheckpoints(component.cwd);
-      yield* checkpoints.deleteCheckpointRefs({ ...input, cwd: component.cwd });
+    if (components === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.deleteCheckpointRefs(input);
+    }
+    // One repository failing must not leave the others' refs behind.
+    const failures: Array<string> = [];
+    for (const component of components) {
+      const result = yield* resolveCheckpoints(component.cwd).pipe(
+        Effect.flatMap((checkpoints) =>
+          checkpoints.deleteCheckpointRefs({ ...input, cwd: component.cwd }),
+        ),
+        Effect.result,
+      );
+      if (Result.isFailure(result)) {
+        failures.push(`${componentLabel(component)}: ${result.failure.message}`);
+      }
+    }
+    if (failures.length > 0) {
+      return yield* new VcsProcessExitError({
+        operation: "CheckpointStore.deleteCheckpointRefs",
+        command: "git update-ref",
+        cwd: input.cwd,
+        exitCode: 0,
+        detail: `Could not delete checkpoint refs in ${failures.join("; ")}.`,
+      });
     }
   });
 

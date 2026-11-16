@@ -1773,7 +1773,8 @@ function OpenCommandPaletteDialog(props: {
       run: async () => umbrellaEdits.adopt(umbrella, path),
     });
   }
-  for (const { umbrella, member } of umbrellaActions.removals) {
+  for (const removal of umbrellaActions.removals) {
+    const { umbrella, member } = removal;
     actionItems.push({
       kind: "action",
       value: `action:umbrella-remove:${umbrella.environmentId}:${umbrella.id}`,
@@ -1781,7 +1782,7 @@ function OpenCommandPaletteDialog(props: {
       title: "Remove project from umbrella",
       description: `${umbrella.title} · ${umbrellaMemberLabel(member)}`,
       icon: <UmbrellaOffIcon className={ITEM_ICON_CLASS} />,
-      run: async () => umbrellaEdits.remove(umbrella, member),
+      run: async () => umbrellaEdits.leave(removal),
     });
   }
   const contextualProjectGroup = currentProjectGroup ?? projectGroups[0] ?? null;

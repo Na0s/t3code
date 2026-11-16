@@ -12,6 +12,7 @@ import { useEnvironmentsWithScope } from "../../state/session";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { applyPendingScopedWrites, pendingScopedWritesAtom } from "./scopedSettings";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -78,14 +79,55 @@ export function ProjectUmbrellaSettings({ group }: { group: SidebarProjectSnapsh
     );
     const environmentLabel = project.environmentLabel ?? environment?.label ?? "this environment";
     const overrides = environment?.serverConfig?.settings.projectSettingsOverrides[project.id];
+    const enabled = overrides?.umbrellaEnabled === true;
     const excluded = overrides?.umbrellaExcludedPaths ?? [];
+    const suggestions = project.umbrellaSuggestions ?? [];
     const disabled =
       !writableIds.has(project.environmentId) ||
       environment?.connection.phase !== "connected" ||
       !environment.serverConfig;
     const prefix = umbrellas.length > 1 ? `${environmentLabel} · ` : "";
+    if (project.umbrellaEnclosingRepository !== undefined) {
+      return (
+        <SettingsRow
+          key={`${project.environmentId}:${project.id}`}
+          title={`${prefix}Use as umbrella`}
+          description={`Unavailable: this folder is inside the repository at ${project.umbrellaEnclosingRepository}. Use that repository's root, or a folder outside any repository, as the umbrella.`}
+        />
+      );
+    }
     return (
       <Fragment key={`${project.environmentId}:${project.id}`}>
+        <SettingsRow
+          title={`${prefix}Use as umbrella`}
+          description={
+            enabled
+              ? "Turns record checkpoints in the checkouts below, and reverting a turn restores them."
+              : suggestions.length > 0
+                ? `Found ${suggestions.length === 1 ? "1 checkout" : `${suggestions.length} checkouts`} in this folder, listed below. Turning this on lets turns checkpoint and restore them.`
+                : "No checkouts found in this folder. Add one below to start an umbrella."
+          }
+          control={
+            <Switch
+              checked={enabled}
+              disabled={disabled || (!enabled && suggestions.length === 0)}
+              aria-label="Use as umbrella"
+              onCheckedChange={(checked) => {
+                if (checked) void edits.confirmEnable(project);
+                else edits.setEnabled(project, false);
+              }}
+            />
+          }
+        />
+        {!enabled
+          ? suggestions.map((suggestion) => (
+              <SettingsRow
+                key={`suggested:${suggestion.path}`}
+                title={`${prefix}${suggestion.relativePath}`}
+                description="Found in this folder. Joins when the umbrella is on."
+              />
+            ))
+          : null}
         {project.umbrellaMembers === undefined ? (
           <SettingsRow
             title={`${prefix}Checkouts`}
@@ -159,8 +201,8 @@ export function ProjectUmbrellaSettings({ group }: { group: SidebarProjectSnapsh
   return (
     <SettingsSection id="project-umbrella" title="Umbrella checkouts">
       <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-        Git checkouts this project spans. Their projects' threads group under it, and the diff panel
-        shows each checkout's changes.
+        Git checkouts this project spans once it is an umbrella. Their projects' threads group under
+        it, and the diff panel shows each checkout's changes.
       </p>
       {umbrellas.map(rowsFor)}
     </SettingsSection>

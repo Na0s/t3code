@@ -1,6 +1,7 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -23,8 +24,8 @@ const DEFAULT_SUCCESS_TTL = Duration.minutes(1);
 // Frequent shell reads scan ~20 files per project; icons change rarely, so cache longer than identities.
 const DEFAULT_FAVICON_TTL = Duration.minutes(15);
 const DEFAULT_FAILURE_TTL = Duration.seconds(5);
-// Discovery walks folders; a new checkout under a project root shows up within this window.
-const DEFAULT_NESTED_REPOSITORIES_TTL = Duration.minutes(5);
+// Discovery walks folders, so only enabled umbrellas rescan; other roots are scanned once.
+const NESTED_REPOSITORIES_RESCAN_AFTER = Duration.minutes(5);
 
 export interface ProjectEnrichment {
   readonly repositoryIdentity: RepositoryIdentity | null;
@@ -55,9 +56,10 @@ export class ProjectEnrichmentService extends Context.Service<
     readonly readRepositoryIdentity: (
       workspaceRoot: string,
     ) => Effect.Effect<RepositoryIdentity | null>;
-    /** Checkouts found under the root so far, or null before the first scan; schedules a scan when stale. */
+    /** Checkouts found under the root so far, or null before the first scan, which this schedules. */
     readonly peekNestedRepositories: (
       workspaceRoot: string,
+      options?: { readonly rescanWhenStale?: boolean },
     ) => Effect.Effect<ReadonlyArray<string> | null>;
     readonly readNestedRepositories: (
       workspaceRoot: string,
@@ -176,10 +178,25 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     }
     map.set(workspaceRoot, nested);
   };
+  const nestedScannedAt = new Map<string, number>();
   const nestedRepositoriesCache = yield* Cache.makeWith(
-    (workspaceRoot: string) => discoverNestedRepositories(workspaceRoot),
-    { capacity: cacheCapacity, timeToLive: () => DEFAULT_NESTED_REPOSITORIES_TTL },
+    (workspaceRoot: string) =>
+      discoverNestedRepositories(workspaceRoot).pipe(
+        Effect.tap(() =>
+          Effect.flatMap(Clock.currentTimeMillis, (now) =>
+            Effect.sync(() => nestedScannedAt.set(workspaceRoot, now)),
+          ),
+        ),
+      ),
+    { capacity: cacheCapacity, timeToLive: () => Duration.infinity },
   );
+  const nestedScanIsStale = (workspaceRoot: string) =>
+    Effect.map(
+      Clock.currentTimeMillis,
+      (now) =>
+        now - (nestedScannedAt.get(workspaceRoot) ?? 0) >=
+        Duration.toMillis(NESTED_REPOSITORIES_RESCAN_AFTER),
+    );
   const makeWorkLane = Effect.gen(function* () {
     const pendingRoots = yield* Ref.make<ReadonlySet<string>>(new Set());
     const queue = yield* Effect.acquireRelease(Queue.dropping<string>(maxPending), (queue) =>
@@ -265,11 +282,15 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
 
   const resolveNestedRepositories = Effect.fn("ProjectEnrichmentService.resolveNestedRepositories")(
     function* (workspaceRoot: string) {
-      const nested = yield* Cache.get(nestedRepositoriesCache, workspaceRoot);
+      const nested = (yield* Cache.has(nestedRepositoriesCache, workspaceRoot))
+        ? yield* Cache.refresh(nestedRepositoriesCache, workspaceRoot)
+        : yield* Cache.get(nestedRepositoriesCache, workspaceRoot);
       rememberNested(knownNestedRepositories, workspaceRoot, nested);
-      // Rescans of an unchanged folder would otherwise push a shell frame to every subscriber.
-      if (sameList(publishedNestedRepositories.get(workspaceRoot), nested)) return;
+      const published = publishedNestedRepositories.get(workspaceRoot);
       rememberNested(publishedNestedRepositories, workspaceRoot, nested);
+      // Rescans of an unchanged folder, or a folder without checkouts, would otherwise push a
+      // shell frame to every subscriber.
+      if (sameList(published, nested) || (nested.length === 0 && !published?.length)) return;
       yield* PubSub.publish(changes, {
         workspaceRoot,
         repositoryIdentityResolved: false,
@@ -374,9 +395,12 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     });
 
   const peekNestedRepositories: ProjectEnrichmentService["Service"]["peekNestedRepositories"] =
-    Effect.fnUntraced(function* (workspaceRoot) {
+    Effect.fnUntraced(function* (workspaceRoot, options) {
       const cached = yield* Cache.getSuccess(nestedRepositoriesCache, workspaceRoot);
-      if (Option.isNone(cached)) {
+      if (
+        Option.isNone(cached) ||
+        (options?.rescanWhenStale === true && (yield* nestedScanIsStale(workspaceRoot)))
+      ) {
         yield* requestLane(nestedRepositoriesLane, workspaceRoot, "nestedRepositories");
       }
       return Option.getOrUndefined(cached) ?? knownNestedRepositories.get(workspaceRoot) ?? null;
@@ -403,6 +427,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
               lastRepositoryIdentities.delete(workspaceRoot);
               knownNestedRepositories.delete(workspaceRoot);
               publishedNestedRepositories.delete(workspaceRoot);
+              nestedScannedAt.delete(workspaceRoot);
             }),
             Cache.invalidate(faviconCache, workspaceRoot),
             Cache.invalidate(nestedRepositoriesCache, workspaceRoot),

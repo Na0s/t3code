@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   resolveUmbrellaMenuAction,
+  umbrellaConfirmationMessage,
   umbrellaMembershipActions,
   umbrellaMenuItems,
 } from "./umbrellaMembership.logic";
@@ -99,5 +100,23 @@ describe("umbrellaMenuItems", () => {
       { id: "umbrella-remove:0", label: "Remove from umbrella", detail: "acme" },
     ]);
     expect(resolveUmbrellaMenuAction(actions, "umbrella-remove:0")?.kind).toBe("remove");
+  });
+});
+
+describe("umbrellaConfirmationMessage", () => {
+  it("names every checkout the umbrella will take in", () => {
+    expect(
+      umbrellaConfirmationMessage("Acme", [
+        { relativePath: "api" },
+        { relativePath: "../../work/acme-site" },
+      ]),
+    ).toBe(
+      [
+        "Use Acme as an umbrella?",
+        "Turns record checkpoints in these checkouts, and reverting a turn restores them:",
+        "• api",
+        "• acme-site",
+      ].join("\n"),
+    );
   });
 });

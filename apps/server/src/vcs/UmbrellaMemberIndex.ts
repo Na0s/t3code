@@ -21,7 +21,7 @@ export interface UmbrellaMemberIndexShape {
   ) => Effect.Effect<void>;
   readonly membersOf: (resolvedRoot: string) => ReadonlyArray<UmbrellaMemberCheckout>;
   readonly hasMembers: () => boolean;
-  /** Member checkouts strictly inside a work tree, relative to it with `/` separators. */
+  /** Members of the umbrella rooted at this work tree that sit inside it, relative with `/` separators. */
   readonly memberPathsWithin: (resolvedWorktreeRoot: string) => ReadonlyArray<string>;
 }
 
@@ -39,27 +39,20 @@ const isStrictlyWithin = (root: string, candidate: string) => {
 
 export const makeIndex = (): UmbrellaMemberIndexShape => {
   let umbrellas = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
-  let memberPaths: ReadonlyArray<string> = [];
   return {
     replace: (next) =>
       Effect.sync(() => {
         umbrellas = new Map(
           Array.from(next, ([root, members]) => [NodePath.resolve(root), members] as const),
         );
-        memberPaths = [
-          ...new Set(
-            Array.from(umbrellas.values()).flatMap((members) =>
-              members.map((member) => NodePath.resolve(member.path)),
-            ),
-          ),
-        ];
       }),
     membersOf: (resolvedRoot) => umbrellas.get(NodePath.resolve(resolvedRoot)) ?? EMPTY,
-    hasMembers: () => memberPaths.length > 0,
+    hasMembers: () => umbrellas.size > 0,
     memberPathsWithin: (resolvedWorktreeRoot) => {
-      if (memberPaths.length === 0) return EMPTY;
+      if (umbrellas.size === 0) return EMPTY;
       const root = NodePath.resolve(resolvedWorktreeRoot);
-      return memberPaths
+      return (umbrellas.get(root) ?? EMPTY)
+        .map((member) => NodePath.resolve(member.path))
         .filter((member) => isStrictlyWithin(root, member))
         .map((member) => NodePath.relative(root, member).split(NodePath.sep).join("/"));
     },

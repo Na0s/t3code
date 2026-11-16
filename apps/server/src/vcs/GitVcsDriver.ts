@@ -631,6 +631,14 @@ function prefixNumstatPaths(numstat: string, prefix: string): string {
   return records.join("\0");
 }
 
+/** `--src-prefix`/`--dst-prefix` leave rename and copy headers bare; Git quotes unusual paths. */
+function prefixPatchHeaderPaths(patch: string, prefix: string): string {
+  return patch.replace(
+    /^((?:rename|copy) (?:from|to) )("?)/gm,
+    (_match, header: string, quote: string) => `${header}${quote}${prefix}`,
+  );
+}
+
 export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2137,9 +2145,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         });
       }
 
-      return input.pathPrefix && input.format === "numstat"
+      if (!input.pathPrefix) return result.stdout;
+      return input.format === "numstat"
         ? prefixNumstatPaths(result.stdout, input.pathPrefix)
-        : result.stdout;
+        : prefixPatchHeaderPaths(result.stdout, input.pathPrefix);
     }),
 
     listAuthoredPaths: Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {

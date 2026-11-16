@@ -32,6 +32,10 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import {
+  threadPullRequestKeysEqual,
+  threadPullRequestsOf,
+} from "../sourceControl/threadPullRequests.ts";
 import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
@@ -427,7 +431,8 @@ export const make = Effect.gen(function* () {
   );
 
   // A checkpoint lists the umbrella members a turn edited; each one's branch pull request joins
-  // the thread. Only that turn's members are read, so an unlinked pull request stays unlinked.
+  // the thread. A pull request already on the thread, linked or unlinked by the user, is left as
+  // it is, and a member whose branch already has one is not looked up again.
   const linkMemberPullRequests = Effect.fn("ThreadPullRequestServiceV2.linkMemberPullRequests")(
     function* (threadId: ThreadId, files: ReadonlyArray<{ readonly path: string }>) {
       if (Option.isNone(umbrellaMembership) || files.length === 0) return;
@@ -435,23 +440,37 @@ export const make = Effect.gen(function* () {
       if (thread === null) return;
       const project = yield* projectStore.getShell(thread.projectId);
       if (Option.isNone(project)) return;
-      const members = (yield* umbrellaMembership.value.membersOf(project.value)) ?? [];
+      const members = (yield* umbrellaMembership.value.stateOf(project.value))?.members ?? [];
       const touched = members.filter((member) =>
         files.some((file) => file.path.startsWith(`${member.relativePath}/`)),
       );
+      const links = threadPullRequestsOf(thread);
       yield* Effect.forEach(
         touched,
         (member) =>
           Effect.gen(function* () {
             const status = yield* git.localStatus({ cwd: member.path });
             if (status.refName === null || status.isDefaultRef) return;
+            const repository = sourceControlDefinitions
+              .repositorySelector(member.repositoryIdentity)
+              ?.toLowerCase();
+            if (
+              repository !== undefined &&
+              links.some(
+                (link) =>
+                  link.repository.toLowerCase() === repository &&
+                  (link.snapshot === null || link.snapshot.headBranch === status.refName),
+              )
+            ) {
+              return;
+            }
             const detected = yield* git.branchPullRequest(
               { cwd: member.path, branch: status.refName },
               { refresh: true, confirmTerminal: false },
             );
             if (detected === null || pullRequestPredatesThread(detected, thread.createdAt)) return;
             const key = pullRequestKeyOf(detected, member.repositoryIdentity);
-            if (key === null) return;
+            if (key === null || links.some((link) => threadPullRequestKeysEqual(link, key))) return;
             const uuid = yield* random.uuidV4();
             yield* orchestrator.dispatch({
               type: "thread.pull-request.link",

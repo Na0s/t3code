@@ -14,6 +14,9 @@ export interface UmbrellaAdoption<TProject> {
 export interface UmbrellaRemoval<TProject> {
   readonly umbrella: TProject;
   readonly member: UmbrellaMember;
+  readonly project: EnvironmentProject;
+  /** A repository match is another clone grouped under the umbrella; leaving only ungroups it. */
+  readonly match: "folder" | "repository";
 }
 
 /**
@@ -34,7 +37,10 @@ export function umbrellaMembershipActions<TProject extends EnvironmentProject>(
     const membership = findUmbrellaMembership(project, projects);
     if (membership !== null) {
       const { umbrella, member } = membership;
-      removals.set(`${umbrella.environmentId}:${umbrella.id}\0${member.path}`, membership);
+      removals.set(
+        `${umbrella.environmentId}:${umbrella.id}\0${member.path}\0${project.environmentId}:${project.id}`,
+        { ...membership, project },
+      );
       continue;
     }
     for (const umbrella of umbrellaAdoptionTargets(project, projects)) {
@@ -103,4 +109,16 @@ export function resolveUmbrellaMenuAction<TProject>(
     return removal ? { kind: "remove", ...removal } : null;
   }
   return null;
+}
+
+/** The confirmation that lists every checkout an umbrella will take in before it is turned on. */
+export function umbrellaConfirmationMessage(
+  title: string,
+  checkouts: ReadonlyArray<Pick<UmbrellaMember, "relativePath">>,
+): string {
+  return [
+    `Use ${title} as an umbrella?`,
+    "Turns record checkpoints in these checkouts, and reverting a turn restores them:",
+    ...checkouts.map((checkout) => `• ${umbrellaMemberLabel(checkout)}`),
+  ].join("\n");
 }

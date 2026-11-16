@@ -690,39 +690,6 @@ export function dedupeShellEnrichment<E, R>(
   });
 }
 
-/**
- * Scanned projects whose members a batch of changes can alter: settings edits name projects,
- * a rescan names a root, and a resolved identity names a member's path.
- */
-export function selectUmbrellaRefreshProjects<
-  P extends Pick<OrchestrationProjectShell, "id" | "workspaceRoot" | "umbrellaMembers">,
->(input: {
-  readonly projects: ReadonlyArray<P>;
-  readonly triggers: Iterable<{
-    readonly root: string | null;
-    readonly rescanned: boolean;
-    readonly projectIds: ReadonlyArray<string>;
-  }>;
-}): ReadonlyArray<P> {
-  const rescannedRoots = new Set<string>();
-  const changedRoots = new Set<string>();
-  const projectIds = new Set<string>();
-  for (const trigger of input.triggers) {
-    if (trigger.root !== null) {
-      changedRoots.add(trigger.root);
-      if (trigger.rescanned) rescannedRoots.add(trigger.root);
-    }
-    for (const projectId of trigger.projectIds) projectIds.add(projectId);
-  }
-  return input.projects.filter(
-    (project) =>
-      project.umbrellaMembers !== undefined &&
-      (projectIds.has(project.id) ||
-        rescannedRoots.has(project.workspaceRoot) ||
-        project.umbrellaMembers.some((member) => changedRoots.has(member.path))),
-  );
-}
-
 export function shellStreamItemFromEnrichmentRefresh(input: {
   readonly snapshot: OrchestrationV2ShellSnapshot;
   readonly changes: ReadonlyArray<{ readonly workspaceRoot: string }>;

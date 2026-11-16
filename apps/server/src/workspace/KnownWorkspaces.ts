@@ -95,10 +95,11 @@ export const make = Effect.gen(function* () {
       for (const project of projects) {
         if (within(yield* resolveRoot(project.workspaceRoot))) return true;
       }
-      // Umbrella members adopted from outside the project's folder.
+      // Members a turned-on umbrella adopted from outside the project's folder.
       for (const project of projects) {
+        const overrides = worktreeSettings.projectSettingsOverrides[project.id];
         const adopted =
-          worktreeSettings.projectSettingsOverrides[project.id]?.umbrellaAdoptedPaths ?? [];
+          overrides?.umbrellaEnabled === true ? (overrides.umbrellaAdoptedPaths ?? []) : [];
         for (const member of adopted) {
           if (within(yield* resolveRoot(path.resolve(project.workspaceRoot, member)))) return true;
         }
