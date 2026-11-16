@@ -168,10 +168,17 @@ export const serveHubLease = Effect.fn("HubConnection.serveLease")(function* (
   }
   const relay = yield* session.relay(port);
   // A session that ends or is replaced takes its relays with it, so the window reconnects at once.
-  const supervisor = yield* registry.run(
-    environmentId,
-    EnvironmentSupervisor.EnvironmentSupervisor,
-  );
+  const supervisor = yield* registry
+    .run(environmentId, EnvironmentSupervisor.EnvironmentSupervisor)
+    .pipe(
+      Effect.mapError(
+        () =>
+          new ConnectionTransientError({
+            reason: "endpoint-unavailable",
+            detail: "The main window no longer has this environment.",
+          }),
+      ),
+    );
   yield* Effect.raceFirst(
     session.closed.pipe(Effect.ignore),
     SubscriptionRef.changes(supervisor.session).pipe(

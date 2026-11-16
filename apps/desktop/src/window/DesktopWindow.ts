@@ -1178,13 +1178,14 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
+    // Focus only matters to the list of other windows.
     window.on("focus", () => {
       entry.focused = true;
-      requestSync();
+      if (entries.size > 1) requestSync();
     });
     window.on("blur", () => {
       entry.focused = false;
-      requestSync();
+      if (entries.size > 1) requestSync();
     });
     window.on("unresponsive", () => {
       entry.responsive = false;
@@ -1672,14 +1673,22 @@ export const make = Effect.gen(function* () {
   const dispatchRendererEvent = Effect.fn("desktop.window.dispatchRendererEvent")(function* (
     channel: string,
     payload: unknown,
-    { reveal = true }: { readonly reveal?: boolean } = {},
-  ) {
-    if (yield* Ref.get(desktopState.quitting)) return;
+    {
+      reveal = true,
+      target,
+    }: { readonly reveal?: boolean; readonly target?: Electron.BrowserWindow } = {},
+  ): Effect.fn.Return<Option.Option<Electron.BrowserWindow>, DesktopWindowError> {
+    if (yield* Ref.get(desktopState.quitting)) return Option.none();
     // Only app renderers load the preload that listens on these channels; the focused one acts.
-    const existingWindow = yield* electronWindow.focusedApp;
-    if (Option.isNone(existingWindow) && (!reveal || (yield* waitingForBackend))) return;
+    const existingWindow =
+      target !== undefined && !target.isDestroyed()
+        ? Option.some(target)
+        : yield* electronWindow.focusedApp;
+    if (Option.isNone(existingWindow) && (!reveal || (yield* waitingForBackend))) {
+      return Option.none();
+    }
     const window = Option.isSome(existingWindow) ? existingWindow : yield* ensureMain;
-    if (Option.isNone(window) || window.value.isDestroyed()) return;
+    if (Option.isNone(window) || window.value.isDestroyed()) return Option.none();
     const targetWindow = window.value;
     const send = Effect.sync(() => {
       if (!targetWindow.isDestroyed()) targetWindow.webContents.send(channel, payload);
@@ -1690,10 +1699,13 @@ export const make = Effect.gen(function* () {
       : send;
     if (targetWindow.webContents.isLoadingMainFrame()) {
       targetWindow.webContents.once("did-finish-load", () => void runPromise(dispatch));
-      return;
+      return window;
     }
     yield* dispatch;
+    return window;
   });
+  // A capture finishes in the window it started in, even if focus moved meanwhile.
+  const captureWindows = new Map<string, Electron.BrowserWindow>();
 
   const runContentsCommand = (
     window: Electron.BrowserWindow,
@@ -1780,9 +1792,22 @@ export const make = Effect.gen(function* () {
         event: event.type,
         captureId: "id" in event ? (event.id ?? null) : null,
       });
-      yield* dispatchRendererEvent(SNAP_SHOT_EVENT_CHANNEL, event, {
+      if (event.type === "shortcut-changed") {
+        for (const entry of entries.values()) {
+          if (!entry.window.isDestroyed())
+            entry.window.webContents.send(SNAP_SHOT_EVENT_CHANNEL, event);
+        }
+        return;
+      }
+      const id = event.id;
+      const started = id === undefined ? undefined : captureWindows.get(id);
+      const delivered = yield* dispatchRendererEvent(SNAP_SHOT_EVENT_CHANNEL, event, {
         reveal: event.type === "started",
+        ...(started === undefined ? {} : { target: started }),
       });
+      if (id === undefined) return;
+      if (event.type === "ready" || event.type === "failed") captureWindows.delete(id);
+      else if (Option.isSome(delivered)) captureWindows.set(id, delivered.value);
     }),
     zoomFocused: Effect.fn("desktop.window.zoomFocused")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });

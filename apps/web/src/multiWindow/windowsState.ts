@@ -96,6 +96,10 @@ export function isMiniMainWindow(
   return context?.isMain === true && windowsState?.miniMode === true;
 }
 
+const readIsMiniMainWindow = () =>
+  isMiniMainWindow(readDesktopWindowsState(), readDesktopWindowContext());
+
+/** Re-renders only when mini mode flips, not for every focus change in the windows state. */
 export function useIsMiniMainWindow(): boolean {
-  return isMiniMainWindow(useDesktopWindowsState(), readDesktopWindowContext());
+  return useSyncExternalStore(subscribeDesktopWindowsState, readIsMiniMainWindow, () => false);
 }
