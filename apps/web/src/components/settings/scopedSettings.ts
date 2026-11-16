@@ -486,6 +486,43 @@ export function planProjectOverridesClear(
   };
 }
 
+/** Rewrites one project's whole override entry from its environment's current copy. */
+export function planProjectOverrideEdit(
+  environments: readonly ScopedSettingsEnvironment[],
+  target: ProjectOverrideEntry,
+  edit: (current: ProjectSettingsOverrides | undefined) => ProjectSettingsOverrides,
+) {
+  const environment = environments.find(
+    (candidate) => candidate.environmentId === target.environmentId,
+  );
+  const previous =
+    environment?.connection.phase === "connected" ? environment.serverConfig?.settings : undefined;
+  const serverWrites: ScopedServerWrite[] =
+    environment && previous
+      ? [
+          {
+            environmentId: target.environmentId,
+            label: environment.label,
+            previous,
+            patch: {
+              projectSettingsOverrides: {
+                [target.projectId]: edit(previous.projectSettingsOverrides[target.projectId]),
+              },
+            },
+          },
+        ]
+      : [];
+  return {
+    clientPatch: {} as ClientSettingsPatch,
+    hasClientWrite: false,
+    serverWrites,
+    unavailableReason:
+      serverWrites.length > 0
+        ? null
+        : `Connect ${environment?.label ?? "the project's environment"} to change this project.`,
+  };
+}
+
 function writeWasDropped(value: unknown, before: unknown, saved: unknown): boolean {
   if (value === null) return before != null && Equal.equals(saved, before);
   if (isPlainObject(value) && !Array.isArray(before) && !Array.isArray(saved)) {

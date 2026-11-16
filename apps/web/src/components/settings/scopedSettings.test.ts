@@ -17,6 +17,7 @@ import {
   applyPendingScopedWrites,
   createScopedSettingsWriter,
   persistScopedSettingsPatch,
+  planProjectOverrideEdit,
   planProjectOverridesClear,
   planScopedSettingsClear,
   planScopedSettingsPatch,
@@ -95,6 +96,7 @@ const group: SidebarProjectSnapshot = {
   environmentPresence: "remote-only",
   allRemoteMembersAreDesktopLocal: false,
   allRemoteMembersAreWsl: false,
+  foldedUmbrellaMembers: new Map(),
   remoteEnvironmentLabels: [server.label, laptop.label],
   pinned: false,
   archived: false,
@@ -535,6 +537,39 @@ describe("scoped settings writes", () => {
         ["defaultAutoPull", "enableAgentBrowserAccess"],
       ).serverWrites[0]?.patch,
     ).toEqual({ projectSettingsOverrides: { [projectId]: null } });
+  });
+
+  it("rewrites one project's entry from its environment's copy, and only while connected", () => {
+    const withOverrides = environment("Server", {
+      settings: {
+        projectSettingsOverrides: {
+          [projectId]: { defaultAutoPull: true },
+          [laptopProjectId]: { defaultAutoPull: false },
+        },
+      },
+    });
+    const edit = (current: { readonly defaultAutoPull?: boolean } | undefined) => ({
+      ...current,
+      umbrellaAdoptedPaths: ["/work/api"],
+    });
+    const target = { environmentId: server.environmentId, projectId };
+    expect(planProjectOverrideEdit([laptop, withOverrides], target, edit).serverWrites).toEqual([
+      {
+        environmentId: server.environmentId,
+        label: server.label,
+        previous: expect.anything(),
+        patch: {
+          projectSettingsOverrides: {
+            [projectId]: { defaultAutoPull: true, umbrellaAdoptedPaths: ["/work/api"] },
+          },
+        },
+      },
+    ]);
+    const disconnected = environment("Server", { connected: false });
+    expect(planProjectOverrideEdit([disconnected], target, edit)).toMatchObject({
+      serverWrites: [],
+      unavailableReason: "Connect Server to change this project.",
+    });
   });
 
   it("never substitutes an environment-default write for an invalid scope", () => {

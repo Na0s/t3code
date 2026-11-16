@@ -579,6 +579,8 @@ type SidebarThreadRowProps = {
   scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
+  // The umbrella member a folded project's thread works in.
+  umbrellaMemberLabel: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -1079,6 +1081,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   );
 
+  const umbrellaMemberTag = props.umbrellaMemberLabel ? (
+    <span className="max-w-[40%] shrink-0 truncate text-secondary-label/70 text-xs">
+      {props.umbrellaMemberLabel}
+    </span>
+  ) : null;
+
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
     : null;
@@ -1282,6 +1290,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {draftIndicator}
               {title}
+              {umbrellaMemberTag}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
@@ -1474,6 +1483,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
                 >
                   {props.projectDisplayName}
+                  {props.umbrellaMemberLabel ? (
+                    <span className="text-secondary-label/70"> · {props.umbrellaMemberLabel}</span>
+                  ) : null}
                 </span>
               ) : (
                 <span className="flex-1" />

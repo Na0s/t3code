@@ -11,7 +11,9 @@ import {
   type ReviewBranchCommitsResult,
   type ScopedThreadRef,
   type RunId,
+  type UmbrellaMember,
 } from "@t3tools/contracts";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -105,7 +107,13 @@ import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
-import { vcsEnvironment } from "../state/vcs";
+import {
+  NO_UMBRELLA_MEMBER_STATUSES_ATOM,
+  umbrellaMemberStatusesAtom,
+  umbrellaMemberStatusesKey,
+  vcsEnvironment,
+} from "../state/vcs";
+import { umbrellaDiffSections } from "./diffs/umbrellaDiffSections.logic";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 
@@ -122,6 +130,7 @@ const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
 const DIFF_FILE_TREE_STORAGE_KEY = "t3code.diffFileTreeOpen";
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+const NO_UMBRELLA_MEMBERS: ReadonlyArray<UmbrellaMember> = [];
 
 function DiffFileCollapseToggle({
   filePath,
@@ -252,7 +261,7 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  const rootCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -262,20 +271,73 @@ export default function DiffPanel({
     serverConfig?.availableEditors ?? [],
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
-  const gitStatusQuery = useEnvironmentQuery(
-    activeThread !== null && activeThread !== undefined && activeCwd != null
+  const rootStatusQuery = useEnvironmentQuery(
+    activeThread !== null && activeThread !== undefined && rootCwd != null
       ? vcsEnvironment.status({
           environmentId: activeThread.environmentId,
-          input: { cwd: activeCwd },
+          input: { cwd: rootCwd },
         })
       : null,
   );
-  const activeRepositoryRoot =
-    gitStatusQuery.data?.workingTree.rootPath ??
-    (activeThread?.worktreePath ? undefined : activeProject?.repositoryIdentity?.rootPath);
   const diffSelection = useDiffPanelStore((state) =>
     selectThreadDiffPanelSelection(state.byThreadKey, routeThreadRef),
   );
+  const isGitSelection =
+    diffSelection.kind === "branch" ||
+    diffSelection.kind === "unstaged" ||
+    diffSelection.kind === "commit";
+  // Members are checkouts beside the project root, which a worktree thread does not work in.
+  const umbrellaMembers =
+    activeThread && !activeThread.worktreePath
+      ? (activeProject?.umbrellaMembers ?? NO_UMBRELLA_MEMBERS)
+      : NO_UMBRELLA_MEMBERS;
+  const umbrellaMemberStatuses = useAtomValue(
+    visible && activeThread && umbrellaMembers.length > 0
+      ? umbrellaMemberStatusesAtom(
+          umbrellaMemberStatusesKey(
+            activeThread.environmentId,
+            umbrellaMembers.map((member) => member.path),
+          ),
+        )
+      : NO_UMBRELLA_MEMBER_STATUSES_ATOM,
+  );
+  const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const [umbrellaPick, setUmbrellaPick] = useState<{
+    readonly threadKey: string;
+    readonly memberPath: string | null;
+  } | null>(null);
+  const umbrella =
+    umbrellaMembers.length > 0 && rootCwd
+      ? umbrellaDiffSections({
+          rootCwd,
+          rootLabel: activeProject?.title ?? "Project",
+          rootIsRepo: rootStatusQuery.data?.isRepo ?? true,
+          members: umbrellaMembers,
+          statuses: umbrellaMemberStatuses,
+          selectedMemberPath:
+            umbrellaPick !== null && umbrellaPick.threadKey === routeThreadKey
+              ? umbrellaPick.memberPath
+              : null,
+        })
+      : null;
+  const umbrellaSection = isGitSelection ? (umbrella?.selected ?? null) : null;
+  const umbrellaSectionIndex =
+    umbrellaSection?.memberPath != null
+      ? umbrellaMembers.findIndex((member) => member.path === umbrellaSection.memberPath)
+      : -1;
+  const umbrellaSectionMember = umbrellaMembers[umbrellaSectionIndex] ?? null;
+  const activeCwd = umbrellaSection?.cwd ?? rootCwd;
+  const activeGitStatus = umbrellaSectionMember
+    ? (umbrellaMemberStatuses[umbrellaSectionIndex] ?? null)
+    : rootStatusQuery.data;
+  const activeRepositoryIdentity = umbrellaSectionMember
+    ? umbrellaSectionMember.repositoryIdentity
+    : activeProject?.repositoryIdentity;
+  const activeRepositoryRoot =
+    activeGitStatus?.workingTree.rootPath ??
+    (activeThread?.worktreePath || umbrellaSectionMember
+      ? undefined
+      : activeProject?.repositoryIdentity?.rootPath);
   const rememberedBaseRef = useDiffPanelStore((state) =>
     selectThreadBranchBaseRef(state, routeThreadRef),
   );
@@ -283,10 +345,6 @@ export default function DiffPanel({
   // Turn and git diffs name files from the repository root; a tool call's diff names them as
   // its provider recorded them, absolute or relative to the workspace.
   const diffPathRepositoryRoot = toolCallSelection ? undefined : activeRepositoryRoot;
-  const isGitSelection =
-    diffSelection.kind === "branch" ||
-    diffSelection.kind === "unstaged" ||
-    diffSelection.kind === "commit";
   const toolCallItems = useQuietThreadVisibleTurnItems(toolCallSelection ? routeThreadRef : null);
   const toolCallDetail = useTurnItemDetail(
     toolCallSelection && routeThreadRef
@@ -297,7 +355,10 @@ export default function DiffPanel({
       : null,
   );
   const toolCallItem = toolCallDetail.data?.item;
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  // An umbrella checkpoints its members even when its root is not a repository.
+  const isGitRepo = umbrellaSectionMember
+    ? (activeGitStatus?.isRepo ?? true)
+    : (rootStatusQuery.data?.isRepo ?? true) || (!isGitSelection && umbrellaMembers.length > 0);
   const turnDiffSummaries = useThreadCheckpointSummaries(routeThreadRef);
   const orderedTurnDiffSummaries = turnDiffSummaries.toSorted((left, right) => {
     if (left.checkpointTurnCount !== right.checkpointTurnCount) {
@@ -341,9 +402,9 @@ export default function DiffPanel({
     ? `tool-call:${toolCallSelection.threadId}:${toolCallSelection.itemId}`
     : selectedTurn
       ? `turn:${selectedTurn.runId}`
-      : selectedCommitSha !== null
-        ? `commit:${selectedCommitSha}`
-        : selectedGitScope;
+      : `${selectedCommitSha !== null ? `commit:${selectedCommitSha}` : selectedGitScope}${
+          umbrellaSectionMember ? `:${umbrellaSectionMember.path}` : ""
+        }`;
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
@@ -424,7 +485,7 @@ export default function DiffPanel({
           ? "commit"
           : "branch-range"),
   );
-  const comparisonHeadRef = selectedGitSource?.headRef ?? gitStatusQuery.data?.refName ?? "HEAD";
+  const comparisonHeadRef = selectedGitSource?.headRef ?? activeGitStatus?.refName ?? "HEAD";
   const comparisonBaseRef = selectedGitSource?.baseRef ?? selectedBaseRef ?? "Automatic";
   const selectedCommitSubject =
     selectedCommitSha !== null && selectedGitSource?.headRef === selectedCommitSha
@@ -449,12 +510,12 @@ export default function DiffPanel({
     ? "Tool call"
     : selectedTurn
       ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-      : selectedGitScopeLabel;
+      : umbrellaSectionMember && umbrellaSection
+        ? `${selectedGitScopeLabel} · ${umbrellaSection.label}`
+        : selectedGitScopeLabel;
   const headerCommitSha = selectedRunId === null ? selectedCommitSha : null;
   const selectedCommitUrl =
-    headerCommitSha !== null
-      ? projectCommitUrl(activeProject?.repositoryIdentity, headerCommitSha)
-      : null;
+    headerCommitSha !== null ? projectCommitUrl(activeRepositoryIdentity, headerCommitSha) : null;
   const openLink = useOpenLink(routeThreadRef);
   // A SHA link goes to the code host; it must not route back into this pane's commit selection.
   const openCommitUrl = (event: MouseEvent<HTMLElement>, url: string) => {
@@ -807,6 +868,12 @@ export default function DiffPanel({
     if (!routeThreadRef) return;
     useDiffPanelStore.getState().selectBranchBaseRef(routeThreadRef, baseRef);
   };
+  // A base ref or commit belongs to one repository, so another section starts from its default.
+  const selectUmbrellaSection = (memberPath: string | null) => {
+    if (!routeThreadKey || memberPath === (umbrellaSection?.memberPath ?? null)) return;
+    setUmbrellaPick({ threadKey: routeThreadKey, memberPath });
+    if (selectedGitScope !== "unstaged") selectBranchBaseRef(null);
+  };
   const selectedTurnValue = selectedTurn ? `turn:${selectedTurn.runId}` : "";
   const selectedCommitValue = selectedCommitSha !== null ? `commit:${selectedCommitSha}` : "";
   const selectedScopeValue = toolCallSelection
@@ -921,10 +988,7 @@ export default function DiffPanel({
                   onValueChange={selectScopeValue}
                 >
                   {branchCommits?.commits.map((commit) => {
-                    const commitUrl = projectCommitUrl(
-                      activeProject?.repositoryIdentity,
-                      commit.sha,
-                    );
+                    const commitUrl = projectCommitUrl(activeRepositoryIdentity, commit.sha);
                     return (
                       <div
                         key={commit.sha}
@@ -1321,6 +1385,34 @@ export default function DiffPanel({
       ) : (
         <>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+            {umbrella &&
+            isGitSelection &&
+            (umbrella.sections.length > 1 || umbrella.sections[0]?.memberPath != null) ? (
+              <div
+                role="tablist"
+                aria-label="Repositories"
+                className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/70 px-2 py-1"
+              >
+                {umbrella.sections.map((section) => {
+                  const selected = section.memberPath === (umbrellaSection?.memberPath ?? null);
+                  return (
+                    <Button
+                      key={section.memberPath ?? ""}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      size="xs"
+                      variant={selected ? "secondary" : "ghost"}
+                      className="shrink-0"
+                      title={section.cwd}
+                      onClick={() => selectUmbrellaSection(section.memberPath)}
+                    >
+                      {section.label}
+                    </Button>
+                  );
+                })}
+              </div>
+            ) : null}
             {preview?.incomplete && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 {selectedPatchError

@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   ScopedProjectRef,
   SidebarProjectGroupingMode,
+  UmbrellaMember,
 } from "@t3tools/contracts";
 import {
   buildProjectGroups,
@@ -44,6 +45,8 @@ export interface SidebarProjectSnapshot extends Project {
   allRemoteMembersAreWsl: boolean;
   memberProjects: readonly SidebarProjectGroupMember[];
   memberProjectRefs: readonly ScopedProjectRef[];
+  /** Projects folded in as umbrella members, by `environmentId:projectId`. */
+  foldedUmbrellaMembers: ReadonlyMap<string, UmbrellaMember>;
   remoteEnvironmentLabels: readonly string[];
   pinned: boolean;
   archived: boolean;
@@ -199,6 +202,7 @@ export function buildSidebarProjectSnapshots(input: {
       allRemoteMembersAreWsl,
       memberProjects: members,
       memberProjectRefs: group.memberProjectRefs,
+      foldedUmbrellaMembers: group.umbrellaMembers,
       remoteEnvironmentLabels,
       pinned: group.pinned,
       archived: group.archived,

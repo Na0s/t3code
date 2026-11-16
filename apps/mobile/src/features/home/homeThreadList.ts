@@ -7,6 +7,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
 import {
   getThreadSortTimestamp,
   toSortableTimestamp,
@@ -16,6 +17,7 @@ import type {
   ScopedProjectRef,
   SidebarProjectGroupingMode,
   SidebarProjectSortOrder,
+  UmbrellaMember,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -31,6 +33,8 @@ export interface HomeProjectScope {
   readonly representative: EnvironmentProject;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly projectRefs: ReadonlyArray<ScopedProjectRef>;
+  /** Projects folded in as umbrella members, by scoped project key. */
+  readonly umbrellaMembers: ReadonlyMap<string, UmbrellaMember>;
   readonly pinned: boolean;
   readonly archived: boolean;
 }
@@ -68,10 +72,24 @@ export function buildHomeProjectScopes(input: {
       representative: group.representative,
       projects: group.members.map((member) => member.project),
       projectRefs: group.memberProjectRefs,
+      umbrellaMembers: group.umbrellaMembers,
       pinned: group.pinned,
       archived: group.archived,
     };
   });
+}
+
+/** The umbrella member each folded project's threads work in, by scoped project key. */
+export function umbrellaMemberLabelsByProjectKey(
+  scopes: ReadonlyArray<Pick<HomeProjectScope, "umbrellaMembers">>,
+): ReadonlyMap<string, string> {
+  return new Map(
+    scopes.flatMap((scope) =>
+      [...scope.umbrellaMembers].map(
+        ([key, member]) => [key, umbrellaMemberLabel(member)] as const,
+      ),
+    ),
+  );
 }
 
 /** The scope the thread list's project filter shows; an archived or unknown key shows all projects. */

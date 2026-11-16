@@ -269,6 +269,13 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
+import { useUmbrellaMembershipEdits } from "../hooks/useUmbrellaMembershipEdits";
+import {
+  resolveUmbrellaMenuAction,
+  umbrellaMembershipActions,
+  umbrellaMenuItems,
+} from "../umbrellaMembership.logic";
 import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
@@ -826,6 +833,13 @@ function useSidebarLookups() {
       ),
     ),
   );
+  const umbrellaMemberLabelByKey = new Map(
+    projectGroups.flatMap((group) =>
+      [...group.foldedUmbrellaMembers].map(
+        ([key, member]) => [key, umbrellaMemberLabel(member)] as const,
+      ),
+    ),
+  );
   const projectGroupByScopeKey = new Map(
     projectGroups.map((project) => [project.projectKey, project] as const),
   );
@@ -844,6 +858,7 @@ function useSidebarLookups() {
     providerEntriesByEnvironment,
     projectByKey,
     projectDisplayNameByKey,
+    umbrellaMemberLabelByKey,
     projectGroupByScopeKey,
     projectScopeItems,
   };
@@ -911,9 +926,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     providerEntriesByEnvironment,
     projectByKey,
     projectDisplayNameByKey,
+    umbrellaMemberLabelByKey,
     projectGroupByScopeKey,
     projectScopeItems: lookupProjectScopeItems,
   } = useSidebarLookups();
+  const umbrellaEdits = useUmbrellaMembershipEdits();
   const delegatedUnderParent = useDelegatedUnderParent();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -1258,6 +1275,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) => {
       const api = readLocalApi();
       if (!api) return;
+      const umbrellaActions = umbrellaMembershipActions(group.memberProjects, projects);
       void (async () => {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
@@ -1271,6 +1289,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       : { id: "pin", label: "Pin project", icon: "pin" },
                   ]
                 : []),
+              ...umbrellaMenuItems(umbrellaActions),
               { id: "project-settings", label: "Project settings", icon: "settings" },
             ],
             position,
@@ -1278,6 +1297,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
         if (clicked._tag === "Failure") return;
+        const umbrellaAction = resolveUmbrellaMenuAction(umbrellaActions, clicked.value);
+        if (umbrellaAction?.kind === "adopt") {
+          umbrellaEdits.adopt(umbrellaAction.umbrella, umbrellaAction.path);
+          return;
+        }
+        if (umbrellaAction?.kind === "remove") {
+          umbrellaEdits.remove(umbrellaAction.umbrella, umbrellaAction.member);
+          return;
+        }
         switch (clicked.value) {
           case "new-thread":
             startThreadInProjectFolder(group);
@@ -3447,6 +3475,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             projectDisplayName={
                               projectDisplayNameByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? null
+                            }
+                            umbrellaMemberLabel={
+                              umbrellaMemberLabelByKey.get(
                                 `${thread.environmentId}:${thread.projectId}`,
                               ) ?? null
                             }

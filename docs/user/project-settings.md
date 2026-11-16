@@ -64,6 +64,29 @@ back. On mobile, both are in **Settings → Projects → Organize**.
 
 A project on several machines must have every machine connected to pin or archive it.
 
+## Umbrella projects
+
+Keep one project for a folder that holds several repositories, such as a client folder with an
+API, a website, and copy or design files beside them. Add the folder as a project. Repositories
+up to three folders below it become its members; hidden folders, `node_modules`, linked
+worktrees, and submodules are skipped. A project with at least one member is an umbrella, with
+nothing to turn on, and new repositories in the folder show up within a few minutes.
+
+Threads in an umbrella start in the folder and can work in any member. The diff panel has a tab
+for each member with changes, turn diffs and checkpoints include edits inside members, and a
+pull request open on the branch of a member a turn edited is linked to the thread. When the
+folder is a repository itself, its status, diffs, commits, and checkpoints leave the members out.
+
+Projects you already have for a member fold into the umbrella's sidebar row: the same folder on
+the umbrella's machine, or the same repository on any connected machine. Their threads name the
+member they belong to. Use **Add to umbrella** and **Remove from umbrella** from a project
+folder's menu in the sidebar or from the command palette. To add a checkout stored elsewhere on
+the same machine, or to remove or restore a member, open **Settings → Projects →** your project
+**→ Umbrella checkouts**.
+
+Worktree mode checks out only the folder's own repository, without its members, so use local mode
+for work that spans members.
+
 ## Worktree branch names
 
 In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,

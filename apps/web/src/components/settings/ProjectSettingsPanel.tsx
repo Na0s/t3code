@@ -51,6 +51,7 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ProjectUmbrellaSettings } from "./ProjectUmbrellaSettings";
 import {
   defaultProjectIcon,
   hasDefaultProjectIcon,
@@ -667,6 +668,7 @@ function ProjectDetail({
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
         {checkoutChoices}
+        <ProjectUmbrellaSettings group={group} />
         <SettingsSection title="Danger">
           <SettingsRow
             title={

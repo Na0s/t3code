@@ -53,6 +53,7 @@ import {
   buildHomeProjectScopes,
   resolveHomeProjectFilterScope,
   sortHomeProjectScopes,
+  umbrellaMemberLabelsByProjectKey,
 } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -208,6 +209,10 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ),
     [projectScopes],
   );
+  const umbrellaMemberLabelByProjectKey = useMemo(
+    () => umbrellaMemberLabelsByProjectKey(projectScopes),
+    [projectScopes],
+  );
   const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, options);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
@@ -356,6 +361,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
     selectedThreadKey: selectedThreadKey ?? "",
     projectByKey,
     projectTitleByProjectKey,
+    umbrellaMemberLabelByProjectKey,
     savedConnectionsById,
     listEnvironments,
     threadSearchMatchByKey,
@@ -423,6 +429,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
             snoozeWakeLabelText={item.snoozeWakeLabelText}
             timeLabel={item.timeLabel}
             project={projectByKey.get(scopeKey) ?? null}
+            umbrellaMemberLabel={umbrellaMemberLabelByProjectKey.get(scopeKey) ?? null}
             providerInstance={resolveProviderInstance(thread)}
             providers={providersByEnvironmentId.get(thread.environmentId)}
             environmentLabel={

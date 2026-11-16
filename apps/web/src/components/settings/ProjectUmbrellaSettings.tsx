@@ -1,0 +1,168 @@
+import { useAtomValue } from "@effect/atom-react";
+import { AuthSettingsWriteScope, repositoryGroupingDisplayNameOf } from "@t3tools/contracts";
+import { Fragment, useState } from "react";
+
+import { useUmbrellaMembershipEdits } from "../../hooks/useUmbrellaMembershipEdits";
+import type {
+  SidebarProjectGroupMember,
+  SidebarProjectSnapshot,
+} from "../../sidebarProjectGrouping";
+import { useEnvironments } from "../../state/environments";
+import { useEnvironmentsWithScope } from "../../state/session";
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { toastManager } from "../ui/toast";
+import { applyPendingScopedWrites, pendingScopedWritesAtom } from "./scopedSettings";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
+
+const isAbsolutePath = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+
+function UmbrellaAdoptForm(props: {
+  disabled: boolean;
+  environmentLabel: string;
+  onAdopt: (path: string) => void;
+}) {
+  const [path, setPath] = useState("");
+  return (
+    <form
+      className="flex w-full min-w-0 items-center gap-2 sm:w-auto"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const trimmed = path.trim();
+        if (!isAbsolutePath(trimmed)) {
+          toastManager.add({
+            type: "warning",
+            title: "Checkout not added",
+            description: `Enter an absolute path on ${props.environmentLabel}.`,
+          });
+          return;
+        }
+        props.onAdopt(trimmed);
+        setPath("");
+      }}
+    >
+      <Input
+        size="sm"
+        className="min-w-0 flex-1 sm:w-64 sm:flex-none"
+        aria-label="Checkout path"
+        placeholder="/path/to/checkout"
+        disabled={props.disabled}
+        value={path}
+        onChange={(event) => setPath(event.target.value)}
+      />
+      <Button size="sm" variant="outline" type="submit" disabled={props.disabled || !path.trim()}>
+        Add
+      </Button>
+    </form>
+  );
+}
+
+/** Members, exclusions, and adoption for each project in the group that can hold checkouts. */
+export function ProjectUmbrellaSettings({ group }: { group: SidebarProjectSnapshot }) {
+  const { environments } = useEnvironments();
+  const pendingWrites = useAtomValue(pendingScopedWritesAtom);
+  const shownEnvironments = applyPendingScopedWrites(environments, pendingWrites);
+  const edits = useUmbrellaMembershipEdits();
+  const umbrellas = group.memberProjects.filter(
+    (project) =>
+      !project.isScratch &&
+      !group.foldedUmbrellaMembers.has(`${project.environmentId}:${project.id}`),
+  );
+  const writableIds = useEnvironmentsWithScope(umbrellas, AuthSettingsWriteScope);
+  if (umbrellas.length === 0) return null;
+
+  const rowsFor = (project: SidebarProjectGroupMember) => {
+    const environment = shownEnvironments.find(
+      (candidate) => candidate.environmentId === project.environmentId,
+    );
+    const environmentLabel = project.environmentLabel ?? environment?.label ?? "this environment";
+    const overrides = environment?.serverConfig?.settings.projectSettingsOverrides[project.id];
+    const excluded = overrides?.umbrellaExcludedPaths ?? [];
+    const disabled =
+      !writableIds.has(project.environmentId) ||
+      environment?.connection.phase !== "connected" ||
+      !environment.serverConfig;
+    const prefix = umbrellas.length > 1 ? `${environmentLabel} · ` : "";
+    return (
+      <Fragment key={`${project.environmentId}:${project.id}`}>
+        {project.umbrellaMembers === undefined ? (
+          <SettingsRow
+            title={`${prefix}Checkouts`}
+            description="This folder has not been scanned for checkouts yet."
+          />
+        ) : null}
+        {project.umbrellaMembers?.map((member) => {
+          const repository = member.repositoryIdentity
+            ? (repositoryGroupingDisplayNameOf(member.repositoryIdentity) ??
+              member.repositoryIdentity.name)
+            : null;
+          return (
+            <SettingsRow
+              key={member.path}
+              title={
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate">{`${prefix}${member.relativePath}`}</span>
+                  <Badge variant="outline" size="sm">
+                    {member.source === "nested" ? "Found in folder" : "Added"}
+                  </Badge>
+                </span>
+              }
+              description={repository ?? member.path}
+              control={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={disabled}
+                  aria-label={`Remove ${member.relativePath} from the umbrella`}
+                  onClick={() => edits.remove(project, member)}
+                >
+                  Remove
+                </Button>
+              }
+            />
+          );
+        })}
+        {excluded.map((path) => (
+          <SettingsRow
+            key={`excluded:${path}`}
+            title={`${prefix}${path}`}
+            description="Left out of this umbrella."
+            control={
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                aria-label={`Restore ${path} to the umbrella`}
+                onClick={() => edits.restore(project, path)}
+              >
+                Restore
+              </Button>
+            }
+          />
+        ))}
+        <SettingsRow
+          title={`${prefix}Add checkout`}
+          description={`A git checkout anywhere on ${environmentLabel}, by absolute path.`}
+          control={
+            <UmbrellaAdoptForm
+              disabled={disabled}
+              environmentLabel={environmentLabel}
+              onAdopt={(path) => edits.adopt(project, path)}
+            />
+          }
+        />
+      </Fragment>
+    );
+  };
+
+  return (
+    <SettingsSection id="project-umbrella" title="Umbrella checkouts">
+      <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+        Git checkouts this project spans. Their projects' threads group under it, and the diff panel
+        shows each checkout's changes.
+      </p>
+      {umbrellas.map(rowsFor)}
+    </SettingsSection>
+  );
+}

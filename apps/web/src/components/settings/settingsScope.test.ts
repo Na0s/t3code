@@ -53,6 +53,7 @@ function group(
     environmentPresence: "mixed",
     allRemoteMembersAreDesktopLocal: false,
     allRemoteMembersAreWsl: false,
+    foldedUmbrellaMembers: new Map(),
     remoteEnvironmentLabels: [],
     pinned: false,
     archived: false,

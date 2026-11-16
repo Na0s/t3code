@@ -1236,6 +1236,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
   },
   {
+    id: "project-umbrella",
+    title: "Umbrella checkouts",
+    to: "/settings/projects",
+    searchTerms: [
+      "umbrella repositories repos nested checkout member adopt exclude monorepo folder",
+    ],
+  },
+  {
     id: "environment-icon",
     title: "Environment icon",
     to: "/settings/access",
