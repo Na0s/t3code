@@ -14,6 +14,7 @@ import type * as Scope from "effect/Scope";
 
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
+import { discoverNestedRepositories } from "./umbrellaDiscovery.ts";
 
 const DEFAULT_CACHE_CAPACITY = 512;
 const DEFAULT_MAX_PENDING = 512;
@@ -22,6 +23,8 @@ const DEFAULT_SUCCESS_TTL = Duration.minutes(1);
 // Frequent shell reads scan ~20 files per project; icons change rarely, so cache longer than identities.
 const DEFAULT_FAVICON_TTL = Duration.minutes(15);
 const DEFAULT_FAILURE_TTL = Duration.seconds(5);
+// Discovery walks folders; a new checkout under a project root shows up within this window.
+const DEFAULT_NESTED_REPOSITORIES_TTL = Duration.minutes(5);
 
 export interface ProjectEnrichment {
   readonly repositoryIdentity: RepositoryIdentity | null;
@@ -33,6 +36,8 @@ export interface ProjectEnrichmentChange {
   readonly workspaceRoot: string;
   readonly enrichment: ProjectEnrichment;
   readonly repositoryIdentityResolved: boolean;
+  /** Set when the change is a new list of checkouts discovered under the root. */
+  readonly nestedRepositoriesResolved?: boolean;
 }
 
 export interface ProjectEnrichmentServiceOptions {
@@ -50,6 +55,13 @@ export class ProjectEnrichmentService extends Context.Service<
     readonly readRepositoryIdentity: (
       workspaceRoot: string,
     ) => Effect.Effect<RepositoryIdentity | null>;
+    /** Checkouts found under the root so far, or null before the first scan; schedules a scan when stale. */
+    readonly peekNestedRepositories: (
+      workspaceRoot: string,
+    ) => Effect.Effect<ReadonlyArray<string> | null>;
+    readonly readNestedRepositories: (
+      workspaceRoot: string,
+    ) => Effect.Effect<ReadonlyArray<string>>;
     readonly invalidate: (workspaceRoots: Iterable<string>) => Effect.Effect<void>;
     /** Re-resolves past both identity caches and publishes a found identity, leaving the favicon alone. */
     readonly refreshRepositoryIdentity: (workspaceRoot: string) => Effect.Effect<void>;
@@ -149,6 +161,25 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       }),
     },
   );
+  // Outlive the cache entry, like identities; only the worker's list decides whether to publish.
+  const knownNestedRepositories = new Map<string, ReadonlyArray<string>>();
+  const publishedNestedRepositories = new Map<string, ReadonlyArray<string>>();
+  const rememberNested = (
+    map: Map<string, ReadonlyArray<string>>,
+    workspaceRoot: string,
+    nested: ReadonlyArray<string>,
+  ) => {
+    map.delete(workspaceRoot);
+    if (map.size >= cacheCapacity) {
+      const oldestRoot = map.keys().next().value;
+      if (oldestRoot !== undefined) map.delete(oldestRoot);
+    }
+    map.set(workspaceRoot, nested);
+  };
+  const nestedRepositoriesCache = yield* Cache.makeWith(
+    (workspaceRoot: string) => discoverNestedRepositories(workspaceRoot),
+    { capacity: cacheCapacity, timeToLive: () => DEFAULT_NESTED_REPOSITORIES_TTL },
+  );
   const makeWorkLane = Effect.gen(function* () {
     const pendingRoots = yield* Ref.make<ReadonlySet<string>>(new Set());
     const queue = yield* Effect.acquireRelease(Queue.dropping<string>(maxPending), (queue) =>
@@ -158,6 +189,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   });
   const repositoryIdentityLane = yield* makeWorkLane;
   const faviconLane = yield* makeWorkLane;
+  const nestedRepositoriesLane = yield* makeWorkLane;
   const changes = yield* Effect.acquireRelease(
     PubSub.sliding<ProjectEnrichmentChange>(256),
     (pubsub) => PubSub.shutdown(pubsub),
@@ -183,7 +215,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
 
   const logFailure = <A, E>(
     workspaceRoot: string,
-    field: "repositoryIdentity" | "faviconPath",
+    field: "repositoryIdentity" | "faviconPath" | "nestedRepositories",
     result: Exit.Exit<A, E>,
   ) =>
     Exit.isFailure(result)
@@ -226,6 +258,27 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     yield* logFailure(workspaceRoot, "faviconPath", faviconPath);
   });
 
+  const sameList = (left: ReadonlyArray<string> | undefined, right: ReadonlyArray<string>) =>
+    left !== undefined &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index]);
+
+  const resolveNestedRepositories = Effect.fn("ProjectEnrichmentService.resolveNestedRepositories")(
+    function* (workspaceRoot: string) {
+      const nested = yield* Cache.get(nestedRepositoriesCache, workspaceRoot);
+      rememberNested(knownNestedRepositories, workspaceRoot, nested);
+      // Rescans of an unchanged folder would otherwise push a shell frame to every subscriber.
+      if (sameList(publishedNestedRepositories.get(workspaceRoot), nested)) return;
+      rememberNested(publishedNestedRepositories, workspaceRoot, nested);
+      yield* PubSub.publish(changes, {
+        workspaceRoot,
+        repositoryIdentityResolved: false,
+        nestedRepositoriesResolved: true,
+        enrichment: yield* peek(workspaceRoot),
+      });
+    },
+  );
+
   const startWorkers = (
     lane: EnrichmentWorkLane,
     resolve: (workspaceRoot: string) => Effect.Effect<void>,
@@ -244,6 +297,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     [
       startWorkers(repositoryIdentityLane, resolveRepositoryIdentity),
       startWorkers(faviconLane, resolveFavicon),
+      startWorkers(nestedRepositoriesLane, resolveNestedRepositories),
     ],
     { concurrency: "unbounded", discard: true },
   );
@@ -252,7 +306,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   const requestLane = Effect.fnUntraced(function* (
     lane: EnrichmentWorkLane,
     workspaceRoot: string,
-    field: "repositoryIdentity" | "faviconPath",
+    field: "repositoryIdentity" | "faviconPath" | "nestedRepositories",
   ) {
     if (!(yield* reservePending(lane, workspaceRoot))) return;
     yield* Effect.gen(function* () {
@@ -319,6 +373,22 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       return Exit.isSuccess(resolved) ? resolved.value : null;
     });
 
+  const peekNestedRepositories: ProjectEnrichmentService["Service"]["peekNestedRepositories"] =
+    Effect.fnUntraced(function* (workspaceRoot) {
+      const cached = yield* Cache.getSuccess(nestedRepositoriesCache, workspaceRoot);
+      if (Option.isNone(cached)) {
+        yield* requestLane(nestedRepositoriesLane, workspaceRoot, "nestedRepositories");
+      }
+      return Option.getOrUndefined(cached) ?? knownNestedRepositories.get(workspaceRoot) ?? null;
+    });
+
+  const readNestedRepositories: ProjectEnrichmentService["Service"]["readNestedRepositories"] =
+    Effect.fn("ProjectEnrichmentService.readNestedRepositories")(function* (workspaceRoot) {
+      const nested = yield* Cache.get(nestedRepositoriesCache, workspaceRoot);
+      rememberNested(knownNestedRepositories, workspaceRoot, nested);
+      return nested;
+    });
+
   const invalidate: ProjectEnrichmentService["Service"]["invalidate"] = Effect.fn(
     "ProjectEnrichmentService.invalidate",
   )(function* (workspaceRoots) {
@@ -331,8 +401,11 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
             Effect.sync(() => {
               lookupsInFlight.delete(workspaceRoot);
               lastRepositoryIdentities.delete(workspaceRoot);
+              knownNestedRepositories.delete(workspaceRoot);
+              publishedNestedRepositories.delete(workspaceRoot);
             }),
             Cache.invalidate(faviconCache, workspaceRoot),
+            Cache.invalidate(nestedRepositoriesCache, workspaceRoot),
             // The resolver keeps its own misses, which would outlive a clone filling the folder.
             faviconResolver.invalidate(workspaceRoot),
           ],
@@ -358,6 +431,8 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     request,
     getAvailable,
     readRepositoryIdentity,
+    peekNestedRepositories,
+    readNestedRepositories,
     invalidate,
     refreshRepositoryIdentity,
     subscribeChanges: PubSub.subscribe(changes),

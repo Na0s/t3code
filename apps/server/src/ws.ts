@@ -27,6 +27,7 @@ import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
   AcpRegistryOperationError,
   CommandId,
+  type ProjectId,
   authScopeResponse,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
@@ -221,6 +222,7 @@ import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as UmbrellaMembership from "./project/UmbrellaMembership.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
@@ -884,8 +886,13 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
           ),
         { concurrency: 16 },
       ).pipe(
-        Effect.map((enriched) => ({
-          projects: enriched.map((entry) => entry.project),
+        Effect.flatMap((enriched) =>
+          UmbrellaMembership.attachUmbrellaMembers(enriched.map((entry) => entry.project)).pipe(
+            Effect.map((projects) => ({ enriched, projects })),
+          ),
+        ),
+        Effect.map(({ enriched, projects }) => ({
+          projects,
           resolvedRepositoryIdentityRoots: enriched
             .filter((entry) => entry.repositoryIdentityResolved)
             .map((entry) => entry.project.workspaceRoot),
@@ -1147,6 +1154,18 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       shouldPublishShellApplicationEvent(stored, subagentThreadIds);
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
+    const umbrellaEnrichmentChanges = yield* projectEnrichment.subscribeChanges;
+    const umbrellaSettingsChanges = yield* Effect.serviceOption(
+      UmbrellaMembership.UmbrellaMembership,
+    ).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(Stream.empty),
+          onSome: (membership) =>
+            membership.subscribeChanges.pipe(Effect.map(Stream.fromSubscription)),
+        }),
+      ),
+    );
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
       function* (snapshotSequence: number) {
         const enriched = yield* enrichProjectShells(yield* projects.listShells());
@@ -1303,6 +1322,67 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       ),
     );
 
+    // Members are refreshed as metadata: roots stay out of the identity list, so identities are not overwritten.
+    const umbrellaRefreshes = Stream.merge(
+      Stream.fromSubscription(umbrellaEnrichmentChanges).pipe(
+        Stream.map((change) => ({
+          root: change.workspaceRoot,
+          rescanned: change.nestedRepositoriesResolved === true,
+          projectIds: [] as ReadonlyArray<ProjectId>,
+        })),
+      ),
+      umbrellaSettingsChanges.pipe(
+        Stream.map((projectIds) => ({ root: null, rescanned: false, projectIds })),
+      ),
+    ).pipe(
+      Stream.groupedWithin(64, Duration.millis(50)),
+      Stream.mapEffect((triggers) =>
+        Effect.gen(function* () {
+          const rescannedRoots = new Set<string>();
+          const changedRoots = new Set<string>();
+          const projectIds = new Set<ProjectId>();
+          for (const trigger of triggers) {
+            if (trigger.root !== null) {
+              changedRoots.add(trigger.root);
+              if (trigger.rescanned) rescannedRoots.add(trigger.root);
+            }
+            for (const projectId of trigger.projectIds) projectIds.add(projectId);
+          }
+          const shells = yield* UmbrellaMembership.attachUmbrellaMembers(
+            yield* projects.listShells(),
+          );
+          const affected = shells.filter(
+            (project) =>
+              projectIds.has(project.id) ||
+              (project.umbrellaMembers !== undefined &&
+                (rescannedRoots.has(project.workspaceRoot) ||
+                  project.umbrellaMembers.some((member) => changedRoots.has(member.path)))),
+          );
+          if (affected.length === 0) return [];
+          const changedProjects = yield* Effect.forEach(affected, (project) =>
+            projectEnrichment
+              .peek(project.workspaceRoot)
+              .pipe(Effect.map(({ repositoryIdentity }) => ({ ...project, repositoryIdentity }))),
+          );
+          return [
+            {
+              kind: "snapshot" as const,
+              snapshot: {
+                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+                projects: changedProjects,
+                threads: [],
+                archivedThreads: [],
+              } as OrchestrationV2ShellSnapshot,
+              resolvedRepositoryIdentityRoots: [] as ReadonlyArray<string>,
+            },
+          ];
+        }),
+      ),
+      Stream.flatMap(Stream.fromIterable),
+    );
+    const metadataRefreshes = Stream.merge(enrichmentRefreshes, umbrellaRefreshes);
+
     // Subscribe before loading for racing enrichments; initial refresh covers pre-subscription completions and cold HTTP snapshots.
     const completionMarker =
       input.requestCompletionMarker === true
@@ -1338,7 +1418,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
           tail: completionThenLive(loaded.snapshot.snapshotSequence),
-          enrichment: enrichmentRefreshes,
+          enrichment: metadataRefreshes,
         });
       }
 
@@ -1353,7 +1433,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
               return composeShellStreamWithEnrichment({
                 initial: initialSnapshotItems(loaded),
                 tail: completionThenLive(loaded.snapshot.snapshotSequence),
-                enrichment: enrichmentRefreshes,
+                enrichment: metadataRefreshes,
               });
             });
       const highWater = yield* applicationEvents.latestApplicationSequence;
@@ -1393,7 +1473,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           }),
         }),
         tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
-        enrichment: enrichmentRefreshes,
+        enrichment: metadataRefreshes,
       });
     }).pipe(
       Effect.mapError(

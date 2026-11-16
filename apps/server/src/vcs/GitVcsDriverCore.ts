@@ -47,6 +47,7 @@ import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observabil
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { removeEmptyDirectory, type RemoveEmptyDirectoryError } from "./removeEmptyDirectory.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
+import { UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
 import {
   explicitBareRepositoryEnv,
   gitConfigEnv,
@@ -1024,6 +1025,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
   const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
+  const umbrellaMembers = yield* UmbrellaMemberIndex;
+  // Umbrella members checked out inside a work tree are separate projects' files, not this repository's.
+  const memberExclusions = (worktreeRoot: string | null | undefined): ReadonlyArray<string> =>
+    worktreeRoot && umbrellaMembers.hasMembers()
+      ? umbrellaMembers
+          .memberPathsWithin(worktreeRoot)
+          .map((member) => `:(top,exclude,literal)${member}`)
+      : [];
   type StatusFetchState = {
     phase: "queued" | "running" | "claimed";
     claimed: Deferred.Deferred<void>;
@@ -2401,10 +2410,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
     );
     const statusCacheKey = repositoryPaths?.gitCommonDir;
+    const exclusions = memberExclusions(repositoryPaths?.worktreeRoot);
     const readStatus = executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
-      statusArgs,
+      exclusions.length === 0 ? statusArgs : [...statusArgs, "--", ...exclusions],
       {
         allowNonZeroExit: true,
         maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
@@ -2420,7 +2430,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       executeGitWithStableDiagnostics(
         "GitVcsDriver.statusDetails.numstat",
         cwd,
-        ["diff-index", "-M", "--numstat", "-z", ref, "--"],
+        ["diff-index", "-M", "--numstat", "-z", ref, "--", ...exclusions],
         { allowNonZeroExit: true, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
       );
     // diff-index does not read status output, so both spawn together; a non-repository discards it.
@@ -2895,10 +2905,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           });
         }
       }
+      const exclusions = umbrellaMembers.hasMembers()
+        ? memberExclusions(
+            (yield* resolveRepositoryPaths(cwd).pipe(Effect.orElseSucceed(() => null)))
+              ?.worktreeRoot,
+          )
+        : [];
       yield* runGit(
         "GitVcsDriver.commit.addAll",
         cwd,
-        [...config, "add", "-A"],
+        [...config, "add", "-A", ...(exclusions.length === 0 ? [] : ["--", ...exclusions])],
         env ? { env } : {},
       );
     }
@@ -3894,10 +3910,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const roots = options?.untrackedRoots ?? [];
     // Bound pathspec matching work and stay below Windows' command-line limit.
-    const pathspecs =
-      roots.length <= 128 && roots.reduce((length, root) => length + root.length + 16, 0) < 8_000
+    const exclusions = memberExclusions(cwd);
+    const pathspecs = [
+      ...(roots.length <= 128 &&
+      roots.reduce((length, root) => length + root.length + 16, 0) < 8_000
         ? roots.map((root) => `:(top,literal)${root}`)
-        : [];
+        : []),
+      ...exclusions,
+    ];
     // Changed untracked roots skip the backoff and scan again.
     const rootsKey = roots.join("\0");
     const remembered = untrackedTotalsFailures.get(cwd);
@@ -3946,7 +3966,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.readBranchChangeTotals",
         cwd,
         // Plumbing: porcelain diff refreshes and rewrites the real index, taking index.lock.
-        ["diff-index", "-M", "--numstat", "-z", ref, "--"],
+        ["diff-index", "-M", "--numstat", "-z", ref, "--", ...exclusions],
         {
           allowNonZeroExit: true,
           maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
@@ -4137,7 +4157,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const getReviewDiffPreview = Effect.fn("getReviewDiffPreview")(function* (
     input: ReviewDiffPreviewInput,
   ) {
-    const pathArgs = input.file
+    const filePathArgs = input.file
       ? [input.file.path, ...(input.file.previousPath ? [input.file.previousPath] : [])].map(
           (path) => `:(top,literal)${path}`,
         )
@@ -4169,6 +4189,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const cwd = repository.worktreeRoot;
+    const pathArgs = [...filePathArgs, ...memberExclusions(cwd)];
     const hashDiff = (diff: string, files: ReadonlyArray<ReviewDiffFileStat>) =>
       digest.digest(Digest.sha256, new TextEncoder().encode(JSON.stringify([diff, files]))).pipe(
         Effect.map(Hex.encode),

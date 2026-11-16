@@ -26,6 +26,7 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -177,6 +178,117 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         yield* service.drain;
 
         expect(lookups.slice(lookupsBeforeIdle)).toEqual([]);
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
+  it.effect("links the branch pull request of each umbrella member a turn edited", () =>
+    Effect.gen(function* () {
+      const thread = threadShell("umbrella-thread");
+      const project: OrchestrationProjectShell = {
+        id: thread.projectId,
+        title: "Client",
+        workspaceRoot: "/clients/acme",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      };
+      const member = (relativePath: string) => ({
+        path: `/clients/acme/${relativePath}`,
+        relativePath,
+        repositoryIdentity: null,
+        source: "nested" as const,
+      });
+      const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+      const lookups: Array<string> = [];
+      const dispatched: Array<OrchestrationV2ServerCommand> = [];
+      const linked = yield* Deferred.make<void>();
+      const dependencies = Layer.mergeAll(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          streamDomainEvents: Stream.fromQueue(domainEvents),
+          getPullRequestSnapshot: () =>
+            Effect.succeed({
+              schemaVersion: 2,
+              snapshotSequence: 1,
+              threads: [],
+              archivedThreads: [],
+            }),
+          getThreadShell: () => Effect.succeed(thread),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              dispatched.push(command as OrchestrationV2ServerCommand);
+            }).pipe(Effect.andThen(Deferred.succeed(linked, undefined))) as never,
+        }),
+        Layer.mock(ProjectStore.ProjectStoreV2)({
+          listShells: () => Effect.succeed([project]),
+          getShell: () => Effect.succeedSome(project),
+        }),
+        Layer.mock(GitManager.GitManager)({
+          localStatus: ({ cwd }) =>
+            Effect.succeed({
+              isRepo: true,
+              hasPrimaryRemote: true,
+              isDefaultRef: false,
+              refName: `feature/${cwd.split("/").at(-1)}`,
+              hasWorkingTreeChanges: false,
+              workingTree: { files: [], insertions: 0, deletions: 0 },
+            }),
+          branchPullRequest: ({ cwd, branch }) =>
+            Effect.sync(() => {
+              lookups.push(`${cwd}@${branch}`);
+              return {
+                number: 12,
+                title: "API change",
+                url: "https://github.com/acme/api/pull/12",
+                baseBranch: "main",
+                headBranch: branch,
+                state: "open" as const,
+                repositoryKey: "github.com/acme/api",
+                updatedAt: null,
+              };
+            }),
+        }),
+        Layer.mock(PullRequestService.PullRequestService)({
+          notifyLinkedThreadsChanged: Effect.void,
+        }),
+        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+        Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+          shouldRunScopeWork: () => Effect.succeed(false),
+          shouldRunOpportunisticWork: Effect.succeed(false),
+        }),
+        Layer.mock(UmbrellaMembership.UmbrellaMembership)({
+          membersOf: () => Effect.succeed([member("apps/api"), member("apps/web")]),
+        }),
+        Layer.succeed(
+          SecureRandom.SecureRandom,
+          SecureRandom.make((size) => new Uint8Array(size).fill(1)),
+        ),
+        FileSystem.layerNoop({}),
+        Path.layer,
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadPullRequestService.make;
+        yield* service.start();
+        yield* Queue.offer(domainEvents, {
+          type: "checkpoint.captured",
+          threadId: thread.id,
+          payload: { files: [{ path: "apps/api/src/server.ts" }, { path: "README.md" }] },
+        } as unknown as OrchestrationV2DomainEvent);
+        yield* Deferred.await(linked);
+        yield* service.drain;
+
+        expect(lookups).toEqual(["/clients/acme/apps/api@feature/api"]);
+        expect(dispatched).toMatchObject([
+          {
+            type: "thread.pull-request.link",
+            threadId: thread.id,
+            host: "github.com",
+            repository: "acme/api",
+            number: 12,
+            source: "agent",
+          },
+        ]);
       }).pipe(Effect.provide(dependencies));
     }),
   );

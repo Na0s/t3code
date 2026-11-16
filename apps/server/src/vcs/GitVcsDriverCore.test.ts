@@ -52,6 +52,7 @@ import {
 } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
+import * as UmbrellaMemberIndex from "./UmbrellaMemberIndex.ts";
 import { gitConfigEnv } from "./VcsProcess.ts";
 
 const encodeGitCommandError = Schema.encodeEffect(Schema.fromJsonString(GitCommandError));
@@ -3444,6 +3445,42 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           insertions: 3,
           deletions: 1,
         });
+      }),
+    );
+
+    it.effect("leaves umbrella members out of the enclosing repository", () =>
+      Effect.gen(function* () {
+        const cwd = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(cwd);
+        const member = `${cwd}/apps/api`;
+        yield* (yield* FileSystem.FileSystem).makeDirectory(member, { recursive: true });
+        yield* initRepoWithCommit(member);
+        yield* writeTextFile(member, "README.md", "# member change\n");
+        yield* writeTextFile(cwd, "README.md", "# tracked change\n");
+        const index = UmbrellaMemberIndex.makeIndex();
+        yield* index.replace(new Map([[cwd, [{ path: member, relativePath: "apps/api" }]]]));
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(UmbrellaMemberIndex.UmbrellaMemberIndex, index),
+          Effect.provide(layerServerConfig),
+        );
+
+        const status = yield* driver.statusDetailsLocal(cwd, { includeBranchChanges: true });
+        assert.deepStrictEqual(
+          status.workingTree.files.map((file) => file.path),
+          ["README.md"],
+        );
+        assert.deepStrictEqual(status.branchChanges, {
+          baseRef: null,
+          insertions: 1,
+          deletions: 1,
+        });
+        const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
+        const diff = preview.sources.find((source) => source.kind === "working-tree")?.diff ?? "";
+        assert.include(diff, "+# tracked change");
+        assert.notInclude(diff, "apps/api");
+
+        yield* driver.commit(cwd, "outer change", "", { stage: {} });
+        assert.equal(yield* git(cwd, ["ls-files", "apps"]), "");
       }),
     );
 

@@ -1,4 +1,5 @@
 // Client-supplied worktrees count only under managed folders or when Git lists them for the project.
+import type { ServerSettings as ServerSettingsSchema } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
@@ -72,7 +73,11 @@ export const make = Effect.gen(function* () {
     function* (realPath) {
       const within = (root: string | null) => root !== null && isWithinRoot(path, realPath, root);
       const worktreeSettings = yield* settings.getSettings.pipe(
-        Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
+        Effect.orElseSucceed(() => ({
+          worktreesDirectory: "",
+          previousWorktreesDirectories: [],
+          projectSettingsOverrides: {} as ServerSettingsSchema["projectSettingsOverrides"],
+        })),
       );
       const home = yield* HostProcess.HomeDirectory;
       const managedDirectories = managedWorktreesDirectories(
@@ -89,6 +94,14 @@ export const make = Effect.gen(function* () {
       const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
       for (const project of projects) {
         if (within(yield* resolveRoot(project.workspaceRoot))) return true;
+      }
+      // Umbrella members adopted from outside the project's folder.
+      for (const project of projects) {
+        const adopted =
+          worktreeSettings.projectSettingsOverrides[project.id]?.umbrellaAdoptedPaths ?? [];
+        for (const member of adopted) {
+          if (within(yield* resolveRoot(path.resolve(project.workspaceRoot, member)))) return true;
+        }
       }
 
       const threads = yield* sql<{ readonly worktreePath: string; readonly projectId: string }>`
