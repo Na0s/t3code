@@ -166,6 +166,18 @@ export const serveHubLease = Effect.fn("HubConnection.serveLease")(function* (
       detail: `${prepared.label} cannot be shared with another window.`,
     });
   }
-  yield* session.relay(port);
+  const relay = yield* session.relay(port);
+  // A session that ends or is replaced takes its relays with it, so the window reconnects at once.
+  const supervisor = yield* registry.run(
+    environmentId,
+    EnvironmentSupervisor.EnvironmentSupervisor,
+  );
+  yield* Effect.raceFirst(
+    session.closed.pipe(Effect.ignore),
+    SubscriptionRef.changes(supervisor.session).pipe(
+      Stream.filter((current) => Option.getOrNull(current) !== session),
+      Stream.runHead,
+    ),
+  ).pipe(Effect.andThen(relay.close("The main window's connection ended.")), Effect.forkScoped);
   return prepared;
 });

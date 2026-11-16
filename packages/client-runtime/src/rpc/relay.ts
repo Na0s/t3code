@@ -24,10 +24,26 @@ export interface RelayClosedMessage {
   readonly detail: string;
 }
 
+/** Fails only these requests, which then resubscribe; the relay stays open. */
+interface RelayRequestsFailedMessage {
+  readonly _tag: "RelayRequestsFailed";
+  readonly requestIds: ReadonlyArray<string | number>;
+  readonly detail: string;
+}
+
+const relayTag = (message: unknown): unknown =>
+  typeof message === "object" && message !== null
+    ? (message as { readonly _tag?: unknown })._tag
+    : undefined;
 const isRelayClosedMessage = (message: unknown): message is RelayClosedMessage =>
-  typeof message === "object" &&
-  message !== null &&
-  (message as { readonly _tag?: unknown })._tag === "RelayClosed";
+  relayTag(message) === "RelayClosed";
+const isRelayRequestsFailedMessage = (message: unknown): message is RelayRequestsFailedMessage =>
+  relayTag(message) === "RelayRequestsFailed";
+
+export interface RelayHandle {
+  /** Ends the relay now; the secondary's session closes and reconnects. */
+  readonly close: (detail: string) => Effect.Effect<void>;
+}
 
 /**
  * A stream the relay serves from state the hub already holds instead of
@@ -80,7 +96,7 @@ export const serveRelay = Effect.fnUntraced(function* (options: {
   readonly protocol: RpcClient.Protocol["Service"];
   readonly port: RpcPort;
   readonly shared?: ReadonlyArray<SharedRelayStream>;
-}): Effect.fn.Return<void, never, Scope.Scope> {
+}): Effect.fn.Return<RelayHandle, never, Scope.Scope> {
   const { protocol, port } = options;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const clientId = nextRelayClientId++;
@@ -120,8 +136,24 @@ export const serveRelay = Effect.fnUntraced(function* (options: {
           if (response._tag === "Exit") forwarded.delete(String(response.requestId));
           return post({ ...response, requestId: original });
         }
-        case "ClientProtocolError":
-          return close(response.error.message);
+        case "ClientProtocolError": {
+          if (response.requestIds === undefined) return close(response.error.message);
+          const requestIds = response.requestIds.flatMap((requestId) => {
+            const original = restore(requestId);
+            if (original === undefined) return [];
+            forwarded.delete(String(requestId));
+            return [original];
+          });
+          if (requestIds.length === 0) return Effect.void;
+          return Effect.sync(() => {
+            if (closed) return;
+            port.postMessage({
+              _tag: "RelayRequestsFailed",
+              requestIds,
+              detail: response.error.message,
+            } satisfies RelayRequestsFailedMessage);
+          });
+        }
         case "Pong":
           return Effect.void;
         default:
@@ -211,6 +243,13 @@ export const serveRelay = Effect.fnUntraced(function* (options: {
       port.close();
     }),
   );
+
+  return {
+    close: Effect.fn("RelayHandle.close")(function* (detail: string) {
+      for (const fiber of sharedFibers.values()) yield* Fiber.interrupt(fiber);
+      yield* close(detail);
+    }),
+  } satisfies RelayHandle;
 });
 
 /**
@@ -249,6 +288,29 @@ export const makePortProtocol = (options: {
 
       const receive = (message: unknown): Effect.Effect<void> => {
         if (isRelayClosedMessage(message)) return fail(message.detail);
+        if (isRelayRequestsFailedMessage(message)) {
+          const error = new RpcClientError.RpcClientError({
+            reason: new RpcClientError.RpcClientDefect({
+              message: message.detail,
+              cause: undefined,
+            }),
+          });
+          return Effect.forEach(
+            message.requestIds,
+            (requestId) => {
+              const clientId = requestClients.get(requestId);
+              requestClients.delete(requestId);
+              return clientId === undefined
+                ? Effect.void
+                : writeResponse(clientId, {
+                    _tag: "ClientProtocolError",
+                    error,
+                    requestIds: [requestId],
+                  });
+            },
+            { discard: true },
+          );
+        }
         const response = message as FromServerEncoded;
         if ("requestId" in response) {
           const clientId = requestClients.get(response.requestId);

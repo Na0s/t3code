@@ -10,7 +10,7 @@ import * as Layer from "effect/Layer";
 import { Atom } from "effect/reactivity";
 
 import { isGuestPage } from "../guestPage";
-import { isSecondaryDesktopWindow } from "../multiWindow/windowContext";
+import { isSecondaryDesktopWindow, readDesktopWindowContext } from "../multiWindow/windowContext";
 import { layerHubLeaseSource } from "../multiWindow/secondary";
 
 import * as Runtime from "../lib/runtime";
@@ -41,6 +41,8 @@ const layerProvidedClientConnection = layerSnapshotLoader.pipe(
         environmentThemes: true,
         usageLimitSources: true,
         usageLimitsCommand: true,
+        // The main desktop window serves other windows, which share its subscriptions.
+        shareStreams: readDesktopWindowContext()?.isMain === true,
       },
       // A secondary desktop window shares the main window's sockets.
       isSecondaryDesktopWindow() ? layerHubLeaseSource : undefined,

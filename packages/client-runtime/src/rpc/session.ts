@@ -16,6 +16,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
+import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -31,7 +32,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
-import { makePortProtocol, type RpcPort, serveRelay } from "./relay.ts";
+import { makePortProtocol, type RelayHandle, type RpcPort, serveRelay } from "./relay.ts";
 import { makeSharedStreamProtocol } from "./sharedStreams.ts";
 import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
 import type {
@@ -65,7 +66,7 @@ export interface RpcSession {
   readonly inboundFrames: Effect.Effect<number>;
   readonly closed: Effect.Effect<never, ConnectionAttemptError>;
   /** Serves another window's RpcClient over `port` through this session's socket. */
-  readonly relay?: (port: RpcPort) => Effect.Effect<void, never, Scope.Scope>;
+  readonly relay?: (port: RpcPort) => Effect.Effect<RelayHandle, never, Scope.Scope>;
 }
 
 export interface RpcSessionOptions {
@@ -75,6 +76,8 @@ export interface RpcSessionOptions {
   readonly providerCatalogsOnDemand?: boolean;
   readonly providerCatalogDigests?: boolean;
   readonly providerStatusDeltas?: boolean;
+  /** Desktop hub only: clients of one session share identical subscriptions. */
+  readonly shareStreams?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -555,8 +558,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
               ? Effect.void
               : protocol.send(clientId, request, transferables),
         })),
-        // The hub's own client and every relayed window share each subscription.
-        Effect.flatMap(makeSharedStreamProtocol),
+        // A desktop hub's own client and every relayed window share each subscription.
+        options.shareStreams === true ? Effect.flatMap(makeSharedStreamProtocol) : identity,
       ),
     ).pipe(
       Layer.provide(
