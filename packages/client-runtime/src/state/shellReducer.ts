@@ -3,6 +3,7 @@ import {
   OrchestrationV2ThreadShell,
   RepositoryIdentity,
   ThreadPullRequestLink,
+  UmbrellaMember,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
 } from "@t3tools/contracts";
@@ -14,6 +15,7 @@ const sameLinks = Schema.toEquivalence(Schema.UndefinedOr(Schema.Array(ThreadPul
 const sameRepositoryIdentity = Schema.toEquivalence(
   Schema.UndefinedOr(Schema.NullOr(RepositoryIdentity)),
 );
+const sameUmbrellaMembers = Schema.toEquivalence(Schema.UndefinedOr(Schema.Array(UmbrellaMember)));
 
 export function sameThreadPullRequests(
   left: OrchestrationV2ThreadShell["pullRequests"],
@@ -60,14 +62,16 @@ function retainRepositoryIdentity(
   previous: OrchestrationProjectShell | undefined,
   next: OrchestrationProjectShell,
 ): OrchestrationProjectShell {
-  if (
-    next.repositoryIdentity == null &&
-    previous?.repositoryIdentity != null &&
-    previous.workspaceRoot === next.workspaceRoot
-  ) {
-    return { ...next, repositoryIdentity: previous.repositoryIdentity };
-  }
-  return next;
+  if (previous === undefined || previous.workspaceRoot !== next.workspaceRoot) return next;
+  // Members are scanned asynchronously too; an unscanned update keeps the last known list.
+  const keepIdentity = next.repositoryIdentity == null && previous.repositoryIdentity != null;
+  const keepMembers = next.umbrellaMembers === undefined && previous.umbrellaMembers !== undefined;
+  if (!keepIdentity && !keepMembers) return next;
+  return {
+    ...next,
+    ...(keepIdentity ? { repositoryIdentity: previous.repositoryIdentity } : {}),
+    ...(keepMembers ? { umbrellaMembers: previous.umbrellaMembers } : {}),
+  };
 }
 
 export interface MergeShellSnapshotOptions {
@@ -93,11 +97,16 @@ export function mergeShellSnapshotProjects(
 
   if (isEnrichment) {
     const nextById = new Map(next.projects.map((project) => [project.id, project] as const));
-    const projects = previous.projects.map((project) => {
-      const candidate = nextById.get(project.id);
-      if (candidate === undefined || candidate.workspaceRoot !== project.workspaceRoot) {
-        return project;
+    const projects = previous.projects.map((prior) => {
+      const candidate = nextById.get(prior.id);
+      if (candidate === undefined || candidate.workspaceRoot !== prior.workspaceRoot) {
+        return prior;
       }
+      const project =
+        candidate.umbrellaMembers !== undefined &&
+        !sameUmbrellaMembers(prior.umbrellaMembers, candidate.umbrellaMembers)
+          ? { ...prior, umbrellaMembers: candidate.umbrellaMembers }
+          : prior;
       if (resolvedRootSet?.has(project.workspaceRoot) === true) {
         // Refreshes re-resolve every root; an unchanged identity keeps the project's identity
         // so every subscriber (each pull request row, the sidebar) skips re-rendering.

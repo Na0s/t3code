@@ -167,6 +167,38 @@ describe("applyShellStreamEvent", () => {
     expect(next.projects[0]?.repositoryIdentity).toEqual(repositoryIdentity);
   });
 
+  it("takes umbrella members from a metadata refresh and keeps them through unscanned updates", () => {
+    const umbrellaMembers = [
+      {
+        path: `${v2Project.workspaceRoot}/api`,
+        relativePath: "api",
+        repositoryIdentity: null,
+        source: "nested" as const,
+      },
+    ];
+    const previous = { ...v2ShellSnapshot, snapshotSequence: 5, projects: [v2Project] };
+    const refreshed = mergeShellSnapshotProjects(
+      previous,
+      { ...previous, projects: [{ ...v2Project, title: "Ignored", umbrellaMembers }] },
+      { resolvedRepositoryIdentityRoots: [] },
+    );
+    expect(refreshed.projects[0]).toEqual({ ...v2Project, umbrellaMembers });
+
+    const renamed = applyShellStreamEvent(refreshed, {
+      kind: "project.updated",
+      sequence: 6,
+      project: { ...v2Project, title: "Renamed" },
+    });
+    expect(renamed.projects[0]?.umbrellaMembers).toEqual(umbrellaMembers);
+
+    const dissolved = mergeShellSnapshotProjects(
+      renamed,
+      { ...renamed, projects: [{ ...v2Project, umbrellaMembers: [] }] },
+      { resolvedRepositoryIdentityRoots: [] },
+    );
+    expect(dissolved.projects[0]?.umbrellaMembers).toEqual([]);
+  });
+
   it("lower-sequence enrichment cannot resurrect empty structural state", () => {
     const previous = {
       ...v2ShellSnapshot,

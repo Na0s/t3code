@@ -5,6 +5,7 @@ import {
   type EnvironmentId,
   type ScopedProjectRef,
   type SidebarProjectGroupingMode,
+  type UmbrellaMember,
 } from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 
@@ -12,6 +13,7 @@ import type { EnvironmentProject } from "./models.ts";
 import { normalizeProjectPathForComparison } from "./projects.ts";
 
 const SCRATCH_PROJECT_SCOPE_KEY = "\0no-project";
+const EMPTY_UMBRELLA_MEMBERS: ReadonlyMap<string, UmbrellaMember> = new Map();
 
 export interface ProjectGroupingSettings {
   readonly sidebarProjectGroupingMode: SidebarProjectGroupingMode;
@@ -257,6 +259,8 @@ export interface ProjectGroup<TProject extends EnvironmentProject = EnvironmentP
   readonly label: string;
   readonly representative: TProject;
   readonly members: ReadonlyArray<ProjectGroupMember<TProject>>;
+  /** Projects folded into an umbrella group, by scoped project key, with the member they matched. */
+  readonly umbrellaMembers: ReadonlyMap<string, UmbrellaMember>;
   readonly memberProjectRefs: ReadonlyArray<ScopedProjectRef>;
   /** Clients write every member together. When members still disagree, the project stays visible. */
   readonly pinned: boolean;
@@ -311,6 +315,53 @@ function selectProjectIdentitySource<TProject extends EnvironmentProject>(
   return freshestIdentifiedProject ?? winner;
 }
 
+/** True for an umbrella: a project spanning at least one member checkout. */
+export function isUmbrellaProject(project: Pick<EnvironmentProject, "umbrellaMembers">): boolean {
+  return (project.umbrellaMembers?.length ?? 0) > 0;
+}
+
+/**
+ * Where each project that is an umbrella's member folds: the same folder on the umbrella's
+ * environment, or the same repository on any environment. Umbrellas never fold into another.
+ */
+function foldIntoUmbrellas<TProject extends EnvironmentProject>(
+  winners: ReadonlyMap<string, TProject>,
+  logicalKeyByPhysicalKey: ReadonlyMap<string, string>,
+  settings: ProjectGroupingSettings,
+): Map<string, { readonly key: string; readonly member: UmbrellaMember }> {
+  const byPath = new Map<string, { key: string; member: UmbrellaMember }>();
+  const byRepository = new Map<string, { key: string; member: UmbrellaMember }>();
+  for (const [physicalKey, project] of winners) {
+    if (!isUmbrellaProject(project)) continue;
+    const key = logicalKeyByPhysicalKey.get(physicalKey)!;
+    for (const member of project.umbrellaMembers ?? []) {
+      const pathKey = derivePhysicalProjectKeyFromPath(project.environmentId, member.path);
+      if (!byPath.has(pathKey)) byPath.set(pathKey, { key, member });
+      const repositoryKey = member.repositoryIdentity
+        ? repositoryGroupingKeyOf(member.repositoryIdentity)
+        : null;
+      if (repositoryKey && !byRepository.has(repositoryKey)) {
+        byRepository.set(repositoryKey, { key, member });
+      }
+    }
+  }
+  const folded = new Map<string, { readonly key: string; readonly member: UmbrellaMember }>();
+  if (byPath.size === 0 && byRepository.size === 0) return folded;
+  for (const [physicalKey, project] of winners) {
+    if (isUmbrellaProject(project) || project.isScratch) continue;
+    if (resolveProjectGroupingMode(project, settings) === "separate") continue;
+    const target =
+      byPath.get(physicalKey) ??
+      (project.repositoryIdentity
+        ? byRepository.get(repositoryGroupingKeyOf(project.repositoryIdentity))
+        : undefined);
+    if (target !== undefined && target.key !== logicalKeyByPhysicalKey.get(physicalKey)) {
+      folded.set(physicalKey, target);
+    }
+  }
+  return folded;
+}
+
 export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
   readonly projects: ReadonlyArray<TProject>;
   readonly settings: ProjectGroupingSettings;
@@ -329,23 +380,39 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
   }
 
   const logicalKeyByPhysicalKey = new Map<string, string>();
-  const groupedMembers = new Map<string, ProjectGroupMember<TProject>[]>();
+  const winners = new Map<string, TProject>();
   for (const [physicalProjectKey, physicalProjects] of projectsByPhysicalKey) {
     const winner = physicalProjects.reduce((current, candidate) =>
       shouldReplacePhysicalProjectWinner(current, candidate) ? candidate : current,
     );
     const identitySource = selectProjectIdentitySource(physicalProjects, winner);
-    const logicalKey = deriveLogicalProjectKey(identitySource, {
-      groupingMode: resolveProjectGroupingMode(winner, input.settings),
-      groupScratchProjects: input.groupScratchProjects ?? false,
-    });
-    logicalKeyByPhysicalKey.set(physicalProjectKey, logicalKey);
-    const member = { physicalProjectKey, project: winner };
-    const existing = groupedMembers.get(logicalKey);
-    if (existing) {
-      existing.push(member);
-    } else {
-      groupedMembers.set(logicalKey, [member]);
+    logicalKeyByPhysicalKey.set(
+      physicalProjectKey,
+      deriveLogicalProjectKey(identitySource, {
+        groupingMode: resolveProjectGroupingMode(winner, input.settings),
+        groupScratchProjects: input.groupScratchProjects ?? false,
+      }),
+    );
+    winners.set(physicalProjectKey, winner);
+  }
+  const folded = foldIntoUmbrellas(winners, logicalKeyByPhysicalKey, input.settings);
+  for (const [physicalProjectKey, { key }] of folded) {
+    logicalKeyByPhysicalKey.set(physicalProjectKey, key);
+  }
+
+  const groupedMembers = new Map<string, ProjectGroupMember<TProject>[]>();
+  // A folded project joins after the umbrella's own projects, which keep naming the group.
+  for (const pass of [false, true]) {
+    for (const [physicalProjectKey, winner] of winners) {
+      if (folded.has(physicalProjectKey) !== pass) continue;
+      const logicalKey = logicalKeyByPhysicalKey.get(physicalProjectKey)!;
+      const member = { physicalProjectKey, project: winner };
+      const existing = groupedMembers.get(logicalKey);
+      if (existing) {
+        existing.push(member);
+      } else {
+        groupedMembers.set(logicalKey, [member]);
+      }
     }
   }
 
@@ -370,26 +437,38 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
     }
   }
 
+  const umbrellaMembersByProjectRef = new Map<string, ReadonlyMap<string, UmbrellaMember>>();
+  for (const project of input.projects) {
+    const fold = folded.get(derivePhysicalProjectKey(project));
+    if (fold === undefined) continue;
+    const forGroup = new Map(umbrellaMembersByProjectRef.get(fold.key));
+    forGroup.set(scopedProjectKey(scopeProjectRef(project.environmentId, project.id)), fold.member);
+    umbrellaMembersByProjectRef.set(fold.key, forGroup);
+  }
+
   const preferredEnvironmentId = input.preferredEnvironmentId ?? null;
   return Array.from(groupedMembers, ([key, members]) => {
+    const own = members.filter((member) => !folded.has(member.physicalProjectKey));
+    const naming = own.length > 0 ? own : members;
     const representative =
       (preferredEnvironmentId
-        ? members.find((member) => member.project.environmentId === preferredEnvironmentId)?.project
-        : null) ?? members[0]!.project;
+        ? naming.find((member) => member.project.environmentId === preferredEnvironmentId)?.project
+        : null) ?? naming[0]!.project;
     return {
       key,
       label:
         input.groupScratchProjects && representative.isScratch
           ? "No project"
-          : members.length > 1
+          : naming.length > 1
             ? deriveProjectGroupLabel({
                 groupKey: key,
                 representative,
-                members: members.map((member) => member.project),
+                members: naming.map((member) => member.project),
               })
             : representative.title,
       representative,
       members,
+      umbrellaMembers: umbrellaMembersByProjectRef.get(key) ?? EMPTY_UMBRELLA_MEMBERS,
       memberProjectRefs: projectRefsByLogicalKey.get(key) ?? [],
       pinned: members.some((member) => member.project.pinnedAt != null),
       archived: members.every((member) => member.project.archivedAt != null),
