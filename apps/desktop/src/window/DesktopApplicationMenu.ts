@@ -6,6 +6,8 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
+import { DEFAULT_DESKTOP_WINDOW_PROFILE_ID, type DesktopWindowsState } from "@t3tools/contracts";
+
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
@@ -50,19 +52,27 @@ const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function
   });
 });
 
-const zoomMainWindow = Effect.fn("desktop.menu.zoomMainWindow")(function* (
+const zoomFocusedWindow = Effect.fn("desktop.menu.zoomFocusedWindow")(function* (
   direction: DesktopWindow.MainWindowZoomDirection,
 ): Effect.fn.Return<void, never, DesktopWindow.DesktopWindow> {
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  yield* desktopWindow.zoomMain(direction);
+  yield* desktopWindow.zoomFocused(direction);
 });
 
-const runMainContentsCommand = Effect.fn("desktop.menu.runMainContentsCommand")(function* (
+const runFocusedContentsCommand = Effect.fn("desktop.menu.runFocusedContentsCommand")(function* (
   command: DesktopWindow.MainWindowContentsCommand,
 ): Effect.fn.Return<void, never, DesktopWindow.DesktopWindow> {
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  yield* desktopWindow.runMainContentsCommand(command);
+  yield* desktopWindow.runFocusedContentsCommand(command);
 });
+
+// Only what the Window menu shows; focus and title changes do not rebuild the menu.
+const windowMenuKey = (state: DesktopWindowsState) =>
+  JSON.stringify({
+    profiles: state.profiles.map((profile) => [profile.id, profile.name]),
+    open: state.windows.flatMap((window) => (window.profileId === null ? [] : [window.profileId])),
+    miniMode: state.miniMode,
+  });
 
 const describeUpdate = (version: string | null) =>
   version === null ? "A new version of T3 Code" : `T3 Code ${version}`;
@@ -148,8 +158,10 @@ const handleCheckForUpdatesMenuClick = Effect.gen(function* () {
 export const make = Effect.gen(function* () {
   const electronMenu = yield* ElectronMenu.ElectronMenu;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const context = yield* Effect.context<DesktopApplicationMenuRuntimeServices>();
   const runPromise = Effect.runPromiseWith(context);
+  let configuredWindowMenuKey: string | null = null;
 
   const runMenuEffect = <E>(
     action: string,
@@ -167,7 +179,24 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const configure = Effect.gen(function* () {
+  const configure: Effect.Effect<void> = Effect.gen(function* () {
+    const windowsState = yield* desktopWindow.windowsState;
+    configuredWindowMenuKey = windowMenuKey(windowsState);
+    // Electron flips a clicked checkbox itself; rebuilding restores the real open state.
+    const windowMenuClick =
+      (action: string, effect: Effect.Effect<void, unknown, DesktopWindow.DesktopWindow>) => () => {
+        runMenuEffect(action, effect.pipe(Effect.ensuring(configure)));
+      };
+    const openProfileClick = (profileId: string) =>
+      windowMenuClick(
+        "open-window-profile",
+        Effect.flatMap(DesktopWindow.DesktopWindow, (windows) => windows.openProfile(profileId)),
+      );
+    const openWindowProfileIds = new Set(
+      windowsState.windows.flatMap((window) =>
+        window.profileId === null ? [] : [window.profileId],
+      ),
+    );
     const checkForUpdatesClick = () => {
       runMenuEffect("check-for-updates", handleCheckForUpdatesMenuClick);
     };
@@ -184,10 +213,10 @@ export const make = Effect.gen(function* () {
       runMenuEffect("paste-as-text", dispatchMenuAction("paste-as-text"));
     };
     const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {
-      runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
+      runMenuEffect(`zoom-${direction}`, zoomFocusedWindow(direction));
     };
     const mainContentsClick = (command: DesktopWindow.MainWindowContentsCommand) => () => {
-      runMenuEffect(command, runMainContentsCommand(command));
+      runMenuEffect(command, runFocusedContentsCommand(command));
     };
     const template: Electron.MenuItemConstructorOptions[] = [];
 
@@ -339,6 +368,39 @@ export const make = Effect.gen(function* () {
         // Electron's default Window submenu adds a Ctrl+W close role off macOS.
         role: "windowMenu",
         submenu: [
+          {
+            label: "New Window",
+            // The renderer's window.new keybinding owns the chord and adds its project filter.
+            accelerator: "CmdOrCtrl+Alt+Shift+N",
+            registerAccelerator: false,
+            click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
+          },
+          { type: "separator" },
+          {
+            label: "Main Window",
+            click: openProfileClick(DEFAULT_DESKTOP_WINDOW_PROFILE_ID),
+          },
+          ...windowsState.profiles
+            .filter((profile) => !profile.isDefault)
+            .map((profile): Electron.MenuItemConstructorOptions => ({
+              label: profile.name,
+              type: "checkbox",
+              checked: openWindowProfileIds.has(profile.id),
+              click: openProfileClick(profile.id),
+            })),
+          { type: "separator" },
+          {
+            label: "Mini Mode",
+            type: "checkbox",
+            checked: windowsState.miniMode,
+            click: windowMenuClick(
+              "mini-mode",
+              Effect.flatMap(DesktopWindow.DesktopWindow, (windows) =>
+                windows.setMiniMode(!windowsState.miniMode),
+              ),
+            ),
+          },
+          { type: "separator" },
           { role: "minimize" },
           { role: "zoom" },
           ...(environment.platform === "darwin"
@@ -359,6 +421,12 @@ export const make = Effect.gen(function* () {
 
     yield* electronMenu.setApplicationMenu(template);
   }).pipe(Effect.withSpan("desktop.menu.configure"));
+
+  yield* desktopWindow.subscribeWindowsState((state) => {
+    if (configuredWindowMenuKey === null || windowMenuKey(state) === configuredWindowMenuKey)
+      return;
+    void runPromise(configure);
+  });
 
   return DesktopApplicationMenu.of({
     configure,

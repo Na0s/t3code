@@ -1,6 +1,6 @@
 import {
   type ServerConfig,
-  type ServerConfigStreamEvent,
+  ServerConfigStreamEvent,
   WsSubscribeServerConfigRpc,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -31,6 +31,8 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
+import { makePortProtocol, type RpcPort, serveRelay } from "./relay.ts";
+import { makeSharedStreamProtocol } from "./sharedStreams.ts";
 import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
 import type {
   ConnectionAttemptError,
@@ -62,6 +64,8 @@ export interface RpcSession {
   /** Frames received so far: proof the socket is alive that needs no reply. */
   readonly inboundFrames: Effect.Effect<number>;
   readonly closed: Effect.Effect<never, ConnectionAttemptError>;
+  /** Serves another window's RpcClient over `port` through this session's socket. */
+  readonly relay?: (port: RpcPort) => Effect.Effect<void, never, Scope.Scope>;
 }
 
 export interface RpcSessionOptions {
@@ -78,6 +82,11 @@ export class RpcSessionFactory extends Context.Service<
   {
     readonly connect: (
       connection: PreparedConnection,
+    ) => Effect.Effect<RpcSession, ConnectionAttemptError, Scope.Scope>;
+    /** A session whose requests travel over `port` to a hub window's `relay`. */
+    readonly connectOverPort: (
+      connection: PreparedConnection,
+      port: RpcPort,
     ) => Effect.Effect<RpcSession, ConnectionAttemptError, Scope.Scope>;
   }
 >()("@t3tools/client-runtime/rpc/session/RpcSessionFactory") {}
@@ -171,6 +180,33 @@ function socketFailureLocation(via: "relay" | "direct") {
   return { hop: via === "relay" ? "tunnel" : "server", via } as const;
 }
 
+const encodeServerConfigPayload = Schema.encodeUnknownSync(
+  Schema.toCodecJson(WsSubscribeServerConfigRpc.payloadSchema),
+);
+const encodeServerConfigEvents = Schema.encodeUnknownEffect(
+  Schema.toCodecJson(Schema.Array(ServerConfigStreamEvent)),
+);
+
+function jsonEquals(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) {
+    return false;
+  }
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  const leftKeys = Object.keys(left).filter(
+    (key) => (left as Record<string, unknown>)[key] !== undefined,
+  );
+  const rightKeys = Object.keys(right).filter(
+    (key) => (right as Record<string, unknown>)[key] !== undefined,
+  );
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) =>
+      jsonEquals((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+    )
+  );
+}
+
 /** @public */
 export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
@@ -189,104 +225,20 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...input,
     workspaceSnapshotsOnDemand: true,
   });
+  const encodedSharedConfigInput = encodeServerConfigPayload(onDemandSnapshots(serverConfigInput));
 
-  const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
-    const via = connection.target._tag === "RelayConnectionTarget" ? "relay" : "direct";
-    const networkHint = via === "relay" ? ` ${NETWORK_BLOCKING_HINT}` : "";
-    const mapRpcError = (error: Parameters<typeof mapSessionRpcError>[0]) =>
-      mapSessionRpcError(error, networkHint, via);
-    yield* Effect.annotateCurrentSpan({
-      "connection.environment.id": connection.environmentId,
-    });
-
-    const connected = yield* Deferred.make<void>();
-    const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
-    const pingTimedOut = yield* Ref.make(false);
-    const hooks = RpcClient.ConnectionHooks.of({
-      onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
-        Effect.flatMap(([wasConnected, timedOut]) =>
-          Deferred.fail(
-            disconnected,
-            new ConnectionTransientErrorClass({
-              reason: "transport",
-              // The network hint only fits a socket that never opened. Once it
-              // opened, the path worked, and a host that goes quiet is more
-              // often overloaded or asleep than blocked.
-              detail: !wasConnected
-                ? `${connection.label} could not establish a WebSocket connection.${networkHint}`
-                : timedOut
-                  ? `${connection.label} stopped responding for ${PING_TIMEOUT_SECONDS}s. ${UNRESPONSIVE_HOST_HINT}`
-                  : `${connection.label} disconnected.`,
-              ...socketFailureLocation(via),
-            }),
-          ),
-        ),
-        Effect.asVoid,
-      ),
-    });
-    // The protocol never reopens its socket, so every frame counted here came
-    // from this session's one socket.
-    let inboundFrames = 0;
-    const countingWebSocketConstructor: typeof webSocketConstructor = (url, options) => {
-      const socket = webSocketConstructor(url, options);
-      socket.addEventListener("message", () => {
-        inboundFrames += 1;
-      });
-      return socket;
-    };
-    const socketUrl = new URL(connection.socketUrl);
-    socketUrl.searchParams.set(SOCKET_FRAME_PARTS_QUERY_PARAM, "1");
-    const layerSocket = Layer.effect(
-      Socket.Socket,
-      Effect.map(Effect.service(Socket.Socket), joinSocketFrameParts),
-    ).pipe(
-      Layer.provide(
-        Socket.layerWebSocket(socketUrl.toString(), {
-          openTimeout: SOCKET_OPEN_TIMEOUT,
-        }),
-      ),
-      Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
-    );
-    const layerProtocol = Layer.effect(
-      RpcClient.Protocol,
-      RpcClient.makeProtocolSocket({
-        pingTimeout: PING_TIMEOUT,
-        retryTransientErrors: false,
-        retryPolicy: Schedule.recurs(0),
-        onPingTimeout: Ref.set(pingTimedOut, true),
-      }).pipe(
-        // Teardown sends an interrupt per open stream, and a write to a closed
-        // socket waits out the client's 1s interrupt timeout before reconnecting.
-        // Requests still go through, so they fail with the protocol error.
-        Effect.map((protocol) => ({
-          ...protocol,
-          send: (clientId, request, transferables) =>
-            request._tag !== "Request" && Deferred.isDoneUnsafe(disconnected)
-              ? Effect.void
-              : protocol.send(clientId, request, transferables),
-        })),
-      ),
-    ).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          layerSocket,
-          RpcSerialization.layerJson,
-          Layer.succeed(RpcClient.ConnectionHooks, hooks),
-        ),
-      ),
-    );
-    const protocolContext = yield* Layer.build(layerProtocol).pipe(
-      Effect.withSpan("environment.websocket.connect"),
-    );
-    // Building the protocol only starts the socket; this span times the
-    // handshake up to the first open, without making `connect` wait for it.
-    yield* Deferred.await(connected).pipe(
-      Effect.raceFirst(Deferred.await(disconnected)),
-      Effect.withSpan("environment.websocket.open"),
-      Effect.ignore,
-      Effect.forkScoped,
-    );
+  const finishSession = Effect.fnUntraced(function* (input: {
+    readonly connection: PreparedConnection;
+    readonly protocolContext: Context.Context<RpcClient.Protocol>;
+    readonly connected: Deferred.Deferred<void>;
+    readonly disconnected: Deferred.Deferred<never, ConnectionTransientError>;
+    readonly inboundFrames: Effect.Effect<number>;
+    readonly mapRpcError: (
+      error: Parameters<typeof mapSessionRpcError>[0],
+    ) => ConnectionAttemptError;
+    readonly relayable: boolean;
+  }) {
+    const { connection, protocolContext, connected, disconnected, mapRpcError } = input;
     const protocolClient = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfigDeferred = yield* Deferred.make<ServerConfig>();
     const serverConfigExit = yield* Deferred.make<void, ServerConfigSubscriptionError>();
@@ -464,15 +416,180 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Effect.raceFirst(Deferred.await(disconnected)),
       ),
       probe,
-      inboundFrames: Effect.sync(() => inboundFrames),
+      inboundFrames: input.inboundFrames,
       closed: Effect.raceFirst(
         Deferred.await(disconnected),
         Deferred.await(configSubscriptionClosed),
       ),
+      ...(input.relayable
+        ? {
+            relay: (port: RpcPort) =>
+              serveRelay({
+                protocol: Context.get(protocolContext, RpcClient.Protocol),
+                port,
+                // Every window subscribes with the same options, so the hub's
+                // replaying config stream answers them all.
+                shared: [
+                  {
+                    tag: WS_METHODS.subscribeServerConfig,
+                    matches: (payload) => jsonEquals(payload, encodedSharedConfigInput),
+                    items: subscribeServerConfig().pipe(Stream.orDie),
+                    encode: (events) => encodeServerConfigEvents(events).pipe(Effect.orDie),
+                  },
+                ],
+              }),
+          }
+        : {}),
     } satisfies RpcSession;
   });
 
-  return RpcSessionFactory.of({ connect });
+  const connectOverPort = Effect.fnUntraced(function* (
+    connection: PreparedConnection,
+    port: RpcPort,
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      "connection.environment.id": connection.environmentId,
+    });
+    const connected = yield* Deferred.make<void>();
+    yield* Deferred.succeed(connected, undefined);
+    const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    let inboundMessages = 0;
+    const protocol = yield* makePortProtocol({
+      port,
+      onMessage: () => {
+        inboundMessages += 1;
+      },
+      onClosed: (detail) =>
+        Deferred.fail(
+          disconnected,
+          new ConnectionTransientErrorClass({
+            reason: "transport",
+            detail: `${connection.label}: ${detail}`,
+          }),
+        ).pipe(Effect.asVoid),
+    });
+    return yield* finishSession({
+      connection,
+      protocolContext: Context.make(RpcClient.Protocol, protocol),
+      connected,
+      disconnected,
+      inboundFrames: Effect.sync(() => inboundMessages),
+      mapRpcError: (error) => mapSessionRpcError(error, "", "direct"),
+      relayable: false,
+    });
+  });
+
+  const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
+    const via = connection.target._tag === "RelayConnectionTarget" ? "relay" : "direct";
+    const networkHint = via === "relay" ? ` ${NETWORK_BLOCKING_HINT}` : "";
+    const mapRpcError = (error: Parameters<typeof mapSessionRpcError>[0]) =>
+      mapSessionRpcError(error, networkHint, via);
+    yield* Effect.annotateCurrentSpan({
+      "connection.environment.id": connection.environmentId,
+    });
+
+    const connected = yield* Deferred.make<void>();
+    const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    const pingTimedOut = yield* Ref.make(false);
+    const hooks = RpcClient.ConnectionHooks.of({
+      onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
+      onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
+        Effect.flatMap(([wasConnected, timedOut]) =>
+          Deferred.fail(
+            disconnected,
+            new ConnectionTransientErrorClass({
+              reason: "transport",
+              // The network hint only fits a socket that never opened. Once it
+              // opened, the path worked, and a host that goes quiet is more
+              // often overloaded or asleep than blocked.
+              detail: !wasConnected
+                ? `${connection.label} could not establish a WebSocket connection.${networkHint}`
+                : timedOut
+                  ? `${connection.label} stopped responding for ${PING_TIMEOUT_SECONDS}s. ${UNRESPONSIVE_HOST_HINT}`
+                  : `${connection.label} disconnected.`,
+              ...socketFailureLocation(via),
+            }),
+          ),
+        ),
+        Effect.asVoid,
+      ),
+    });
+    // The protocol never reopens its socket, so every frame counted here came
+    // from this session's one socket.
+    let inboundFrames = 0;
+    const countingWebSocketConstructor: typeof webSocketConstructor = (url, options) => {
+      const socket = webSocketConstructor(url, options);
+      socket.addEventListener("message", () => {
+        inboundFrames += 1;
+      });
+      return socket;
+    };
+    const socketUrl = new URL(connection.socketUrl);
+    socketUrl.searchParams.set(SOCKET_FRAME_PARTS_QUERY_PARAM, "1");
+    const layerSocket = Layer.effect(
+      Socket.Socket,
+      Effect.map(Effect.service(Socket.Socket), joinSocketFrameParts),
+    ).pipe(
+      Layer.provide(
+        Socket.layerWebSocket(socketUrl.toString(), {
+          openTimeout: SOCKET_OPEN_TIMEOUT,
+        }),
+      ),
+      Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
+    );
+    const layerProtocol = Layer.effect(
+      RpcClient.Protocol,
+      RpcClient.makeProtocolSocket({
+        pingTimeout: PING_TIMEOUT,
+        retryTransientErrors: false,
+        retryPolicy: Schedule.recurs(0),
+        onPingTimeout: Ref.set(pingTimedOut, true),
+      }).pipe(
+        // Teardown sends an interrupt per open stream, and a write to a closed
+        // socket waits out the client's 1s interrupt timeout before reconnecting.
+        // Requests still go through, so they fail with the protocol error.
+        Effect.map((protocol): RpcClient.Protocol["Service"] => ({
+          ...protocol,
+          send: (clientId, request, transferables) =>
+            request._tag !== "Request" && Deferred.isDoneUnsafe(disconnected)
+              ? Effect.void
+              : protocol.send(clientId, request, transferables),
+        })),
+        // The hub's own client and every relayed window share each subscription.
+        Effect.flatMap(makeSharedStreamProtocol),
+      ),
+    ).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerSocket,
+          RpcSerialization.layerJson,
+          Layer.succeed(RpcClient.ConnectionHooks, hooks),
+        ),
+      ),
+    );
+    const protocolContext = yield* Layer.build(layerProtocol).pipe(
+      Effect.withSpan("environment.websocket.connect"),
+    );
+    // Building the protocol only starts the socket; this span times the
+    // handshake up to the first open, without making `connect` wait for it.
+    yield* Deferred.await(connected).pipe(
+      Effect.raceFirst(Deferred.await(disconnected)),
+      Effect.withSpan("environment.websocket.open"),
+      Effect.ignore,
+      Effect.forkScoped,
+    );
+    return yield* finishSession({
+      connection,
+      protocolContext,
+      connected,
+      disconnected,
+      inboundFrames: Effect.sync(() => inboundFrames),
+      mapRpcError,
+      relayable: true,
+    });
+  });
+
+  return RpcSessionFactory.of({ connect, connectOverPort });
 });
 
 export const layer = (options: RpcSessionOptions) => Layer.effect(RpcSessionFactory, make(options));

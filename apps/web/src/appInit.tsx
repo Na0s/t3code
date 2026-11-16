@@ -48,6 +48,8 @@ import {
 import { syncBrowserChromeTheme } from "./hooks/useTheme";
 import { startThreadVisitedMigration } from "./hooks/useThreadVisitedMigration";
 import { installDesktopPasteAsText } from "./lib/desktopPasteAsText";
+import { startDesktopWindowHub } from "./multiWindow/hub";
+import { isSecondaryDesktopWindow } from "./multiWindow/windowContext";
 import {
   syncDocumentElectronPlatformClasses,
   syncDocumentWindowControlsOverlayClass,
@@ -250,6 +252,8 @@ export function startAppServices(): AppRouter {
   // Ahead of the history: the provider auth code must leave the address before anything reads it.
   startProviderAuthDelivery();
 
+  // App-wide duties run once, in the main window: secondary desktop windows only host UI.
+  const appWideWindow = !isSecondaryDesktopWindow();
   // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
   const router = getRouter(isElectron ? createHashHistory() : createBrowserHistory());
 
@@ -268,11 +272,11 @@ export function startAppServices(): AppRouter {
   startThemeBackground();
   startBrowserChromeThemeSync(router);
   startDefaultThemeAdoption();
-  startModelPreferencesMigration();
-  startAgentOpenedPreviews();
+  if (appWideWindow) startModelPreferencesMigration();
+  if (appWideWindow) startAgentOpenedPreviews();
   if (isElectron) startElectronBrowserHost();
   startPreviewTitleRecording();
-  startBrowserProfileReporting();
+  if (appWideWindow) startBrowserProfileReporting();
   installChatRouteCommands(router);
   installCommandPaletteCommands(router);
   registerOpenFavoriteEditorCommand();
@@ -293,7 +297,7 @@ export function startAppServices(): AppRouter {
   startMainAppLocationTracking(router);
   startWorkspaceFocus(router);
   startBackgroundThreadAnnouncements(appAtomRegistry, router);
-  startThreadVisitedMigration(appAtomRegistry);
+  if (appWideWindow) startThreadVisitedMigration(appAtomRegistry);
   startSshPasswordPromptQueue();
 
   startKeybindingsUpdateToasts();
@@ -301,9 +305,12 @@ export function startAppServices(): AppRouter {
   startHostFreezeToasts();
   startLegacyThreadMigrationToast();
   startPermissionUpdateNotices(router);
-  startThreadNotifications(appAtomRegistry, router);
-  startGuideRunNotifications(appAtomRegistry, router);
-  if (isElectron) startDesktopUpdateLaunchNotice();
+  if (appWideWindow) {
+    startThreadNotifications(appAtomRegistry, router);
+    startGuideRunNotifications(appAtomRegistry, router);
+    if (isElectron) startDesktopUpdateLaunchNotice();
+  }
+  startDesktopWindowHub();
 
   return router;
 }

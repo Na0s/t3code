@@ -1,5 +1,7 @@
 import type {
+  DESKTOP_HUB_LINK_MESSAGE_TYPE,
   DesktopBridge,
+  DesktopHubLinkMessage,
   DesktopPreviewAnnotationVoiceEvent,
   DesktopPreviewFindResultEvent,
   DesktopPreviewOpenLinkEvent,
@@ -7,6 +9,10 @@ import type {
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
+  DesktopWindowCloseRequest,
+  DesktopWindowContext,
+  DesktopWindowsBridge,
+  DesktopWindowsState,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
@@ -87,6 +93,99 @@ if (!primaryPasteEnabled) {
   );
 }
 
+// Typed against the contract's constant so they cannot drift; importing it would bundle contracts.
+const HUB_LINK_MESSAGE_TYPE: typeof DESKTOP_HUB_LINK_MESSAGE_TYPE = "t3code:desktop-hub-link";
+
+const windowContext = ((): DesktopWindowContext => {
+  try {
+    const result: unknown = ipcRenderer.sendSync(IpcChannels.WINDOWS_GET_CONTEXT_CHANNEL);
+    if (typeof result === "object" && result !== null) return result as DesktopWindowContext;
+  } catch {}
+  return { windowId: -1, isMain: true, profileId: null, projectScopeKeys: [], theme: null };
+})();
+
+// A MessagePort cannot cross the context bridge, so the page receives it as a window message.
+ipcRenderer.on(IpcChannels.WINDOWS_HUB_LINK_CHANNEL, (event, message: unknown) => {
+  const peerWindowId =
+    typeof message === "object" && message !== null && "peerWindowId" in message
+      ? message.peerWindowId
+      : undefined;
+  if (typeof peerWindowId !== "number" || event.ports.length === 0) return;
+  window.postMessage(
+    { type: HUB_LINK_MESSAGE_TYPE, peerWindowId } satisfies DesktopHubLinkMessage,
+    "*",
+    event.ports,
+  );
+});
+
+const subscribe =
+  <A>(channel: string, decode: (value: unknown) => A | undefined) =>
+  (listener: (value: A) => void) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, value: unknown) => {
+      const decoded = decode(value);
+      if (decoded !== undefined) listener(decoded);
+    };
+    ipcRenderer.on(channel, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(channel, wrappedListener);
+    };
+  };
+
+let closeRequestListeners = 0;
+const windows: DesktopWindowsBridge = {
+  getContext: () => windowContext,
+  getState: () => ipcRenderer.invoke(IpcChannels.WINDOWS_GET_STATE_CHANNEL),
+  onState: subscribe(IpcChannels.WINDOWS_STATE_CHANNEL, (state) =>
+    typeof state === "object" && state !== null ? (state as DesktopWindowsState) : undefined,
+  ),
+  openNew: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_NEW_CHANNEL, input),
+  openProfile: (profileId) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_PROFILE_CHANNEL, profileId),
+  focus: (windowId) => ipcRenderer.invoke(IpcChannels.WINDOWS_FOCUS_CHANNEL, windowId),
+  saveAsProfile: (name) => ipcRenderer.invoke(IpcChannels.WINDOWS_SAVE_AS_PROFILE_CHANNEL, name),
+  updateProfile: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_UPDATE_PROFILE_CHANNEL, input),
+  deleteProfile: (profileId) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_DELETE_PROFILE_CHANNEL, profileId),
+  setProjectScopeKeys: (projectScopeKeys) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_SET_PROJECT_SCOPE_KEYS_CHANNEL, projectScopeKeys),
+  // The main process closes without asking while no listener could answer.
+  onCloseRequest: (listener) => {
+    const unsubscribe = subscribe(IpcChannels.WINDOWS_CLOSE_REQUEST_CHANNEL, (request) =>
+      typeof request === "object" && request !== null
+        ? (request as DesktopWindowCloseRequest)
+        : undefined,
+    )(listener);
+    closeRequestListeners += 1;
+    if (closeRequestListeners === 1) {
+      void ipcRenderer.invoke(IpcChannels.WINDOWS_CLOSE_REQUEST_LISTENING_CHANNEL, true);
+    }
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      unsubscribe();
+      closeRequestListeners -= 1;
+      if (closeRequestListeners === 0) {
+        void ipcRenderer.invoke(IpcChannels.WINDOWS_CLOSE_REQUEST_LISTENING_CHANNEL, false);
+      }
+    };
+  },
+  resolveCloseRequest: (requestId, decision) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_RESOLVE_CLOSE_REQUEST_CHANNEL, { requestId, decision }),
+  setMiniMode: (enabled) => ipcRenderer.invoke(IpcChannels.WINDOWS_SET_MINI_MODE_CHANNEL, enabled),
+  registerHub: () => {
+    void ipcRenderer.invoke(IpcChannels.WINDOWS_REGISTER_HUB_CHANNEL).catch(() => undefined);
+  },
+  requestHubLink: () => {
+    void ipcRenderer.invoke(IpcChannels.WINDOWS_REQUEST_HUB_LINK_CHANNEL).catch(() => undefined);
+  },
+  onHubPeerGone: subscribe(IpcChannels.WINDOWS_HUB_PEER_GONE_CHANNEL, (windowId) =>
+    typeof windowId === "number" ? windowId : undefined,
+  ),
+  onHubReset: (listener) =>
+    subscribe(IpcChannels.WINDOWS_HUB_RESET_CHANNEL, () => true)(() => listener()),
+};
+
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
   if (
     typeof result === "object" &&
@@ -162,6 +261,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
+  onClientSettingsChanged: (listener) =>
+    subscribe(IpcChannels.CLIENT_SETTINGS_CHANGED_CHANNEL, () => true)(() => listener()),
   requestSnapShotPermissions: (includeAccessibility) =>
     ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
   getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
@@ -525,4 +626,5 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.removeListener(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrappedListener);
     },
   },
+  windows,
 } satisfies DesktopBridge);

@@ -1,6 +1,11 @@
 import {
+  DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
+  DesktopWindowProfileIdSchema,
+  DesktopWindowProfileNameSchema,
+  DesktopWindowProfileThemeSchema,
+  DesktopWindowProjectScopeKeysSchema,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
 } from "@t3tools/contracts";
@@ -30,8 +35,8 @@ import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 export interface DesktopSettings {
   readonly localEnvironmentEnabled: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
-  readonly mainWindowBounds: DesktopWindowBounds | null;
-  readonly mainWindowMaximized: boolean;
+  /** The default (main window) profile is always first. */
+  readonly windowProfiles: ReadonlyArray<DesktopWindowProfileSettings>;
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -41,6 +46,17 @@ export interface DesktopSettings {
   readonly wslDistro: string | null;
   // Requires restart because the pool chooses its primary spec at layer initialization.
   readonly wslOnly: boolean;
+}
+
+export interface DesktopWindowProfileSettings {
+  readonly id: string;
+  readonly name: string;
+  readonly projectScopeKeys: ReadonlyArray<string>;
+  readonly theme: string | null;
+  readonly bounds: DesktopWindowBounds | null;
+  readonly maximized: boolean;
+  /** Reopen this profile's window on the next launch; set for windows open when the app quit. */
+  readonly openAtQuit: boolean;
 }
 
 export interface DesktopSettingsChange {
@@ -68,11 +84,22 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
   height: 780,
 } as const;
 
+const DEFAULT_WINDOW_PROFILE_NAME = "Main";
+
+export const DEFAULT_WINDOW_PROFILE: DesktopWindowProfileSettings = {
+  id: DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
+  name: DEFAULT_WINDOW_PROFILE_NAME,
+  projectScopeKeys: [],
+  theme: null,
+  bounds: null,
+  maximized: false,
+  openAtQuit: false,
+};
+
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   localEnvironmentEnabled: true,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
-  mainWindowBounds: null,
-  mainWindowMaximized: false,
+  windowProfiles: [DEFAULT_WINDOW_PROFILE],
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
@@ -95,11 +122,24 @@ const DesktopWindowBoundsDocument = Schema.Struct({
 const optionalReadableKey = <S extends Schema.Top>(schema: S) =>
   Schema.optionalKey(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
 
+const DesktopWindowProfileDocument = Schema.Struct({
+  id: optionalReadableKey(Schema.String),
+  name: optionalReadableKey(Schema.String),
+  projectScopeKeys: optionalReadableKey(Schema.Array(Schema.Unknown)),
+  theme: optionalReadableKey(Schema.NullOr(Schema.String)),
+  bounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
+  maximized: optionalReadableKey(Schema.Boolean),
+  openAtQuit: optionalReadableKey(Schema.Boolean),
+});
+type DesktopWindowProfileDocument = typeof DesktopWindowProfileDocument.Type;
+
 const DesktopSettingsDocument = Schema.Struct({
   localEnvironmentEnabled: optionalReadableKey(Schema.Boolean),
   linuxPasswordStore: optionalReadableKey(Schema.Unknown),
+  // Mirrors the default profile's placement so an older build keeps the main window where it was.
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: optionalReadableKey(Schema.Boolean),
+  windowProfiles: optionalReadableKey(Schema.Array(Schema.Unknown)),
   serverExposureMode: optionalReadableKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: optionalReadableKey(Schema.Boolean),
   tailscaleServePort: optionalReadableKey(Schema.Number),
@@ -119,6 +159,13 @@ const decodeDesktopSettingsJson = Schema.decodeEffect(DesktopSettingsJson);
 const encodeDesktopSettingsJson = Schema.encodeEffect(DesktopSettingsJson);
 const decodeDesktopWindowBounds = Schema.decodeUnknownOption(DesktopWindowBoundsSchema);
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(DesktopWindowBoundsSchema);
+const decodeWindowProfileDocument = Schema.decodeUnknownOption(DesktopWindowProfileDocument);
+const isWindowProfileId = Schema.is(DesktopWindowProfileIdSchema);
+const isWindowProfileName = Schema.is(DesktopWindowProfileNameSchema);
+const isWindowProfileTheme = Schema.is(DesktopWindowProfileThemeSchema);
+const isProjectScopeKeys = Schema.is(DesktopWindowProjectScopeKeysSchema);
+const isProjectScopeKey = (key: unknown): key is string => isProjectScopeKeys([key]);
+const MAX_PROJECT_SCOPE_KEYS = 1000;
 
 const settingsChange = (settings: DesktopSettings, changed: boolean): DesktopSettingsChange => ({
   settings,
@@ -156,9 +203,16 @@ export class DesktopAppSettings extends Context.Service<
     readonly setLocalEnvironmentEnabled: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
-    readonly setMainWindowBounds: (
+    readonly setWindowProfilePlacement: (
+      profileId: string,
       bounds: DesktopWindowBounds,
       isMaximized: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    /** The result is normalized: invalid and duplicate profiles drop, the default one stays. */
+    readonly updateWindowProfiles: (
+      update: (
+        profiles: ReadonlyArray<DesktopWindowProfileSettings>,
+      ) => ReadonlyArray<DesktopWindowProfileSettings>,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setServerExposureMode: (
       mode: DesktopServerExposureMode,
@@ -208,12 +262,90 @@ export function normalizeMainWindowBounds(value: unknown): DesktopWindowBounds |
   return Option.getOrNull(decodeDesktopWindowBounds(value));
 }
 
+export function normalizeProjectScopeKeys(value: ReadonlyArray<unknown>): ReadonlyArray<string> {
+  const keys = new Set<string>();
+  for (const key of value) {
+    if (keys.size >= MAX_PROJECT_SCOPE_KEYS) break;
+    if (isProjectScopeKey(key)) keys.add(key);
+  }
+  return [...keys];
+}
+
+function normalizeWindowProfile(
+  document: DesktopWindowProfileDocument,
+): DesktopWindowProfileSettings | null {
+  const { id, name } = document;
+  if (!isWindowProfileId(id)) return null;
+  const isDefault = id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID;
+  const validName = isWindowProfileName(name) && name.trim() !== "" ? name : null;
+  if (validName === null && !isDefault) return null;
+  const bounds = normalizeMainWindowBounds(document.bounds);
+  return {
+    id,
+    name: validName ?? DEFAULT_WINDOW_PROFILE_NAME,
+    projectScopeKeys: isDefault ? [] : normalizeProjectScopeKeys(document.projectScopeKeys ?? []),
+    theme: !isDefault && isWindowProfileTheme(document.theme) ? document.theme : null,
+    bounds,
+    maximized: bounds !== null && document.maximized === true,
+    openAtQuit: !isDefault && document.openAtQuit === true,
+  };
+}
+
+/**
+ * Keeps valid profiles in order with unique ids and the default profile first. The default
+ * profile cannot carry a theme, filter or reopen flag.
+ */
+export function normalizeWindowProfiles(
+  profiles: ReadonlyArray<DesktopWindowProfileDocument>,
+): ReadonlyArray<DesktopWindowProfileSettings> {
+  const seen = new Set<string>();
+  let defaultProfile: DesktopWindowProfileSettings = DEFAULT_WINDOW_PROFILE;
+  const others: DesktopWindowProfileSettings[] = [];
+  for (const candidate of profiles) {
+    const profile = normalizeWindowProfile(candidate);
+    if (profile === null || seen.has(profile.id)) continue;
+    seen.add(profile.id);
+    if (profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID) defaultProfile = profile;
+    else others.push(profile);
+  }
+  return [defaultProfile, ...others];
+}
+
+function windowProfilesEqual(
+  left: ReadonlyArray<DesktopWindowProfileSettings>,
+  right: ReadonlyArray<DesktopWindowProfileSettings>,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function readWindowProfiles(parsed: DesktopSettingsDocument) {
+  const documents: DesktopWindowProfileDocument[] = [];
+  for (const entry of parsed.windowProfiles ?? []) {
+    const decoded = decodeWindowProfileDocument(entry);
+    if (Option.isSome(decoded)) documents.push(decoded.value);
+  }
+  const [defaultProfile = DEFAULT_WINDOW_PROFILE, ...others] = normalizeWindowProfiles(documents);
+  // The default profile's placement lives in the legacy keys, which older builds also read and write.
+  const bounds = normalizeMainWindowBounds(parsed.mainWindowBounds);
+  return [
+    {
+      ...defaultProfile,
+      bounds,
+      maximized: bounds !== null && parsed.mainWindowMaximized === true,
+    },
+    ...others,
+  ];
+}
+
+export function defaultWindowProfile(settings: DesktopSettings): DesktopWindowProfileSettings {
+  return settings.windowProfiles[0] ?? DEFAULT_WINDOW_PROFILE;
+}
+
 function normalizeDesktopSettingsDocument(
   parsed: DesktopSettingsDocument,
   appVersion: string,
 ): DesktopSettings {
   const defaultSettings = resolveDefaultDesktopSettings(appVersion);
-  const mainWindowBounds = normalizeMainWindowBounds(parsed.mainWindowBounds);
   const parsedUpdateChannel = Option.fromNullishOr(parsed.updateChannel);
   const isLegacySettings = parsed.updateChannelConfiguredByUser === undefined;
   const updateChannelConfiguredByUser =
@@ -227,8 +359,7 @@ function normalizeDesktopSettingsDocument(
   return {
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
-    mainWindowBounds,
-    mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
+    windowProfiles: readWindowProfiles(parsed),
     serverExposureMode:
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
@@ -256,11 +387,24 @@ function toDesktopSettingsDocument(
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
     document.linuxPasswordStore = settings.linuxPasswordStore;
   }
-  if (settings.mainWindowBounds !== null) {
-    document.mainWindowBounds = settings.mainWindowBounds;
+  const [defaultProfile, ...otherProfiles] = settings.windowProfiles;
+  if (defaultProfile !== undefined && defaultProfile.bounds !== null) {
+    document.mainWindowBounds = defaultProfile.bounds;
   }
-  if (settings.mainWindowMaximized) {
+  if (defaultProfile?.maximized === true) {
     document.mainWindowMaximized = true;
+  }
+  if (
+    otherProfiles.length > 0 ||
+    (defaultProfile !== undefined && defaultProfile.name !== DEFAULT_WINDOW_PROFILE_NAME)
+  ) {
+    document.windowProfiles = [
+      // The legacy keys carry the default profile's placement.
+      ...(defaultProfile === undefined
+        ? []
+        : [{ id: defaultProfile.id, name: defaultProfile.name }]),
+      ...otherProfiles,
+    ];
   }
   if (settings.serverExposureMode !== defaults.serverExposureMode) {
     document.serverExposureMode = settings.serverExposureMode;
@@ -302,20 +446,45 @@ function setServerExposureMode(
       };
 }
 
-function setMainWindowBounds(
+function setWindowProfilePlacement(
   settings: DesktopSettings,
+  profileId: string,
   bounds: DesktopWindowBounds,
   isMaximized: boolean,
 ): DesktopSettings {
-  return settings.mainWindowBounds !== null &&
-    desktopWindowBoundsEquivalence(settings.mainWindowBounds, bounds) &&
-    settings.mainWindowMaximized === isMaximized
+  const profile = settings.windowProfiles.find((candidate) => candidate.id === profileId);
+  if (
+    profile === undefined ||
+    (profile.bounds !== null &&
+      desktopWindowBoundsEquivalence(profile.bounds, bounds) &&
+      profile.maximized === isMaximized)
+  ) {
+    return settings;
+  }
+  return {
+    ...settings,
+    windowProfiles: settings.windowProfiles.map((candidate) =>
+      candidate === profile ? { ...candidate, bounds, maximized: isMaximized } : candidate,
+    ),
+  };
+}
+
+function updateWindowProfiles(
+  settings: DesktopSettings,
+  update: (
+    profiles: ReadonlyArray<DesktopWindowProfileSettings>,
+  ) => ReadonlyArray<DesktopWindowProfileSettings>,
+): DesktopSettings {
+  const updated = update(settings.windowProfiles);
+  // Dropping the default profile keeps it as it was; it can only be renamed or moved.
+  const windowProfiles = normalizeWindowProfiles(
+    updated.some((profile) => profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID)
+      ? updated
+      : [defaultWindowProfile(settings), ...updated],
+  );
+  return windowProfilesEqual(windowProfiles, settings.windowProfiles)
     ? settings
-    : {
-        ...settings,
-        mainWindowBounds: bounds,
-        mainWindowMaximized: isMaximized,
-      };
+    : { ...settings, windowProfiles };
 }
 
 function setTailscaleServe(
@@ -549,9 +718,10 @@ export const make = Effect.gen(function* () {
       );
       return yield* SynchronizedRef.setAndGet(settingsRef, settings);
     }).pipe(Effect.withSpan("desktop.settings.load")),
-    setMainWindowBounds: Effect.fn("desktop.settings.setMainWindowBounds")(
-      function* (bounds, isMaximized) {
+    setWindowProfilePlacement: Effect.fn("desktop.settings.setWindowProfilePlacement")(
+      function* (profileId, bounds, isMaximized) {
         yield* Effect.annotateCurrentSpan({
+          profileId,
           x: bounds.x,
           y: bounds.y,
           width: bounds.width,
@@ -559,9 +729,14 @@ export const make = Effect.gen(function* () {
           isMaximized,
         });
 
-        return yield* persist((settings) => setMainWindowBounds(settings, bounds, isMaximized));
+        return yield* persist((settings) =>
+          setWindowProfilePlacement(settings, profileId, bounds, isMaximized),
+        );
       },
     ),
+    updateWindowProfiles: Effect.fn("desktop.settings.updateWindowProfiles")(function* (update) {
+      return yield* persist((settings) => updateWindowProfiles(settings, update));
+    }),
     setServerExposureMode: Effect.fn("desktop.settings.setServerExposureMode")(function* (mode) {
       yield* Effect.annotateCurrentSpan({ mode });
 
@@ -630,9 +805,16 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
       return DesktopAppSettings.of({
         get: SynchronizedRef.get(settingsRef),
         load: SynchronizedRef.get(settingsRef),
-        setMainWindowBounds: Effect.fn("DesktopAppSettings.setMainWindowBounds")(
-          function (bounds, isMaximized) {
-            return update((settings) => setMainWindowBounds(settings, bounds, isMaximized));
+        setWindowProfilePlacement: Effect.fn("DesktopAppSettings.setWindowProfilePlacement")(
+          function (profileId, bounds, isMaximized) {
+            return update((settings) =>
+              setWindowProfilePlacement(settings, profileId, bounds, isMaximized),
+            );
+          },
+        ),
+        updateWindowProfiles: Effect.fn("DesktopAppSettings.updateWindowProfiles")(
+          function (profilesUpdate) {
+            return update((settings) => updateWindowProfiles(settings, profilesUpdate));
           },
         ),
         setServerExposureMode: Effect.fn("DesktopAppSettings.setServerExposureMode")(

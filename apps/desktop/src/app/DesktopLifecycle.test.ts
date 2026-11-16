@@ -74,6 +74,9 @@ function layerElectronWindow(destroyAll: Effect.Effect<void> = Effect.void) {
     main: Effect.die("unexpected main window read"),
     currentMainOrFirst: Effect.die("unexpected current window read"),
     focusedMainOrFirst: Effect.die("unexpected focused window read"),
+    apps: Effect.succeed([]),
+    focusedApp: Effect.succeedNone,
+    registerApp: () => Effect.void,
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
     prepareReveal: () => Effect.succeed(false),
@@ -87,10 +90,10 @@ function layerElectronWindow(destroyAll: Effect.Effect<void> = Effect.void) {
 function layerDesktopWindow(
   input: {
     readonly activate?: Effect.Effect<void>;
-    readonly flushMainWindowBounds?: Effect.Effect<void>;
+    readonly flushWindowState?: Effect.Effect<void>;
   } = {},
 ) {
-  return Layer.succeed(DesktopWindow.DesktopWindow, {
+  return Layer.mock(DesktopWindow.DesktopWindow)({
     createMain: Effect.die("unexpected window creation"),
     ensureMain: Effect.die("unexpected window creation"),
     revealOrCreateMain: Effect.die("unexpected window creation"),
@@ -99,11 +102,10 @@ function layerDesktopWindow(
     showConnectingSplash: Effect.void,
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
-    flushMainWindowBounds: input.flushMainWindowBounds ?? Effect.void,
+    flushWindowState: input.flushWindowState ?? Effect.void,
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: () => Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
-    zoomMain: () => Effect.void,
     runMainContentsCommand: () => Effect.void,
     syncAppearance: Effect.void,
   });
@@ -180,7 +182,7 @@ describe("DesktopLifecycle", () => {
       const destroyAll = Effect.sync(() => {
         events.push("destroy");
       });
-      const flushMainWindowBounds = Effect.sync(() => {
+      const flushWindowState = Effect.sync(() => {
         events.push("flush");
       });
 
@@ -203,7 +205,7 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(layerElectronApp(appListeners, quit)),
         Layer.provideMerge(layerElectronTheme),
         Layer.provideMerge(layerElectronWindow(destroyAll)),
-        Layer.provideMerge(layerDesktopWindow({ flushMainWindowBounds })),
+        Layer.provideMerge(layerDesktopWindow({ flushWindowState })),
         Layer.provideMerge(layerEnvironment),
         Layer.provideMerge(layerDesktopShutdown),
         Layer.provideMerge(DesktopState.layer),

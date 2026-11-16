@@ -60,6 +60,14 @@ import { readProject } from "../state/entities";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+import { DesktopWindowsHost } from "../multiWindow/ui/DesktopWindowsHost";
+import { MiniMainWindow } from "../multiWindow/ui/MiniMainWindow";
+import { installDesktopWindowTheme } from "../multiWindow/ui/windowTheme";
+import { useIsMiniMainWindow } from "../multiWindow/windowsState";
+import { isSecondaryDesktopWindow } from "../multiWindow/windowContext";
+
+// Before the first render, so a window with its own theme never paints the shared one.
+installDesktopWindowTheme();
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -136,6 +144,7 @@ function RootRouteView() {
     <ToastProvider>
       <AnchoredToastProvider>
         <RootRouteBranch />
+        <DesktopWindowsHost />
       </AnchoredToastProvider>
     </ToastProvider>
   );
@@ -153,6 +162,8 @@ function RootRouteBranch() {
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
+  const miniMainWindow = useIsMiniMainWindow();
+  const secondaryWindow = isSecondaryDesktopWindow();
 
   if (pathname === GUEST_PAGE_PATH) return <Outlet />;
 
@@ -179,11 +190,14 @@ function RootRouteBranch() {
   // first-run gate and the event router, whose first navigation would leave the page.
   const appHosts = (
     <>
-      {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-      {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+      {/* The desktop routes activations and web links to the main window, which also keeps the app awake. */}
+      {primaryEnvironmentAuthenticated && !secondaryWindow ? (
+        <DesktopAppActivationCoordinator />
+      ) : null}
+      {(primaryEnvironmentAuthenticated || localEnvironmentDisabled) && !secondaryWindow ? (
         <DesktopWebLinkCoordinator />
       ) : null}
-      {isElectron ? <RunningThreadKeepAlive /> : null}
+      {isElectron && !secondaryWindow ? <RunningThreadKeepAlive /> : null}
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <SshPasswordPromptDialog />
@@ -199,7 +213,9 @@ function RootRouteBranch() {
       {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
     </>
   );
-  const appShell = (
+  const appShell = miniMainWindow ? (
+    <MiniMainWindow />
+  ) : (
     <CommandPalette>
       {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
       <AppSidebarLayout showSidebar={!isWelcome}>

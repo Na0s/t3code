@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import * as IpcChannels from "../channels.ts";
@@ -27,5 +28,11 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
     const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
     yield* clientSettings.set(settings);
     yield* snapShot.configure(settings);
+    const sender = yield* DesktopIpc.DesktopIpcSender;
+    for (const window of yield* (yield* ElectronWindow.ElectronWindow).apps) {
+      if (window !== sender.window && !window.isDestroyed()) {
+        window.webContents.send(IpcChannels.CLIENT_SETTINGS_CHANGED_CHANNEL);
+      }
+    }
   }),
 });

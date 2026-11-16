@@ -130,6 +130,27 @@ let lastDesktopTheme: "light" | "dark" | "system" | null = null;
 let lastAppliedTheme: Omit<ThemeSnapshot, "resolvedTheme"> | null = null;
 let themeStorageReadFailure: ThemeStorageError | null = null;
 
+interface WindowThemeOverride {
+  readonly theme: Theme;
+  readonly save: (theme: Theme) => void;
+}
+
+// A desktop window with its own theme reads and writes it here, never the shared storage.
+let windowThemeOverride: WindowThemeOverride | null = null;
+
+/** Null makes this window follow the shared theme preference again. */
+export function setWindowThemeOverride(next: WindowThemeOverride | null): void {
+  const previousTheme = windowThemeOverride?.theme ?? null;
+  windowThemeOverride = next;
+  if ((next?.theme ?? null) === previousTheme) return;
+  applyTheme(getStored(), { suppressTransitions: true });
+  emitChange();
+}
+
+function readEffectiveThemeHalves(): ThemeHalves | null {
+  return windowThemeOverride === null ? readStoredThemeHalves() : null;
+}
+
 function emitChange() {
   snapshotStale = true;
   for (const listener of listeners) listener();
@@ -218,6 +239,7 @@ function writeThemePreference(theme: Theme): void {
 }
 
 function getStored(): Theme {
+  if (windowThemeOverride !== null) return canonicalThemePreference(windowThemeOverride.theme);
   if (themeStorageReadFailure !== null) {
     return DEFAULT_THEME_SNAPSHOT.theme;
   }
@@ -311,7 +333,7 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
   const appearanceMode = readAppearanceModePreference(theme);
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
-  const themeHalves = readStoredThemeHalves();
+  const themeHalves = readEffectiveThemeHalves();
   if (
     lastAppliedTheme?.theme === theme &&
     lastAppliedTheme.systemDark === systemDark &&
@@ -366,7 +388,8 @@ function syncDesktopTheme(
   followSystem?: boolean,
   appearanceMode?: ThemePreferenceMode,
 ) {
-  if (typeof window === "undefined") return;
+  // The native theme is app-wide, so a window with its own theme must not push it.
+  if (typeof window === "undefined" || windowThemeOverride !== null) return;
   const bridge = window.desktopBridge;
   const halves = readStoredThemeHalves();
   const desktopTheme = resolveDesktopTheme(theme, followSystem, appearanceMode, halves);
@@ -404,7 +427,7 @@ function getSnapshot(): ThemeSnapshot {
   const appearanceMode = readAppearanceModePreference(theme);
   const followSystem = appearanceMode === "system";
   const systemDark = followSystem ? getSystemDark() : false;
-  const themeHalves = readStoredThemeHalves();
+  const themeHalves = readEffectiveThemeHalves();
 
   const resolvedTheme = resolveThemeAppearance(
     theme,
@@ -517,6 +540,12 @@ export function useRenderedAppearance() {
 
 export function setTheme(next: Theme): boolean {
   if (typeof window === "undefined") return false;
+  if (windowThemeOverride !== null) {
+    const { save } = windowThemeOverride;
+    setWindowThemeOverride({ theme: next, save });
+    save(next);
+    return true;
+  }
   try {
     // Save the current mode first; inferring it from the new theme can switch dark to light.
     pipe(getStored(), readAppearanceModePreference, writeAppearanceModePreference);
@@ -582,6 +611,8 @@ export function setAppearanceMode(nextAppearanceMode: ThemePreferenceMode): bool
 
 function setThemeHalf(appearance: ThemeAppearance, themeId: string | null): boolean {
   if (typeof window === "undefined") return false;
+  // A window's own theme is one preference id, so a half choice becomes the whole theme.
+  if (windowThemeOverride !== null) return themeId === null || setTheme(themeId);
   try {
     const current = readStoredThemeHalvesRaw();
     const next: { light?: string; dark?: string } = { ...current };
@@ -612,6 +643,7 @@ function setThemeHalf(appearance: ThemeAppearance, themeId: string | null): bool
 
 function clearThemeHalves(): boolean {
   if (typeof window === "undefined") return false;
+  if (windowThemeOverride !== null) return true;
   try {
     window.localStorage.removeItem(THEME_HALVES_STORAGE_KEY);
   } catch (cause) {

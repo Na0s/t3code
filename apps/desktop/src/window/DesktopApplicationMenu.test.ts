@@ -5,7 +5,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-import type { DesktopUpdateCheckResult, DesktopUpdateState } from "@t3tools/contracts";
+import type {
+  DesktopUpdateCheckResult,
+  DesktopUpdateState,
+  DesktopWindowsState,
+} from "@t3tools/contracts";
 import * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
@@ -91,8 +95,13 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     installPrepared: () => Effect.die("unexpected installPrepared"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
-const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
-  Layer.succeed(DesktopWindow.DesktopWindow, {
+const emptyWindowsState: DesktopWindowsState = { profiles: [], windows: [], miniMode: false };
+
+const layerDesktopWindow = (
+  selectedAction: Deferred.Deferred<string>,
+  windowsState: DesktopWindowsState = emptyWindowsState,
+) =>
+  Layer.mock(DesktopWindow.DesktopWindow)({
     createMain: Effect.die("unexpected createMain"),
     ensureMain: Effect.die("unexpected ensureMain"),
     revealOrCreateMain: Effect.die("unexpected revealOrCreateMain"),
@@ -101,16 +110,20 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
     showConnectingSplash: Effect.void,
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
-    flushMainWindowBounds: Effect.void,
+    flushWindowState: Effect.void,
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     dispatchSnapShotEvent: () => Effect.void,
-    zoomMain: (direction) =>
+    zoomFocused: (direction) =>
       Deferred.succeed(selectedAction, `zoom-${direction}`).pipe(Effect.asVoid),
-    runMainContentsCommand: (command) =>
+    runFocusedContentsCommand: (command) =>
       Deferred.succeed(selectedAction, `main-${command}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
-  } satisfies DesktopWindow.DesktopWindow["Service"]);
+    windowsState: Effect.succeed(windowsState),
+    subscribeWindowsState: () => Effect.void,
+    openProfile: (profileId) =>
+      Deferred.succeed(selectedAction, `open-${profileId}`).pipe(Effect.asVoid),
+  });
 
 const layerElectronMenu = (
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
@@ -127,6 +140,7 @@ const configureMenu = (
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
   environment: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
   services: MenuServices = {},
+  windowsState?: DesktopWindowsState,
 ) =>
   Effect.gen(function* () {
     const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
@@ -135,7 +149,7 @@ const configureMenu = (
     Effect.provide(
       DesktopApplicationMenu.layer.pipe(
         Layer.provideMerge(layerElectronMenu(applicationMenuTemplate)),
-        Layer.provideMerge(layerDesktopWindow(selectedAction)),
+        Layer.provideMerge(layerDesktopWindow(selectedAction, windowsState)),
         Layer.provideMerge(layerDesktopUpdates(services)),
         Layer.provideMerge(layerElectronDialog(services)),
         Layer.provideMerge(layerElectronApp),
@@ -347,6 +361,89 @@ describe("DesktopApplicationMenu", () => {
       assert.equal(yield* Deferred.await(selectedAction), "main-reload");
     }),
   );
+  it.effect("lists saved windows, marks open ones, and leaves New Window to the renderer", () =>
+    Effect.gen(function* () {
+      const selectedAction = yield* Deferred.make<string>();
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+      const profile = (id: string, name: string) => ({
+        id,
+        name,
+        projectScopeKeys: [],
+        theme: null,
+        isDefault: id === "main",
+      });
+      yield* configureMenu(
+        selectedAction,
+        applicationMenuTemplate,
+        {},
+        {},
+        {
+          profiles: [profile("main", "Main"), profile("work", "Work"), profile("side", "Side")],
+          windows: [
+            {
+              windowId: 1,
+              isMain: true,
+              profileId: "main",
+              name: "Main",
+              title: "",
+              focused: true,
+            },
+            {
+              windowId: 2,
+              isMain: false,
+              profileId: "work",
+              name: "Work",
+              title: "",
+              focused: false,
+            },
+          ],
+          miniMode: true,
+        },
+      );
+
+      const windowMenu = (yield* Deferred.await(applicationMenuTemplate)).find(
+        (item) => item.role === "windowMenu",
+      );
+      if (!Array.isArray(windowMenu?.submenu)) {
+        throw new Error("Expected the Window menu submenu to be an array.");
+      }
+      const items = windowMenu.submenu.filter((item) => item.label !== undefined);
+      assert.deepEqual(
+        items.slice(0, 5).map(({ label, checked, accelerator, registerAccelerator }) => ({
+          label,
+          checked,
+          accelerator,
+          registerAccelerator,
+        })),
+        [
+          {
+            label: "New Window",
+            checked: undefined,
+            accelerator: "CmdOrCtrl+Alt+Shift+N",
+            registerAccelerator: false,
+          },
+          {
+            label: "Main Window",
+            checked: undefined,
+            accelerator: undefined,
+            registerAccelerator: undefined,
+          },
+          { label: "Work", checked: true, accelerator: undefined, registerAccelerator: undefined },
+          { label: "Side", checked: false, accelerator: undefined, registerAccelerator: undefined },
+          {
+            label: "Mini Mode",
+            checked: true,
+            accelerator: undefined,
+            registerAccelerator: undefined,
+          },
+        ],
+      );
+      items[0]?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
+      assert.equal(yield* Deferred.await(selectedAction), "new-window");
+    }),
+  );
+
   it.effect("tells the user which update the menu check found", () =>
     Effect.gen(function* () {
       const dialog = yield* checkForUpdatesFromMacMenu({

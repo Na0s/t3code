@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 
+import { desktopWindowsBridge, readDesktopWindowContext } from "./multiWindow/windowContext";
+
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 2;
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -209,11 +211,101 @@ function sanitizePersistedThreadChangedFilesExpanded(
   return nextState;
 }
 
-export function persistState(state: UiState): void {
+type SharedUiState = Omit<UiState, "sidebarProjectScopeKeys">;
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+}
+
+function mergeRecord<V>(
+  stored: Readonly<Record<string, V>>,
+  local: Readonly<Record<string, V>>,
+  baseline: Readonly<Record<string, V>>,
+): Record<string, V> {
+  const merged = { ...stored };
+  for (const key of new Set([...Object.keys(local), ...Object.keys(baseline)])) {
+    if (sameValue(local[key], baseline[key])) continue;
+    const value = local[key];
+    if (value === undefined) delete merged[key];
+    else merged[key] = value;
+  }
+  return merged;
+}
+
+/**
+ * Keeps what this window changed since `baseline` (the state it last read or wrote) over
+ * what other windows saved since. The project filter belongs to each window, so it is left out.
+ */
+export function mergeSharedUiState(
+  stored: SharedUiState,
+  local: SharedUiState,
+  baseline: SharedUiState,
+): SharedUiState {
+  const pick = <K extends keyof SharedUiState>(key: K): SharedUiState[K] =>
+    sameValue(local[key], baseline[key]) ? stored[key] : local[key];
+  return {
+    projectExpandedById: mergeRecord(
+      stored.projectExpandedById,
+      local.projectExpandedById,
+      baseline.projectExpandedById,
+    ),
+    projectOrder: pick("projectOrder"),
+    threadLastVisitedAtById: mergeRecord(
+      stored.threadLastVisitedAtById,
+      local.threadLastVisitedAtById,
+      baseline.threadLastVisitedAtById,
+    ),
+    threadChangedFilesExpandedById: mergeRecord(
+      stored.threadChangedFilesExpandedById,
+      local.threadChangedFilesExpandedById,
+      baseline.threadChangedFilesExpandedById,
+    ),
+    defaultAdvertisedEndpointKey: pick("defaultAdvertisedEndpointKey"),
+    pullRequestMergeMethod: pick("pullRequestMergeMethod"),
+  };
+}
+
+function sharedStateChanged(left: SharedUiState, right: SharedUiState): boolean {
+  return (Object.keys(right) as Array<keyof SharedUiState>).some(
+    (key) => !sameValue(left[key], right[key]),
+  );
+}
+
+// Desktop windows share this storage; null outside a multi-window desktop shell.
+const windowContext = readDesktopWindowContext();
+let persistedBaseline: UiState | null = null;
+
+function readStoredState(): UiState | null {
+  try {
+    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
+    return raw ? parsePersistedState(JSON.parse(raw) as PersistedUiState) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What this window writes: its own changes over other windows' saves, and only its own filter. */
+function resolveStateToPersist(state: UiState): UiState {
+  if (windowContext === null) return state;
+  const stored = readStoredState();
+  if (stored === null) return state;
+  const merged = mergeSharedUiState(stored, state, persistedBaseline ?? stored);
+  return {
+    ...merged,
+    // A secondary window's filter lives in its window profile, never in the main window's state.
+    sidebarProjectScopeKeys: windowContext.isMain
+      ? state.sidebarProjectScopeKeys
+      : stored.sidebarProjectScopeKeys,
+  };
+}
+
+export function persistState(current: UiState): void {
   if (typeof window === "undefined") {
     return;
   }
   try {
+    const state = resolveStateToPersist(current);
+    persistedBaseline = state;
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
@@ -437,8 +529,16 @@ interface UiStateStore extends UiState {
   ) => void;
 }
 
+function readInitialState(): UiState {
+  const state = readPersistedState();
+  persistedBaseline = state;
+  return windowContext !== null && !windowContext.isMain
+    ? { ...state, sidebarProjectScopeKeys: [...windowContext.projectScopeKeys] }
+    : state;
+}
+
 export const useUiStateStore = create<UiStateStore>((set) => ({
-  ...readPersistedState(),
+  ...readInitialState(),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
@@ -459,6 +559,26 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
+
+if (windowContext !== null && typeof window !== "undefined") {
+  // Another window saved: take its changes to state this window has not changed since.
+  window.addEventListener("storage", (event) => {
+    if (event.key !== PERSISTED_STATE_KEY || event.newValue === null) return;
+    const stored = readStoredState();
+    if (stored === null) return;
+    const local = useUiStateStore.getState();
+    const merged = mergeSharedUiState(stored, local, persistedBaseline ?? stored);
+    persistedBaseline = stored;
+    if (sharedStateChanged(local, merged)) useUiStateStore.setState(merged);
+  });
+  if (!windowContext.isMain) {
+    const bridge = desktopWindowsBridge();
+    useUiStateStore.subscribe((state, previous) => {
+      if (state.sidebarProjectScopeKeys === previous.sidebarProjectScopeKeys) return;
+      void bridge?.setProjectScopeKeys(state.sidebarProjectScopeKeys).catch(() => undefined);
+    });
+  }
+}
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {

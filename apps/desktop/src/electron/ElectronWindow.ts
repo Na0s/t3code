@@ -118,6 +118,11 @@ export class ElectronWindow extends Context.Service<
     readonly main: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly currentMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly focusedMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
+    /** Windows that load the app renderer: the main window first, then secondary windows. */
+    readonly apps: Effect.Effect<ReadonlyArray<Electron.BrowserWindow>>;
+    /** The focused app window, else the main window; never a popup or auxiliary window. */
+    readonly focusedApp: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
+    readonly registerApp: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly setMain: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly clearMain: (window: Option.Option<Electron.BrowserWindow>) => Effect.Effect<void>;
     readonly prepareReveal: (window: Electron.BrowserWindow) => Effect.Effect<boolean>;
@@ -148,6 +153,7 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus?.close()));
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const auxiliaryWindows = new WeakSet<Electron.BrowserWindow>();
+  const appWindows = new Set<Electron.BrowserWindow>();
   const titleBarOverlayWindows = new WeakSet<Electron.BrowserWindow>();
 
   const listWindows = Effect.try({
@@ -216,6 +222,36 @@ export const make = Effect.gen(function* () {
     return yield* currentMainOrFirst;
   });
 
+  const liveApps = Effect.gen(function* () {
+    const main = yield* liveMain;
+    const apps: Electron.BrowserWindow[] = Option.isSome(main) ? [main.value] : [];
+    for (const window of appWindows) {
+      if (yield* isWindowDestroyed(window)) {
+        appWindows.delete(window);
+      } else if (!apps.includes(window)) {
+        apps.push(window);
+      }
+    }
+    return apps;
+  });
+
+  const focusedApp = Effect.gen(function* () {
+    const focused = yield* Effect.try({
+      try: () => Electron.BrowserWindow.getFocusedWindow(),
+      catch: (cause) =>
+        new ElectronWindowOperationError({
+          operation: "get-focused-window",
+          platform,
+          windowId: null,
+          channel: null,
+          cause,
+        }),
+    }).pipe(Effect.orDie);
+    const apps = yield* liveApps;
+    if (focused !== null && apps.includes(focused)) return Option.some(focused);
+    return yield* liveMain;
+  });
+
   return ElectronWindow.of({
     create: Effect.fn("ElectronWindow.create")(function (options, behavior) {
       const webPreferences = options.webPreferences;
@@ -256,8 +292,15 @@ export const make = Effect.gen(function* () {
     main: liveMain,
     currentMainOrFirst,
     focusedMainOrFirst,
+    apps: liveApps,
+    focusedApp,
+    registerApp: Effect.fn("ElectronWindow.registerApp")(function (window) {
+      return Effect.sync(() => void appWindows.add(window));
+    }),
     setMain: Effect.fn("ElectronWindow.setMain")(function (window) {
-      return Ref.set(mainWindowRef, Option.some(window));
+      return Ref.set(mainWindowRef, Option.some(window)).pipe(
+        Effect.andThen(Effect.sync(() => void appWindows.add(window))),
+      );
     }),
     clearMain: Effect.fn("ElectronWindow.clearMain")(function (window) {
       return Ref.update(mainWindowRef, (current) => {

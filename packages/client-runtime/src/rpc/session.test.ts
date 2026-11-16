@@ -1,6 +1,10 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  ORCHESTRATION_V2_WS_METHODS,
+  type OrchestrationV2SubscribeShellInput,
+  type OrchestrationV2SubscribeThreadInput,
+  ThreadId,
   ServerConfig,
   type ServerConfig as ServerConfigType,
   ServerConfigStreamEvent,
@@ -20,6 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Socket from "effect/socket/Socket";
@@ -34,6 +39,7 @@ import {
 } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
+import type { RpcPort } from "./relay.ts";
 import * as RpcSession from "./session.ts";
 import { toServerClock } from "../clock.ts";
 import { makeEnvironmentServerConfigState } from "../state/server.ts";
@@ -1104,5 +1110,385 @@ describe("RpcSessionFactory", () => {
       expect(config.issues).toEqual([]);
       expect(config.availableEditors).toEqual(["zed"]);
     }),
+  );
+});
+
+/** An in-memory MessageChannel: delivery is async and structured-cloned, like a real port. */
+function makePortPair(): readonly [RpcPort, RpcPort] {
+  const listeners = [new Set<(message: unknown) => void>(), new Set<(message: unknown) => void>()];
+  let closed = false;
+  const end = (self: 0 | 1): RpcPort => ({
+    postMessage: (message) => {
+      if (closed) return;
+      const copy = structuredClone(message);
+      queueMicrotask(() => {
+        for (const listener of listeners[self === 0 ? 1 : 0]!) listener(copy);
+      });
+    },
+    onMessage: (listener) => {
+      listeners[self]!.add(listener);
+      return () => listeners[self]!.delete(listener);
+    },
+    close: () => {
+      closed = true;
+    },
+  });
+  return [end(0), end(1)];
+}
+
+const connectHubAndWindows = Effect.fn("TestRpcSessionFactory.connectHubAndWindows")(function* (
+  count: number,
+) {
+  const { factory, sockets } = yield* makeFactory();
+  const hub = yield* factory.connect(PREPARED);
+  const hubReady = yield* Effect.forkChild(hub.ready);
+  const socket = yield* awaitSocket(sockets);
+  socket.open();
+  yield* completeInitialConfig(socket);
+  yield* Fiber.join(hubReady);
+  const windows: Array<RpcSession.RpcSession> = [];
+  for (let index = 0; index < count; index++) {
+    const [hubPort, windowPort] = makePortPair();
+    yield* hub.relay!(hubPort);
+    const secondary = yield* factory.connectOverPort(PREPARED, windowPort);
+    yield* secondary.ready;
+    windows.push(secondary);
+  }
+  return { hub, windows, socket, sockets };
+});
+
+const connectHubAndWindow = Effect.fn("TestRpcSessionFactory.connectHubAndWindow")(function* () {
+  const { hub, windows, socket, sockets } = yield* connectHubAndWindows(1);
+  return { hub, secondary: windows[0]!, socket, sockets };
+});
+
+const sentRequests = (socket: TestWebSocket) =>
+  socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest);
+
+const LEGACY_MIGRATION_EVENT = {
+  version: 1,
+  sequence: 1,
+  type: "legacyThreadMigration",
+  payload: { status: "running", totalThreadCount: 3 },
+};
+
+describe("hub relay", () => {
+  it.effect("serves a window's config from the hub's replay without a second subscription", () =>
+    Effect.gen(function* () {
+      const { secondary, socket, sockets } = yield* connectHubAndWindow();
+
+      expect(yield* secondary.initialConfig).toEqual(SERVER_CONFIG);
+      expect(sentRequests(socket).map((request) => request.tag)).toEqual([
+        WS_METHODS.subscribeServerConfig,
+      ]);
+      expect(sockets).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("sends a window's requests over the hub's socket under ids the hub cannot reuse", () =>
+    Effect.gen(function* () {
+      const { hub, secondary, socket } = yield* connectHubAndWindow();
+
+      const windowProbe = yield* Effect.forkChild(secondary.probe);
+      const relayed = yield* awaitRequest(socket, 1);
+      const hubProbe = yield* Effect.forkChild(hub.probe);
+      const native = yield* awaitRequest(socket, 2);
+
+      expect(relayed.tag).toBe(WS_METHODS.serverProbe);
+      expect(String(relayed.id)).toMatch(/^relay\d+:/);
+      expect(relayed.id).not.toEqual(native.id);
+      socket.serverMessage(
+        encodeJson({ _tag: "Exit", requestId: relayed.id, exit: { _tag: "Success", value: {} } }),
+      );
+      yield* Fiber.join(windowProbe);
+      expect(hubProbe.pollUnsafe()).toBeUndefined();
+      socket.serverMessage(
+        encodeJson({ _tag: "Exit", requestId: native.id, exit: { _tag: "Success", value: {} } }),
+      );
+      yield* Fiber.join(hubProbe);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("forwards stream chunks, acks and interrupts under the relayed id", () =>
+    Effect.gen(function* () {
+      const { secondary, socket } = yield* connectHubAndWindow();
+      const received = yield* Queue.unbounded<unknown>();
+      const subscription = yield* secondary.client[WS_METHODS.subscribeServerLifecycle]({}).pipe(
+        Stream.runForEach((event) => Queue.offer(received, event)),
+        Effect.forkChild,
+      );
+      const request = yield* awaitRequest(socket, 1);
+      socket.serverMessage(
+        encodeJson({ _tag: "Chunk", requestId: request.id, values: [LEGACY_MIGRATION_EVENT] }),
+      );
+
+      expect(yield* Queue.take(received)).toEqual(LEGACY_MIGRATION_EVENT);
+      const sentAfter = (tag: string) =>
+        socket.sent
+          .map((message) => decodeJson(message) as { _tag: string; requestId?: unknown })
+          .filter((message) => message._tag === tag && message.requestId === request.id);
+      while (sentAfter("Ack").length === 0) yield* Queue.take(socket.sentChanges);
+      expect(sentAfter("Ack")).toEqual([{ _tag: "Ack", requestId: request.id }]);
+
+      yield* Fiber.interrupt(subscription);
+      while (sentAfter("Interrupt").length === 0) yield* Queue.take(socket.sentChanges);
+      expect(sentAfter("Interrupt")).toEqual([{ _tag: "Interrupt", requestId: request.id }]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("closes the window's session when the hub's socket drops", () =>
+    Effect.gen(function* () {
+      const { secondary, socket } = yield* connectHubAndWindow();
+      const pending = yield* Effect.forkChild(Effect.flip(secondary.probe));
+      yield* awaitRequest(socket, 1);
+
+      socket.close(1006);
+
+      expect(yield* Effect.flip(secondary.closed)).toBeInstanceOf(ConnectionTransientError);
+      expect(yield* Fiber.join(pending)).toBeInstanceOf(ConnectionTransientError);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("interrupts a window's open streams on the server when the relay ends", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const hub = yield* factory.connect(PREPARED);
+      const hubReady = yield* Effect.forkChild(hub.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(hubReady);
+      const [hubPort, windowPort] = makePortPair();
+      const relayScope = yield* Scope.make();
+      yield* hub.relay!(hubPort).pipe(Scope.provide(relayScope));
+      const secondary = yield* factory.connectOverPort(PREPARED, windowPort);
+      yield* secondary.ready;
+      yield* secondary.client[WS_METHODS.subscribeServerLifecycle]({}).pipe(
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      const request = yield* awaitRequest(socket, 1);
+
+      yield* Scope.close(relayScope, Exit.void);
+
+      expect(
+        socket.sent
+          .map((message) => decodeJson(message) as { _tag: string })
+          .filter((message) => message._tag === "Interrupt"),
+      ).toEqual([{ _tag: "Interrupt", requestId: request.id }]);
+      expect(yield* Effect.flip(secondary.closed)).toBeInstanceOf(ConnectionTransientError);
+    }).pipe(Effect.scoped),
+  );
+});
+
+const shellEvent = (sequence: number) => ({
+  kind: "project.removed",
+  sequence,
+  projectId: `project-${sequence}`,
+});
+const threadEvent = (sequence: number) => ({
+  kind: "event",
+  sequence,
+  event: { type: "test.unknown-event" },
+});
+const SYNCHRONIZED = { kind: "synchronized" };
+const THREAD_ID = ThreadId.make("thread-1");
+
+const followShell = Effect.fn("TestSharedStreams.followShell")(function* (
+  session: RpcSession.RpcSession,
+  input: OrchestrationV2SubscribeShellInput,
+) {
+  const items = yield* Queue.unbounded<unknown>();
+  const fiber = yield* session.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell](input).pipe(
+    Stream.runForEach((item) => Queue.offer(items, item)),
+    Effect.forkChild,
+  );
+  return { items, fiber };
+});
+
+const followThread = Effect.fn("TestSharedStreams.followThread")(function* (
+  session: RpcSession.RpcSession,
+  input: OrchestrationV2SubscribeThreadInput,
+) {
+  const items = yield* Queue.unbounded<unknown>();
+  const fiber = yield* session.client[ORCHESTRATION_V2_WS_METHODS.subscribeThread](input).pipe(
+    Stream.runForEach((item) => Queue.offer(items, item)),
+    Effect.forkChild,
+  );
+  return { items, fiber };
+});
+
+const takeItems = Effect.fn("TestSharedStreams.takeItems")(function* (
+  items: Queue.Queue<unknown>,
+  count: number,
+) {
+  const taken: Array<unknown> = [];
+  for (let index = 0; index < count; index++) taken.push(yield* Queue.take(items));
+  return taken;
+});
+
+const serverChunk = (socket: TestWebSocket, requestId: unknown, values: ReadonlyArray<unknown>) =>
+  socket.serverMessage(encodeJson({ _tag: "Chunk", requestId, values }));
+
+const sentMessages = (socket: TestWebSocket) =>
+  socket.sent.map((message) => decodeJson(message) as { _tag: string; requestId?: unknown });
+
+describe("shared hub subscriptions", () => {
+  it.effect("opens one shell and one thread subscription for the hub and two windows", () =>
+    Effect.gen(function* () {
+      const { hub, windows, socket } = yield* connectHubAndWindows(2);
+      const [first, second] = [windows[0]!, windows[1]!];
+
+      const hubShell = yield* followShell(hub, { afterSequence: 5, requestCompletionMarker: true });
+      const shellRequest = yield* awaitRequest(socket, 1);
+      serverChunk(socket, shellRequest.id, [shellEvent(6), shellEvent(7), SYNCHRONIZED]);
+      expect(yield* takeItems(hubShell.items, 3)).toMatchObject([
+        { sequence: 6 },
+        { sequence: 7 },
+        SYNCHRONIZED,
+      ]);
+
+      const firstShell = yield* followShell(first, {
+        afterSequence: 6,
+        requestCompletionMarker: true,
+      });
+      const secondShell = yield* followShell(second, { afterSequence: 7 });
+      expect(yield* takeItems(firstShell.items, 2)).toMatchObject([{ sequence: 7 }, SYNCHRONIZED]);
+
+      const hubThread = yield* followThread(hub, {
+        threadId: THREAD_ID,
+        afterSequence: 1,
+        requestCompletionMarker: true,
+      });
+      const threadRequest = yield* awaitRequest(socket, 2);
+      serverChunk(socket, threadRequest.id, [threadEvent(2), SYNCHRONIZED]);
+      yield* takeItems(hubThread.items, 2);
+      const firstThread = yield* followThread(first, {
+        threadId: THREAD_ID,
+        afterSequence: 1,
+        requestCompletionMarker: true,
+      });
+      expect(yield* takeItems(firstThread.items, 2)).toMatchObject([
+        { kind: "unknown-event", sequence: 2 },
+        SYNCHRONIZED,
+      ]);
+
+      serverChunk(socket, shellRequest.id, [shellEvent(8)]);
+      serverChunk(socket, threadRequest.id, [threadEvent(3)]);
+      for (const shell of [hubShell, firstShell, secondShell]) {
+        expect(yield* Queue.take(shell.items)).toMatchObject({ sequence: 8 });
+      }
+      for (const thread of [hubThread, firstThread]) {
+        expect(yield* Queue.take(thread.items)).toMatchObject({ sequence: 3 });
+      }
+
+      expect(sentRequests(socket).map((request) => request.tag)).toEqual([
+        WS_METHODS.subscribeServerConfig,
+        ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+        ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("replays the retained snapshot and events to a window that joins late", () =>
+    Effect.gen(function* () {
+      const { hub, windows, socket } = yield* connectHubAndWindows(1);
+      const snapshot = {
+        kind: "snapshot",
+        snapshot: {
+          schemaVersion: 1,
+          snapshotSequence: 10,
+          threads: [],
+          archivedThreads: [],
+          projects: [],
+        },
+      };
+      const hubShell = yield* followShell(hub, { requestCompletionMarker: true });
+      const shellRequest = yield* awaitRequest(socket, 1);
+      serverChunk(socket, shellRequest.id, [snapshot, shellEvent(11), SYNCHRONIZED]);
+      yield* takeItems(hubShell.items, 3);
+
+      const late = yield* followShell(windows[0]!, { requestCompletionMarker: true });
+
+      expect(yield* takeItems(late.items, 3)).toMatchObject([
+        { kind: "snapshot", snapshot: { snapshotSequence: 10 } },
+        { sequence: 11 },
+        SYNCHRONIZED,
+      ]);
+      expect(sentRequests(socket)).toHaveLength(2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the stream for others when one leaves and closes it with the last", () =>
+    Effect.gen(function* () {
+      const { hub, windows, socket } = yield* connectHubAndWindows(2);
+      const hubShell = yield* followShell(hub, { afterSequence: 1 });
+      const shellRequest = yield* awaitRequest(socket, 1);
+      const firstShell = yield* followShell(windows[0]!, { afterSequence: 1 });
+      const secondShell = yield* followShell(windows[1]!, { afterSequence: 1 });
+      serverChunk(socket, shellRequest.id, [shellEvent(2)]);
+      for (const shell of [hubShell, firstShell, secondShell]) yield* Queue.take(shell.items);
+
+      yield* Fiber.interrupt(firstShell.fiber);
+      yield* Fiber.interrupt(hubShell.fiber);
+      serverChunk(socket, shellRequest.id, [shellEvent(3)]);
+
+      expect(yield* Queue.take(secondShell.items)).toMatchObject({ sequence: 3 });
+      const interrupts = () =>
+        sentMessages(socket).filter(
+          (message) => message._tag === "Interrupt" && message.requestId === shellRequest.id,
+        );
+      expect(interrupts()).toEqual([]);
+
+      yield* Fiber.interrupt(secondShell.fiber);
+      while (interrupts().length === 0) yield* Queue.take(socket.sentChanges);
+      expect(interrupts()).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "catches up a window behind the retained events, then hands it to the shared stream",
+    () =>
+      Effect.gen(function* () {
+        const { hub, windows, socket } = yield* connectHubAndWindows(1);
+        const hubShell = yield* followShell(hub, {
+          afterSequence: 5,
+          requestCompletionMarker: true,
+        });
+        const shellRequest = yield* awaitRequest(socket, 1);
+        serverChunk(socket, shellRequest.id, [shellEvent(6), SYNCHRONIZED]);
+        yield* takeItems(hubShell.items, 2);
+
+        const behind = yield* followShell(windows[0]!, {
+          afterSequence: 2,
+          requestCompletionMarker: true,
+        });
+        const catchUp = yield* awaitRequest(socket, 2);
+        expect(catchUp.payload).toMatchObject({ afterSequence: 2 });
+        serverChunk(socket, catchUp.id, [
+          shellEvent(3),
+          shellEvent(4),
+          shellEvent(5),
+          shellEvent(6),
+        ]);
+        serverChunk(socket, catchUp.id, [SYNCHRONIZED]);
+        expect(yield* takeItems(behind.items, 5)).toMatchObject([
+          { sequence: 3 },
+          { sequence: 4 },
+          { sequence: 5 },
+          { sequence: 6 },
+          SYNCHRONIZED,
+        ]);
+        const catchUpInterrupted = () =>
+          sentMessages(socket).some(
+            (message) => message._tag === "Interrupt" && message.requestId === catchUp.id,
+          );
+        while (!catchUpInterrupted()) yield* Queue.take(socket.sentChanges);
+
+        serverChunk(socket, shellRequest.id, [shellEvent(7)]);
+        expect(yield* Queue.take(behind.items)).toMatchObject({ sequence: 7 });
+        expect(yield* Queue.take(hubShell.items)).toMatchObject({ sequence: 7 });
+        expect(Queue.sizeUnsafe(behind.items)).toBe(0);
+      }).pipe(Effect.scoped),
   );
 });
