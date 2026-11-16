@@ -1862,8 +1862,23 @@ export const make = Effect.gen(function* () {
         () => Effect.sync(() => void stateListeners.delete(listener)),
       );
     }),
-    windowContext: Effect.fn("desktop.window.windowContext")(function (window) {
-      return Effect.sync(() => Option.fromNullishOr(entryOf(window)?.context ?? null));
+    windowContext: Effect.fn("desktop.window.windowContext")(function* (window) {
+      const entry = entryOf(window);
+      if (entry === undefined) return Option.none<DesktopWindowContext>();
+      if (entry.isMain) return Option.some(entry.context);
+      // A reloaded secondary window resumes its live filter and profile, not its opening ones.
+      const profile =
+        entry.profileId === null
+          ? undefined
+          : (yield* desktopSettings.get).windowProfiles.find(
+              (candidate) => candidate.id === entry.profileId,
+            );
+      return Option.some<DesktopWindowContext>({
+        ...entry.context,
+        profileId: entry.profileId,
+        projectScopeKeys: entry.projectScopeKeys,
+        theme: profile?.theme ?? null,
+      });
     }),
     openNewWindow: Effect.fn("desktop.window.openNewWindow")(function* (input) {
       yield* openSecondary({

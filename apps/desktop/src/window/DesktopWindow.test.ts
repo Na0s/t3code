@@ -1456,6 +1456,10 @@ describe("DesktopWindow", () => {
         assert.equal(yield* Ref.get(createCount), 2);
         secondary.webContentsListeners.get("did-finish-load")?.();
         yield* windows.setCloseRequestListening(secondary.window, true);
+        yield* windows.setWindowProjectScopeKeys(secondary.window, ["env:/hobby"]);
+        const reloadedContext = Option.getOrThrow(yield* windows.windowContext(secondary.window));
+        assert.deepEqual(reloadedContext.projectScopeKeys, ["env:/hobby"]);
+        assert.equal(reloadedContext.profileId, null);
 
         const preventSecondaryClose = vi.fn();
         secondary.windowListeners.get("close")?.({ preventDefault: preventSecondaryClose });
@@ -1481,7 +1485,9 @@ describe("DesktopWindow", () => {
         assert.equal(secondary.close.mock.calls.length, 1);
         const state = yield* windows.windowsState;
         const saved = state.profiles.find((profile) => profile.name === "Work");
-        assert.deepEqual(saved?.projectScopeKeys, ["env:/repo"]);
+        assert.deepEqual(saved?.projectScopeKeys, ["env:/hobby"]);
+        const savedContext = Option.getOrThrow(yield* windows.windowContext(secondary.window));
+        assert.equal(savedContext.profileId, saved?.id);
         assert.deepEqual(
           state.windows.map(({ isMain, profileId, name }) => ({ isMain, profileId, name })),
           [
