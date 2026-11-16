@@ -135,6 +135,7 @@ import {
   dedupeShellEnrichment,
   loadOlderSettledThreadsPage,
   loadShellSnapshotParts,
+  selectUmbrellaRefreshProjects,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
@@ -1338,26 +1339,10 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       Stream.groupedWithin(64, Duration.millis(50)),
       Stream.mapEffect((triggers) =>
         Effect.gen(function* () {
-          const rescannedRoots = new Set<string>();
-          const changedRoots = new Set<string>();
-          const projectIds = new Set<ProjectId>();
-          for (const trigger of triggers) {
-            if (trigger.root !== null) {
-              changedRoots.add(trigger.root);
-              if (trigger.rescanned) rescannedRoots.add(trigger.root);
-            }
-            for (const projectId of trigger.projectIds) projectIds.add(projectId);
-          }
-          const shells = yield* UmbrellaMembership.attachUmbrellaMembers(
-            yield* projects.listShells(),
-          );
-          const affected = shells.filter(
-            (project) =>
-              projectIds.has(project.id) ||
-              (project.umbrellaMembers !== undefined &&
-                (rescannedRoots.has(project.workspaceRoot) ||
-                  project.umbrellaMembers.some((member) => changedRoots.has(member.path)))),
-          );
+          const affected = selectUmbrellaRefreshProjects({
+            projects: yield* UmbrellaMembership.attachUmbrellaMembers(yield* projects.listShells()),
+            triggers,
+          });
           if (affected.length === 0) return [];
           const changedProjects = yield* Effect.forEach(affected, (project) =>
             projectEnrichment

@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -227,6 +228,11 @@ export const make = Effect.gen(function* () {
             Stream.filter((change) => change.nestedRepositoriesResolved === true),
             Stream.groupedWithin(64, Duration.millis(250)),
             Stream.runForEach(() => rebuildIndex({ scan: false })),
+          ),
+          // Catches projects removed or moved since, which publish no membership change.
+          rebuildIndex({ scan: false }).pipe(
+            Effect.repeat(Schedule.spaced(Duration.minutes(5))),
+            Effect.delay(Duration.minutes(5)),
           ),
         ],
         { concurrency: "unbounded", discard: true },

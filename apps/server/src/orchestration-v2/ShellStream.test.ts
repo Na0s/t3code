@@ -17,6 +17,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
+  selectUmbrellaRefreshProjects,
   activeShellRowsForSubscriber,
   bufferShellLiveStream,
   composeShellStreamWithEnrichment,
@@ -694,4 +695,44 @@ describe("skipUnchangedThreadShells", () => {
       expect(sent).toEqual([1, 2, 3]);
     }),
   );
+});
+
+describe("selectUmbrellaRefreshProjects", () => {
+  it("picks scanned projects a settings edit, rescan, or member identity can change", () => {
+    const member = (path: string) => ({
+      path,
+      relativePath: path.split("/").at(-1)!,
+      repositoryIdentity: null,
+      source: "nested" as const,
+    });
+    const project = (
+      id: string,
+      workspaceRoot: string,
+      umbrellaMembers?: ReadonlyArray<ReturnType<typeof member>>,
+    ) => ({
+      id: ProjectId.make(id),
+      workspaceRoot,
+      ...(umbrellaMembers === undefined ? {} : { umbrellaMembers }),
+    });
+    const projects = [
+      project("edited", "/edited", []),
+      project("rescanned", "/rescanned", []),
+      project("member-identity", "/acme", [member("/acme/api")]),
+      project("untouched", "/untouched", [member("/untouched/web")]),
+      project("unscanned", "/unscanned"),
+    ];
+
+    const selected = selectUmbrellaRefreshProjects({
+      projects,
+      triggers: [
+        { root: null, rescanned: false, projectIds: [ProjectId.make("edited")] },
+        { root: "/rescanned", rescanned: true, projectIds: [] },
+        { root: "/acme/api", rescanned: false, projectIds: [] },
+        { root: "/untouched", rescanned: false, projectIds: [] },
+        { root: null, rescanned: false, projectIds: [ProjectId.make("unscanned")] },
+      ],
+    });
+
+    expect(selected.map((entry) => entry.id)).toEqual(["edited", "rescanned", "member-identity"]);
+  });
 });
