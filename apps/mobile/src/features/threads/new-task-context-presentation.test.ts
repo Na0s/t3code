@@ -4,6 +4,7 @@ import {
   fillNewTaskWorkspaceBranch,
   resolveNewTaskBranchLabel,
   resolveNewTaskBranchWorktreePath,
+  resolveNewTaskDraftWorkspace,
   resolveNewTaskLocalWorkspaceSelection,
   resolveNewTaskWorkspaceSelection,
 } from "./new-task-context-presentation";
@@ -15,6 +16,24 @@ describe("resolveNewTaskWorkspaceSelection", () => {
     expect(
       resolveNewTaskWorkspaceSelection({ selection: undefined, fallback, isGitRepo: false }),
     ).toEqual({ mode: "local", branch: null, worktreePath: null });
+  });
+
+  it("keeps worktree mode for a plain umbrella folder, starting each member from its checkout", () => {
+    const draft = {
+      selection: undefined,
+      canChooseWorkspace: true,
+      defaultMode: "worktree",
+      defaultModeSettled: true,
+      isGitRepo: false,
+      branches: [],
+      projectCwd: "/clients/acme",
+    } as const;
+    expect(resolveNewTaskDraftWorkspace({ ...draft, plainUmbrella: true })).toEqual({
+      mode: "worktree",
+      branch: "HEAD",
+      worktreePath: null,
+    });
+    expect(resolveNewTaskDraftWorkspace(draft).mode).toBe("local");
   });
 
   it.each(["local", "worktree"] as const)(

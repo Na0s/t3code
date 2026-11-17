@@ -1347,6 +1347,12 @@ describe("planComposerTurn", () => {
     ).toMatchObject({
       missingWorktreeBaseBranch: false,
       baseBranchForWorktree: null,
+    }); // A plain umbrella folder has no branch to pick; each member starts from its own checkout.
+    expect(
+      planComposerTurn({ ...base, activeThreadBranch: null, worktreeBaseFallback: "HEAD" }),
+    ).toMatchObject({
+      missingWorktreeBaseBranch: false,
+      baseBranchForWorktree: "HEAD",
     });
   });
 

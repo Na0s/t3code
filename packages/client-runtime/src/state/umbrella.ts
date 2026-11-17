@@ -4,6 +4,8 @@ import {
   type UmbrellaMember,
 } from "@t3tools/contracts";
 
+import { umbrellaWorktreeMemberPaths } from "@t3tools/shared/umbrellaWorktree";
+
 import type { EnvironmentProject } from "./models.ts";
 import { normalizeProjectPathForComparison } from "./projects.ts";
 import { isUmbrellaProject } from "./projectGrouping.ts";
@@ -22,6 +24,26 @@ export function umbrellaMemberLabel(member: Pick<UmbrellaMember, "relativePath">
   return member.relativePath.startsWith("../")
     ? (member.relativePath.split("/").at(-1) ?? member.relativePath)
     : member.relativePath;
+}
+
+/**
+ * The members as a thread sees them: their own checkouts, or, for a worktree-mode thread, their
+ * worktrees inside the thread's folder.
+ */
+export function umbrellaMembersForThread<
+  TMember extends Pick<UmbrellaMember, "path" | "relativePath">,
+>(
+  members: ReadonlyArray<TMember>,
+  worktreePath: string | null | undefined,
+): ReadonlyArray<TMember> {
+  if (!worktreePath || members.length === 0) return members;
+  const root = worktreePath.replace(/[\\/]+$/, "");
+  const separator = root.includes("/") || !root.includes("\\") ? "/" : "\\";
+  const paths = umbrellaWorktreeMemberPaths(members.map((member) => member.relativePath));
+  return members.map((member, index) => ({
+    ...member,
+    path: `${root}${separator}${paths[index]!.split("/").join(separator)}`,
+  }));
 }
 
 const isAbsolute = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);

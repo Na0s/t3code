@@ -182,6 +182,8 @@ interface ComposerSendInput {
   readonly isServerThread: boolean;
   readonly isLocalDraftThread: boolean;
   readonly isGitRepo: boolean;
+  /** The base a new worktree uses with no branch picked: "HEAD" for a plain umbrella folder. */
+  readonly worktreeBaseFallback: string | null;
   readonly phase: SessionPhase;
   readonly runtimeMode: RuntimeMode;
   readonly sendEnvMode: DraftThreadEnvMode;
@@ -283,6 +285,7 @@ export function useComposerSend(input: ComposerSendInput) {
     isServerThread,
     isLocalDraftThread,
     isGitRepo,
+    worktreeBaseFallback,
     phase,
     runtimeMode,
     sendEnvMode,
@@ -817,6 +820,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendEnvMode,
       worktreePath: activeThread.worktreePath,
       activeThreadBranch,
+      worktreeBaseFallback,
       isScratchProject: activeProjectIsScratch,
       resumeCompactionTokens,
       keepFullHistory,

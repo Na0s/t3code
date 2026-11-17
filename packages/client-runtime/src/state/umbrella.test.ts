@@ -9,6 +9,7 @@ import {
   restoreUmbrellaMember,
   umbrellaAdoptionTargets,
   umbrellaMemberLabel,
+  umbrellaMembersForThread,
 } from "./umbrella.ts";
 
 const environmentId = EnvironmentId.make("desktop");
@@ -110,5 +111,29 @@ describe("umbrella membership", () => {
   it("labels outside members by folder name", () => {
     expect(umbrellaMemberLabel({ relativePath: "sites/web" })).toBe("sites/web");
     expect(umbrellaMemberLabel({ relativePath: "../../work/acme-site" })).toBe("acme-site");
+  });
+});
+
+describe("umbrellaMembersForThread", () => {
+  const members = [
+    { path: "/clients/acme/api", relativePath: "api" },
+    { path: "/clients/acme/apps/web", relativePath: "apps/web" },
+    { path: "/design/site", relativePath: "../../design/site" },
+    { path: "/other/site", relativePath: "../../other/site" },
+  ];
+
+  it("maps members into a worktree-mode thread's folder, adopted ones under _external", () => {
+    expect(
+      umbrellaMembersForThread(members, "/worktrees/acme/feature-1/").map((m) => m.path),
+    ).toEqual([
+      "/worktrees/acme/feature-1/api",
+      "/worktrees/acme/feature-1/apps/web",
+      "/worktrees/acme/feature-1/_external/site",
+      "/worktrees/acme/feature-1/_external/site-2",
+    ]);
+    expect(umbrellaMembersForThread(members.slice(1, 2), "C:\\worktrees\\acme\\f")[0]?.path).toBe(
+      "C:\\worktrees\\acme\\f\\apps\\web",
+    );
+    expect(umbrellaMembersForThread(members, null)).toBe(members);
   });
 });

@@ -14,6 +14,7 @@ import {
   type UmbrellaMember,
 } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { umbrellaMembersForThread } from "@t3tools/client-runtime/state/umbrella";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -287,11 +288,13 @@ export default function DiffPanel({
     diffSelection.kind === "branch" ||
     diffSelection.kind === "unstaged" ||
     diffSelection.kind === "commit";
-  // Members are checkouts beside the project root, which a worktree thread does not work in.
-  const umbrellaMembers =
-    activeThread && !activeThread.worktreePath
-      ? (activeProject?.umbrellaMembers ?? NO_UMBRELLA_MEMBERS)
-      : NO_UMBRELLA_MEMBERS;
+  // A worktree-mode thread works in each member's worktree inside its own folder.
+  const umbrellaMembers = activeThread
+    ? umbrellaMembersForThread(
+        activeProject?.umbrellaMembers ?? NO_UMBRELLA_MEMBERS,
+        activeThread.worktreePath,
+      )
+    : NO_UMBRELLA_MEMBERS;
   // Repositories found under a project that is not an umbrella yet wait for the user to confirm.
   const umbrellaSuggestions =
     activeThread && !activeThread.worktreePath && umbrellaMembers.length === 0
