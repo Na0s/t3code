@@ -30,6 +30,7 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
@@ -441,15 +442,40 @@ export const make = Effect.gen(function* () {
       const project = yield* projectStore.getShell(thread.projectId);
       if (Option.isNone(project)) return;
       const members = (yield* umbrellaMembership.value.stateOf(project.value))?.members ?? [];
-      const touched = members.filter((member) =>
-        files.some((file) => file.path.startsWith(`${member.relativePath}/`)),
+      // A worktree-mode thread works in member worktrees inside its own folder, on its branch.
+      const layout =
+        thread.worktreePath === null
+          ? null
+          : yield* readUmbrellaWorktree(thread.worktreePath).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            );
+      const checkouts =
+        layout === null
+          ? members.map((member) => ({ ...member, cwd: member.path, prefix: member.relativePath }))
+          : layout.members.flatMap((checkout) => {
+              const member = members.find(
+                (candidate) => path.resolve(candidate.path) === checkout.source,
+              );
+              return member === undefined
+                ? []
+                : [
+                    {
+                      ...member,
+                      cwd: path.join(layout.path, checkout.path),
+                      prefix: checkout.path,
+                    },
+                  ];
+            });
+      const touched = checkouts.filter((member) =>
+        files.some((file) => file.path.startsWith(`${member.prefix}/`)),
       );
       const links = threadPullRequestsOf(thread);
       yield* Effect.forEach(
         touched,
         (member) =>
           Effect.gen(function* () {
-            const status = yield* git.localStatus({ cwd: member.path });
+            const status = yield* git.localStatus({ cwd: member.cwd });
             if (status.refName === null || status.isDefaultRef) return;
             const repository = sourceControlDefinitions
               .repositorySelector(member.repositoryIdentity)
@@ -465,7 +491,7 @@ export const make = Effect.gen(function* () {
               return;
             }
             const detected = yield* git.branchPullRequest(
-              { cwd: member.path, branch: status.refName },
+              { cwd: member.cwd, branch: status.refName },
               { refresh: true, confirmTerminal: false },
             );
             if (detected === null || pullRequestPredatesThread(detected, thread.createdAt)) return;

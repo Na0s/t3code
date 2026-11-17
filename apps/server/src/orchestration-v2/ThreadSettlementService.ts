@@ -36,6 +36,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
+import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { QUIET_AFTER_MS, QUIET_SYNC_INTERVAL_MS } from "./PullRequestSyncReactor.ts";
@@ -419,7 +420,7 @@ export const make = Effect.gen(function* () {
         ),
     );
 
-    const lookupCandidates = (yield* Effect.forEach(
+    const branchLookupCandidates = (yield* Effect.forEach(
       candidates,
       (thread) => {
         if (thread.lineage.relationshipToParent === "subagent") return settleThread(thread, null);
@@ -446,12 +447,27 @@ export const make = Effect.gen(function* () {
           thread.branchPullRequest != null,
       );
     const lookupCwdByThreadId = new Map<string, string>();
+    // A plain umbrella folder has no branch of its own; its members' pull requests link on their own.
+    const plainUmbrellaThreads = new Set<string>();
     yield* Effect.forEach(
-      lookupCandidates,
+      branchLookupCandidates,
       (thread) =>
         Effect.gen(function* () {
           const project = projects.get(thread.projectId);
           if (project === undefined || thread.branch === null) return;
+          if (
+            thread.worktreePath !== null &&
+            !(yield* fileSystem
+              .exists(path.join(thread.worktreePath, ".git"))
+              .pipe(Effect.orElseSucceed(() => true))) &&
+            (yield* readUmbrellaWorktree(thread.worktreePath).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            )) !== null
+          ) {
+            plainUmbrellaThreads.add(thread.id);
+            return;
+          }
           // A worktree folder can outlive its .git, and git there fails with not_a_repository.
           // An unreadable .git keeps the worktree, so git fails there and the thread is skipped.
           lookupCwdByThreadId.set(
@@ -465,6 +481,9 @@ export const make = Effect.gen(function* () {
           );
         }),
       { concurrency: 8, discard: true },
+    );
+    const lookupCandidates = branchLookupCandidates.filter(
+      (thread) => !plainUmbrellaThreads.has(thread.id),
     );
     if (mergedPullRequest !== null) {
       // Invalidate checkout caches on merge; cached open branches would delay settlement beyond this sweep.

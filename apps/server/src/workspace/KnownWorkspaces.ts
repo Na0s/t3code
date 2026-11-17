@@ -12,6 +12,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
@@ -134,6 +135,22 @@ export const make = Effect.gen(function* () {
         const real = yield* resolveRoot(worktreePath);
         return real !== null && listed.includes(real);
       });
+      // A worktree-mode umbrella thread's folder, wherever the worktree setting put it then.
+      const isUmbrellaWorktree = Effect.fnUntraced(function* (
+        projectId: string,
+        worktreePath: string,
+      ) {
+        const project = projects.find((candidate) => candidate.id === projectId);
+        if (project === undefined) return false;
+        const layout = yield* readUmbrellaWorktree(worktreePath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
+        return (
+          layout !== null &&
+          (yield* resolveRoot(layout.umbrellaRoot)) === (yield* resolveRoot(project.workspaceRoot))
+        );
+      });
       for (const { worktreePath, projectId } of threads) {
         // Relative paths use server cwd; managed paths still need resolution to reject symlinks elsewhere.
         if (!path.isAbsolute(worktreePath)) continue;
@@ -143,6 +160,7 @@ export const make = Effect.gen(function* () {
           return true;
         }
         if (yield* isProjectWorktree(projectId, worktreePath)) return true;
+        if (yield* isUmbrellaWorktree(projectId, worktreePath)) return true;
       }
       return false;
     },

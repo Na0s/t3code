@@ -225,6 +225,19 @@ describe("ReviewService", () => {
       const unbound = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-unbound-" });
       const claimed = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-claimed-" });
       yield* fs.makeDirectory(`${bound}/sub`);
+      // Umbrella worktrees are plain folders Git does not list; their manifest names the umbrella.
+      const umbrella = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-umbrella-" });
+      const foreignUmbrella = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-foreign-" });
+      yield* fs.makeDirectory(`${umbrella}/api`);
+      for (const [folder, umbrellaRoot] of [
+        [umbrella, project],
+        [foreignUmbrella, unbound],
+      ] as const) {
+        yield* fs.writeFileString(
+          `${folder}.t3-umbrella.json`,
+          JSON.stringify({ version: 1, umbrellaRoot, rootRepository: false, members: [] }),
+        );
+      }
 
       const review = (cwd: string) =>
         Effect.gen(function* () {
@@ -240,6 +253,8 @@ describe("ReviewService", () => {
               threadWorktrees: [
                 { worktreePath: bound },
                 { worktreePath: claimed },
+                { worktreePath: umbrella },
+                { worktreePath: foreignUmbrella },
                 { worktreePath: deleted, deleted: true },
                 { worktreePath: "t3-review-relative" },
                 { worktreePath: "/" },
@@ -248,10 +263,16 @@ describe("ReviewService", () => {
           ),
         );
 
-      for (const cwd of [bound, `${bound}/sub`]) {
+      for (const cwd of [bound, `${bound}/sub`, umbrella, `${umbrella}/api`]) {
         assert.strictEqual((yield* review(cwd)).cwd, cwd);
       }
-      for (const cwd of [deleted, unbound, claimed, `${process.cwd()}/t3-review-relative`]) {
+      for (const cwd of [
+        deleted,
+        unbound,
+        claimed,
+        foreignUmbrella,
+        `${process.cwd()}/t3-review-relative`,
+      ]) {
         const error = yield* review(cwd).pipe(Effect.flip);
         assert.strictEqual(error._tag, "VcsRepositoryDetectionError");
       }
