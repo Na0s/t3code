@@ -111,6 +111,7 @@ import {
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { placeholderThreadTitle } from "../orchestration-v2/placeholderThreadTitle.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
@@ -1265,6 +1266,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
+  const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const remoteDelegation = yield* RemoteDelegation.RemoteDelegation;
 
@@ -2699,7 +2701,28 @@ const make = Effect.gen(function* () {
         input.interactionMode,
       );
       let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
-      if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
+      const umbrellaMembers =
+        input.isolation === "worktree" && Option.isSome(umbrellaMembership)
+          ? ((yield* umbrellaMembership.value.stateOf(
+              yield* requireProject(parent.thread.projectId),
+            ))?.members ?? [])
+          : [];
+      if (
+        input.isolation === "worktree" &&
+        !isRetryOfAcceptedDelegation &&
+        umbrellaMembers.length > 0
+      ) {
+        // An umbrella child starts each repository from the parent's branch, which every
+        // repository in the parent's umbrella worktree has, or else from its own checkout.
+        workspaceStrategy = {
+          type: "worktree",
+          baseRef:
+            parent.thread.worktreePath !== null && parent.thread.branch !== null
+              ? parent.thread.branch
+              : "HEAD",
+          startFromOrigin: false,
+        };
+      } else if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
         const project = yield* requireProject(parent.thread.projectId);
         const base = yield* gitDriver
           .resolveCommit({
