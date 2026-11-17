@@ -52,6 +52,11 @@ import { checkpointRefForScopeOrdinal } from "./orchestration-v2/CheckpointServi
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
 import { MAX_OVERDUE_ARM_MS } from "./orchestration-v2/UsageLimitRecoveryWorker.ts";
 import * as WorktreeBranchSync from "./orchestration-v2/WorktreeBranchSync.ts";
+import { makeUmbrellaWorktrees } from "./project/UmbrellaWorktree.ts";
+import {
+  readUmbrellaWorktree,
+  umbrellaWorktreeRepositories,
+} from "./project/umbrellaWorktreeLayout.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -328,6 +333,7 @@ const make = Effect.gen(function* () {
   const gitManager = yield* GitManager.GitManager;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const reconcileBranch = yield* WorktreeBranchSync.makeReconcile;
+  const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
   const terminals = yield* TerminalManager.TerminalManager;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -840,7 +846,13 @@ const make = Effect.gen(function* () {
   const localChangesReason = Effect.fn("StorageCleanup.localChangesReason")(function* (
     cwd: string,
     rules: WorktreeCleanupRules,
+    // An umbrella worktree's root leaves out the member worktrees inside it.
+    excludedPaths: ReadonlyArray<string> = [],
   ) {
+    const pathspec =
+      excludedPaths.length === 0
+        ? []
+        : ["--", ".", ...excludedPaths.map((excluded) => `:(exclude,literal)${excluded}`)];
     const status = yield* git.execute({
       operation: "StorageCleanup.localChanges",
       cwd,
@@ -852,6 +864,7 @@ const make = Effect.gen(function* () {
         rules.worktreeKeepWhen === "tracked-changes"
           ? "--untracked-files=no"
           : "--untracked-files=all",
+        ...pathspec,
       ],
       maxOutputBytes: 64 * 1024,
       appendTruncationMarker: true,
@@ -870,7 +883,15 @@ const make = Effect.gen(function* () {
     const ignored = yield* git.execute({
       operation: "StorageCleanup.ignoredFiles",
       cwd,
-      args: ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+      args: [
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "-z",
+        ...pathspec,
+      ],
       maxOutputBytes: 64 * 1024,
       appendTruncationMarker: true,
     });
@@ -1423,6 +1444,71 @@ const make = Effect.gen(function* () {
             }),
           );
         }
+        const umbrella = yield* readUmbrellaWorktree(worktreePath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+        );
+        if (umbrella !== null) {
+          // Only the time and deletion rules apply: merge and unchanged rules read one branch.
+          if (!eligible)
+            return keep(
+              settings.worktreeAfterDays !== null || settings.worktreeSettledAfterDays !== null
+                ? notDueReason
+                : "umbrella worktrees follow only the age, settled and deletion rules",
+            );
+          const repositories = umbrellaWorktreeRepositories(path, umbrella);
+          const memberPaths = repositories
+            .map((repository) => repository.relativePath)
+            .filter((relativePath) => relativePath !== "");
+          const umbrellaChanges = Effect.fnUntraced(function* () {
+            for (const repository of repositories) {
+              if (yield* branchChanged(repository.cwd, thread.branch))
+                return `branch changed in ${repository.relativePath || "the umbrella folder"}`;
+              const changes = yield* localChangesReason(
+                repository.cwd,
+                settings,
+                repository.relativePath === "" ? memberPaths : [],
+              );
+              if (changes !== null)
+                return `${changes} in ${repository.relativePath || "the umbrella folder"}`;
+            }
+            return null;
+          });
+          const realFolder = yield* fs.realPath(worktreePath);
+          const realParent = yield* fs.realPath(path.dirname(worktreePath));
+          if (realFolder !== path.join(realParent, path.basename(worktreePath)))
+            return keep("worktree is a symbolic link");
+          if (!roots.some((root) => inside(root, realFolder)))
+            return keep("outside the managed worktree folder");
+          const changes = yield* umbrellaChanges();
+          if (changes !== null) return keep(changes);
+          const blocked = yield* blockedSinceCheck();
+          if (blocked !== null) return keep(blocked);
+          return yield* withWorkspaceLease(
+            worktreePath,
+            Effect.gen(function* () {
+              const blockedWhileChecking = yield* blockedSinceCheck();
+              if (blockedWhileChecking !== null) return keep(blockedWhileChecking);
+              const finalChanges = yield* umbrellaChanges();
+              if (finalChanges !== null) return keep(finalChanges);
+              if (yield* settingsChangedSinceCheck) return keep("settings changed since check");
+              // Forced only to drop untracked files the checks above allow.
+              yield* umbrellaWorktrees.remove({
+                worktreePath,
+                force: settings.worktreeKeepWhen === "tracked-changes",
+                keepManifest: true,
+              });
+              entries.push({ ...entry, outcome: "removed", reason: sentence(removalReason) });
+              for (const repository of repositories) {
+                yield* gitManager.invalidateStatus(repository.source);
+              }
+              // The manifest, branch and path stay so the next turn recreates the same layout.
+              yield* Effect.logInfo("storage cleanup removed umbrella worktree", {
+                threadId: thread.id,
+              });
+            }),
+          );
+        }
         const pathReason = yield* worktreePathReason(worktreePath);
         if (pathReason !== null) return keep(pathReason);
         if (yield* containsProjectRoot(worktreePaths, [project, ...snapshot.projects]))
@@ -1694,8 +1780,17 @@ const make = Effect.gen(function* () {
           })).slice(0, -1),
         );
       }
+      // An umbrella worktree's members keep their refs in each member's own repository.
+      const umbrella =
+        row.worktreePath === null
+          ? null
+          : yield* readUmbrellaWorktree(row.worktreePath).pipe(
+              Effect.provideService(FileSystem.FileSystem, fs),
+              Effect.provideService(Path.Path, path),
+            );
+      const memberSources = umbrella?.members.map((member) => member.source) ?? [];
       // A worktree may already be gone; its refs live in the shared repository.
-      for (const cwd of [row.cwd, row.worktreePath, row.workspaceRoot]) {
+      for (const cwd of [row.cwd, row.worktreePath, row.workspaceRoot, ...memberSources]) {
         if (cwd === null) continue;
         const key = path.resolve(cwd);
         const owned = targets.get(key) ?? new Set<string>();
