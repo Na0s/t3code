@@ -86,9 +86,9 @@ out.
 
 Projects you already have for a member fold into the umbrella's sidebar row: the same folder on
 the umbrella's machine, or the same repository on any connected machine. Their threads name the
-member they belong to. Use **Add to umbrella** and **Remove from umbrella** from a project
+member they belong to. Use **Add to umbrella** and **Remove _member_ from umbrella** from a project
 folder's menu in the sidebar or from the command palette. For a clone on another machine,
-**Remove from umbrella** only stops grouping it there; its grouping rule in **Settings → Projects**
+removing it only stops grouping it there; its grouping rule in **Settings → Projects**
 brings it back. To add a checkout stored elsewhere on the same machine, or to remove or restore a
 member, use **Umbrella checkouts**.
 

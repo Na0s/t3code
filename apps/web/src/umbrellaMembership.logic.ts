@@ -72,7 +72,8 @@ export function umbrellaMenuItems(
   if (actions.removals.length === 1 && onlyRemoval) {
     items.push({
       id: `${REMOVE_PREFIX}0`,
-      label: "Remove from umbrella",
+      // Named, since the folder clicked can be the umbrella itself holding a folded member.
+      label: `Remove ${umbrellaMemberLabel(onlyRemoval.member)} from umbrella`,
       detail: onlyRemoval.umbrella.title,
     });
   } else if (actions.removals.length > 1) {

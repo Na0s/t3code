@@ -97,7 +97,7 @@ describe("umbrellaMenuItems", () => {
   it("uses a single item when one removal is possible", () => {
     const actions = umbrellaMembershipActions([api], projects);
     expect(umbrellaMenuItems(actions)).toEqual([
-      { id: "umbrella-remove:0", label: "Remove from umbrella", detail: "acme" },
+      { id: "umbrella-remove:0", label: "Remove api from umbrella", detail: "acme" },
     ]);
     expect(resolveUmbrellaMenuAction(actions, "umbrella-remove:0")?.kind).toBe("remove");
   });

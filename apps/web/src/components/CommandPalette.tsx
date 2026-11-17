@@ -1779,8 +1779,8 @@ function OpenCommandPaletteDialog(props: {
       kind: "action",
       value: `action:umbrella-remove:${umbrella.environmentId}:${umbrella.id}`,
       searchTerms: ["umbrella", "remove", "leave", "member", "project", umbrella.title],
-      title: "Remove project from umbrella",
-      description: `${umbrella.title} · ${umbrellaMemberLabel(member)}`,
+      title: `Remove ${umbrellaMemberLabel(member)} from umbrella`,
+      description: umbrella.title,
       icon: <UmbrellaOffIcon className={ITEM_ICON_CLASS} />,
       run: async () => umbrellaEdits.leave(removal),
     });
