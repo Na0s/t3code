@@ -11,6 +11,7 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2DelegatedFrom,
   type OrchestrationV2LinkOrigin,
+  type GitCommandError,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ThreadProjection,
   type ProviderDriverKind,
@@ -48,6 +49,9 @@ import { parseGitCloneProgressLine } from "../project/gitCloneProgress.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
+import type { UmbrellaWorktreeError } from "../project/umbrellaWorktreeLayout.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -262,6 +266,16 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const eventSink = yield* EventSink.EventSinkV2;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+  const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
+  const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
+  // An umbrella's worktree mode checks out every member, whether or not its root is a repository.
+  const umbrellaMembersOf = (project: {
+    readonly id: ProjectId;
+    readonly workspaceRoot: string;
+  }) =>
+    Option.isNone(umbrellaMembership)
+      ? Effect.succeed([])
+      : umbrellaMembership.value.stateOf(project).pipe(Effect.map((state) => state?.members ?? []));
   // A project-folder launch that names no branch records the folder's checkout, as the composer does.
   const launchBranch = (strategy: ThreadLaunchWorkspaceStrategy, workspaceRoot: string) =>
     strategy.type === "root" && strategy.branch === undefined
@@ -394,6 +408,8 @@ const make = Effect.gen(function* () {
       ],
       { concurrency: "unbounded" },
     );
+    // Each member of a plain umbrella folder starts from its own checkout.
+    if (repositoryRoot === null && (yield* umbrellaMembersOf(project)).length > 0) return;
     if (repositoryRoot === null)
       return yield* new ThreadLaunchNotRepositoryError({
         projectId: project.id,
@@ -444,6 +460,7 @@ const make = Effect.gen(function* () {
       .getById(projectId)
       .pipe(Effect.orElseSucceed(() => Option.none()));
     if (Option.isNone(project)) return false;
+    if ((yield* umbrellaMembersOf(project.value)).length > 0) return false;
     // Unlike `git.repositoryRoot`, this fails on a repository Git cannot read, which is not "no repository".
     return yield* checkpointStore.isGitRepository(project.value.workspaceRoot).pipe(
       Effect.map((isRepository) => !isRepository),
@@ -616,7 +633,58 @@ const make = Effect.gen(function* () {
         input.workspaceStrategy.type === "existing_worktree"
           ? input.workspaceStrategy.worktreePath
           : null;
-      if (input.workspaceStrategy.type === "worktree") {
+      const umbrellaMembers =
+        input.workspaceStrategy.type === "worktree" ? yield* umbrellaMembersOf(project) : [];
+      if (input.workspaceStrategy.type === "worktree" && umbrellaMembers.length > 0) {
+        if (runId !== null) {
+          yield* threads
+            .dispatch({
+              type: "prepared-run.progress",
+              commandId: CommandId.make(`${input.commandId}:progress:worktree`),
+              threadId,
+              runId,
+              phase: "worktree",
+            })
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+        }
+        const startFromOrigin = input.workspaceStrategy.startFromOrigin === true;
+        yield* setupTracker.stageStatus(threadId, "fetch", startFromOrigin ? "running" : "skipped");
+        yield* setupTracker.stageStatus(threadId, "checkout", "running");
+        const submodules = yield* serverSettings.getSettings.pipe(
+          Effect.map(
+            (settings) =>
+              resolveProjectSettings(settings, input.projectId).settings.worktreeSubmodules,
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+        const created = yield* umbrellaWorktrees
+          .create({
+            umbrellaRoot: project.workspaceRoot,
+            members: umbrellaMembers,
+            baseRef: input.workspaceStrategy.baseRef,
+            startFromOrigin,
+            branch: branch!,
+            flattenOnConflict: generatedTemporaryBranch || isTemporaryWorktreeBranch(branch!),
+            submodules,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        worktreePath = created.path;
+        branch = created.branch;
+        createdWorktreePath = worktreePath;
+        createdBranch = branch;
+        if (startFromOrigin) yield* setupTracker.stageStatus(threadId, "fetch", "done");
+        yield* setupTracker.update(threadId, (snapshot) => ({
+          ...snapshot,
+          worktreePath,
+          branch,
+          stages: snapshot.stages.map((stage) =>
+            stage.id === "submodules" && stage.status === "pending"
+              ? { ...stage, status: "skipped", detail: "none" }
+              : stage,
+          ),
+        }));
+        yield* setupTracker.stageStatus(threadId, "checkout", "done");
+      } else if (input.workspaceStrategy.type === "worktree") {
         if (runId !== null) {
           yield* threads
             .dispatch({
@@ -821,24 +889,31 @@ const make = Effect.gen(function* () {
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;
+        const umbrellaWorktree = (yield* umbrellaWorktrees.read(worktreeCwd)) !== null;
         branchRename = yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
-            git
-              .renameBranch({
-                cwd: worktreeCwd,
-                oldBranch,
-                newBranch,
-                ...(exactName ? { exactName: true } : {}),
-              })
-              .pipe(
-                // A cancel must see the renamed branch, or its cleanup deletes the old name.
-                Effect.tap((renamed) =>
-                  Effect.sync(() => {
-                    createdBranch = renamed.branch;
-                  }),
-                ),
-                Effect.uninterruptible,
+            (umbrellaWorktree
+              ? umbrellaWorktrees.renameBranch({
+                  worktreePath: worktreeCwd,
+                  oldBranch,
+                  newBranch,
+                  ...(exactName ? { exactName: true } : {}),
+                })
+              : git.renameBranch({
+                  cwd: worktreeCwd,
+                  oldBranch,
+                  newBranch,
+                  ...(exactName ? { exactName: true } : {}),
+                })
+            ).pipe(
+              // A cancel must see the renamed branch, or its cleanup deletes the old name.
+              Effect.tap((renamed) =>
+                Effect.sync(() => {
+                  createdBranch = renamed.branch;
+                }),
               ),
+              Effect.uninterruptible,
+            ),
           ),
           Effect.flatMap((renamed) =>
             Effect.gen(function* () {
@@ -1042,41 +1117,54 @@ const make = Effect.gen(function* () {
             if (branchRename !== null) yield* Fiber.interrupt(branchRename);
             const removedPath = createdWorktreePath;
             const removedBranch = createdBranch;
+            const umbrellaWorktree = (yield* umbrellaWorktrees.read(removedPath)) !== null;
             // Forget worktrees only after removal succeeds; failed removals must not reuse partially written checkouts.
-            yield* git
-              .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
-              .pipe(
-                Effect.andThen(
-                  removedBranch === null
-                    ? Effect.void
-                    : git
-                        .deleteLocalBranch({
-                          cwd: project.workspaceRoot,
-                          refName: removedBranch,
-                          force: true,
-                        })
-                        .pipe(Effect.ignoreCause({ log: true })),
-                ),
-                Effect.andThen(
-                  threads
-                    .dispatch({
-                      type: "thread.metadata.update",
-                      commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
-                      threadId,
-                      worktreePath: null,
-                      branch: null,
+            const removal: Effect.Effect<void, GitCommandError | UmbrellaWorktreeError> =
+              umbrellaWorktree
+                ? umbrellaWorktrees
+                    .remove({
+                      worktreePath: removedPath,
+                      force: true,
+                      ...(removedBranch === null ? {} : { deleteBranch: removedBranch }),
                     })
-                    .pipe(Effect.ignore),
-                ),
-                Effect.catchCause((removeCause) =>
-                  Effect.logWarning("Failed to remove an abandoned thread worktree", {
-                    commandId: input.commandId,
-                    threadId,
+                    .pipe(Effect.asVoid)
+                : git.removeWorktree({
+                    cwd: project.workspaceRoot,
                     path: removedPath,
-                    cause: removeCause,
-                  }),
-                ),
-              );
+                    force: true,
+                  });
+            yield* removal.pipe(
+              Effect.andThen(
+                umbrellaWorktree || removedBranch === null
+                  ? Effect.void
+                  : git
+                      .deleteLocalBranch({
+                        cwd: project.workspaceRoot,
+                        refName: removedBranch,
+                        force: true,
+                      })
+                      .pipe(Effect.ignoreCause({ log: true })),
+              ),
+              Effect.andThen(
+                threads
+                  .dispatch({
+                    type: "thread.metadata.update",
+                    commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
+                    threadId,
+                    worktreePath: null,
+                    branch: null,
+                  })
+                  .pipe(Effect.ignore),
+              ),
+              Effect.catchCause((removeCause) =>
+                Effect.logWarning("Failed to remove an abandoned thread worktree", {
+                  commandId: input.commandId,
+                  threadId,
+                  path: removedPath,
+                  cause: removeCause,
+                }),
+              ),
+            );
           }
         }),
       ),

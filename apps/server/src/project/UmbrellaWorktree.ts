@@ -601,7 +601,14 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
     return renamed;
   });
 
-  return { create, remove, restoreMissing, renameBranch };
+  return {
+    /** The umbrella worktree at this folder, or null when it is not one. */
+    read: (worktreePath: string) => local(readUmbrellaWorktree(worktreePath)),
+    create,
+    remove,
+    restoreMissing,
+    renameBranch,
+  };
 });
 
 export type UmbrellaWorktrees = Effect.Success<typeof makeUmbrellaWorktrees>;

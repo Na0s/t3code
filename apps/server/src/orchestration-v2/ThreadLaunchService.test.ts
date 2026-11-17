@@ -29,6 +29,7 @@ import {
   ThreadId,
   TextGenerationError,
   ServerSettingsError,
+  type UmbrellaMember,
   VcsProcessExitError,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -52,6 +53,8 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -139,6 +142,7 @@ interface HarnessOptions {
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
   readonly isGitRepository?: CheckpointStore.CheckpointStore["Service"]["isGitRepository"];
+  readonly umbrellaMembers?: ReadonlyArray<UmbrellaMember>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -255,6 +259,21 @@ function makeHarness(options: HarnessOptions = {}) {
         layerReceipts,
         layerOrchestrator,
         IdAllocator.layer,
+        NodeServices.layer,
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-thread-launch-" }).pipe(
+          Layer.provide(NodeServices.layer),
+        ),
+        options.umbrellaMembers === undefined
+          ? Layer.empty
+          : Layer.mock(UmbrellaMembership.UmbrellaMembership)({
+              stateOf: () =>
+                Effect.succeed({
+                  members: options.umbrellaMembers!,
+                  suggestions: [],
+                  enclosingRepository: null,
+                }),
+              umbrellasWithMember: () => [],
+            }),
         options.getLaunchSettings === undefined
           ? Layer.empty
           : Layer.mock(ServerSettings.ServerSettingsService)({
@@ -3144,6 +3163,70 @@ it.effect.each(["origin/master", ":/initial"])(
         });
       }).pipe(Effect.provide(harness.layer));
     }),
+);
+
+it.effect("checks out every member of a plain umbrella folder into one thread folder", () =>
+  Effect.gen(function* () {
+    const members: ReadonlyArray<UmbrellaMember> = [
+      { path: "/repo/api", relativePath: "api", repositoryIdentity: null, source: "nested" },
+      {
+        path: "/elsewhere/site",
+        relativePath: "../elsewhere/site",
+        repositoryIdentity: null,
+        source: "adopted",
+      },
+    ];
+    const setupStarted = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      umbrellaMembers: members,
+      git: {
+        repositoryRoot: () => Effect.succeed(null),
+        currentBranch: () => Effect.succeed("main"),
+      },
+      createWorktree: (input) =>
+        Effect.succeed({
+          worktree: { path: input.path!, refName: input.newRefName!, headSha: "abc" },
+        } as never),
+      runSetup: () =>
+        Deferred.succeed(setupStarted, undefined).pipe(Effect.as({ status: "no-script" as const })),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const workspace = { type: "worktree" as const, baseRef: "HEAD", branch: "feature" };
+      // A plain umbrella folder is not refused as a non-Git project.
+      yield* launches.checkWorktreeBase({ projectId, workspaceStrategy: workspace });
+      assert.isFalse(yield* launches.isNonGitProject(projectId));
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:umbrella",
+          thread: "thread:launch:umbrella",
+          workspace,
+        }),
+      );
+      yield* Deferred.await(setupStarted);
+      const { thread } = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(thread.branch, "feature");
+      const layout = yield* readUmbrellaWorktree(thread.worktreePath!).pipe(
+        Effect.provide(NodeServices.layer),
+      );
+      assert.deepEqual(layout?.members, [
+        { source: "/repo/api", path: "api" },
+        { source: "/elsewhere/site", path: "_external/site" },
+      ]);
+      assert.deepEqual(
+        harness.createWorktree.mock.calls.map(([input]) => [
+          input.cwd,
+          input.path,
+          input.newRefName,
+        ]),
+        [
+          ["/elsewhere/site", `${thread.worktreePath}/_external/site`, "feature"],
+          ["/repo/api", `${thread.worktreePath}/api`, "feature"],
+        ],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
 );
 
 it.effect("leaves uncertain Git detection failures to workspace preparation", () =>
