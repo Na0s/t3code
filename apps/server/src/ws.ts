@@ -28,6 +28,7 @@ import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
   AcpRegistryOperationError,
   CommandId,
+  GitCommandError,
   authScopeResponse,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
@@ -195,6 +196,7 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { makePrepareTerminalLaunch } from "./workspace/restoreMissingWorktree.ts";
+import { makeUmbrellaWorktrees } from "./project/UmbrellaWorktree.ts";
 import { terminalOutputStream, withOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -1607,6 +1609,8 @@ export const layerWsRpc = (
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
+      const workspacePath = yield* Path.Path;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -3269,7 +3273,24 @@ export const layerWsRpc = (
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
-          gitWorkflow.removeWorktree(input).pipe(
+          // An umbrella thread's folder holds a worktree of each member, removed together.
+          (workspacePath.isAbsolute(input.path)
+            ? umbrellaWorktrees.remove({ worktreePath: input.path, force: input.force === true })
+            : Effect.succeed(false)
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitCommandError({
+                  operation: "vcs.removeWorktree",
+                  command: "git worktree remove",
+                  cwd: input.cwd,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+            Effect.flatMap((removed) =>
+              removed ? Effect.void : gitWorkflow.removeWorktree(input),
+            ),
             Effect.tap(() => refreshGitStatus(input.cwd)),
             // Subscribers of the removed checkout learn it is no longer a repository.
             Effect.tap(() =>
