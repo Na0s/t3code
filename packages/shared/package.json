@@ -71,6 +71,10 @@
       "types": "./src/agentAwareness.ts",
       "import": "./src/agentAwareness.ts"
     },
+    "./umbrellaWorktree": {
+      "types": "./src/umbrellaWorktree.ts",
+      "import": "./src/umbrellaWorktree.ts"
+    },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"

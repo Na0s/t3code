@@ -912,5 +912,83 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         expect(yield* checkpointStore.hasCheckpointWorkspace(root)).toBe(true);
       }),
     );
+
+    it.effect("checkpoints and restores a worktree-mode thread's member worktrees", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const umbrella = NodeFS.realpathSync.native(yield* makeTmpDir());
+        const worktrees = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(umbrella);
+        for (const name of ["api", "site"]) {
+          yield* fileSystem.makeDirectory(NodePath.join(umbrella, name));
+          yield* initRepoWithCommit(NodePath.join(umbrella, name));
+        }
+        // The thread's folder: the root's own worktree with each member's worktree inside it.
+        const folder = NodePath.join(worktrees, "thread");
+        yield* git(umbrella, ["worktree", "add", "-b", "thread", folder]);
+        for (const name of ["api", "site"]) {
+          yield* git(NodePath.join(umbrella, name), [
+            "worktree",
+            "add",
+            "-b",
+            "thread",
+            NodePath.join(folder, name),
+          ]);
+        }
+        yield* writeTextFile(
+          `${folder}.t3-umbrella.json`,
+          JSON.stringify({
+            version: 1,
+            umbrellaRoot: umbrella,
+            rootRepository: true,
+            members: ["api", "site"].map((name) => ({
+              source: NodePath.join(umbrella, name),
+              path: name,
+            })),
+          }),
+        );
+        // Nothing registered the folder yet, as after a restart.
+        const checkpointStore = yield* umbrellaStore(
+          NodeFS.realpathSync.native(yield* makeTmpDir()),
+          [],
+        );
+        const threadId = ThreadId.make("thread-umbrella-worktree");
+        const baseline = checkpointRefForThreadTurn(threadId, 0);
+        const turn = checkpointRefForThreadTurn(threadId, 1);
+        yield* checkpointStore.captureCheckpoint({ cwd: folder, checkpointRef: baseline });
+        for (const name of ["api", "site"]) {
+          yield* writeTextFile(NodePath.join(folder, name, "README.md"), `# ${name} edited\n`);
+        }
+        yield* writeTextFile(NodePath.join(folder, "site", "new.md"), "new\n");
+        yield* checkpointStore.captureCheckpoint({ cwd: folder, checkpointRef: turn });
+
+        const numstat = yield* checkpointStore.diffCheckpoints({
+          cwd: folder,
+          fromCheckpointRef: baseline,
+          toCheckpointRef: turn,
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+          "api/README.md",
+          "site/new.md",
+          "site/README.md",
+        ]);
+        // The root's checkpoint leaves the members' worktrees out.
+        expect(yield* git(folder, ["ls-tree", "-r", "--name-only", turn])).toBe("README.md");
+
+        expect(
+          yield* checkpointStore.restoreCheckpoint({ cwd: folder, checkpointRef: baseline }),
+        ).toBe(true);
+        for (const name of ["api", "site"]) {
+          expect(yield* fileSystem.readFileString(NodePath.join(folder, name, "README.md"))).toBe(
+            "# test\n",
+          );
+          // The members' own checkouts are untouched.
+          expect(yield* git(NodePath.join(umbrella, name), ["status", "--porcelain"])).toBe("");
+        }
+        expect(yield* fileSystem.exists(NodePath.join(folder, "site", "new.md"))).toBe(false);
+      }),
+    );
   });
 });

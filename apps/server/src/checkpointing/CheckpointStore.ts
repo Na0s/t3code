@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 
 import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
@@ -10,6 +11,7 @@ import type { CheckpointStoreError } from "./Errors.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { UmbrellaMemberIndex } from "../vcs/UmbrellaMemberIndex.ts";
+import { loadUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -141,13 +143,30 @@ export const make = Effect.gen(function* () {
     return (yield* git.detectRepository(cwd)) !== null;
   });
 
-  const membersOf = (cwd: string) =>
+  const registeredMembersOf = (cwd: string) =>
     umbrellaMembers.hasMembers()
       ? fileSystem.realPath(cwd).pipe(
           Effect.map((resolved) => umbrellaMembers.membersOf(resolved)),
           Effect.orElseSucceed(() => umbrellaMembers.membersOf(cwd)),
         )
       : Effect.succeed([]);
+  // A worktree-mode umbrella thread's folder registers on first use after a restart, before
+  // its root repository's checkpoint could take in the members.
+  const membersOf = (cwd: string) =>
+    registeredMembersOf(cwd).pipe(
+      Effect.filterOrElse(
+        (members) => members.length > 0,
+        (members) =>
+          loadUmbrellaWorktree(cwd).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(UmbrellaMemberIndex, umbrellaMembers),
+            Effect.provide(Path.layer),
+            Effect.flatMap((layout) =>
+              layout === null ? Effect.succeed(members) : registeredMembersOf(cwd),
+            ),
+          ),
+      ),
+    );
 
   // Only an umbrella pays for the extra lookups; a plain workspace is its own single component.
   const componentsOf = Effect.fn("CheckpointStore.components")(function* (cwd: string) {

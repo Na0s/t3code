@@ -19,6 +19,12 @@ export interface UmbrellaMemberIndexShape {
   readonly replace: (
     umbrellas: ReadonlyMap<string, ReadonlyArray<UmbrellaMemberCheckout>>,
   ) => Effect.Effect<void>;
+  /** Adds or replaces one worktree-mode thread's folder, which `replace` leaves alone. */
+  readonly registerWorktree: (
+    resolvedRoot: string,
+    members: ReadonlyArray<UmbrellaMemberCheckout>,
+  ) => Effect.Effect<void>;
+  readonly forgetWorktree: (resolvedRoot: string) => Effect.Effect<void>;
   readonly membersOf: (resolvedRoot: string) => ReadonlyArray<UmbrellaMemberCheckout>;
   readonly hasMembers: () => boolean;
   /** Members of the umbrella rooted at this work tree that sit inside it, relative with `/` separators. */
@@ -39,6 +45,8 @@ const isStrictlyWithin = (root: string, candidate: string) => {
 
 export const makeIndex = (): UmbrellaMemberIndexShape => {
   let umbrellas = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
+  const worktrees = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
+  const lookup = (root: string) => umbrellas.get(root) ?? worktrees.get(root) ?? EMPTY;
   return {
     replace: (next) =>
       Effect.sync(() => {
@@ -46,12 +54,20 @@ export const makeIndex = (): UmbrellaMemberIndexShape => {
           Array.from(next, ([root, members]) => [NodePath.resolve(root), members] as const),
         );
       }),
-    membersOf: (resolvedRoot) => umbrellas.get(NodePath.resolve(resolvedRoot)) ?? EMPTY,
-    hasMembers: () => umbrellas.size > 0,
+    registerWorktree: (resolvedRoot, members) =>
+      Effect.sync(() => {
+        worktrees.set(NodePath.resolve(resolvedRoot), members);
+      }),
+    forgetWorktree: (resolvedRoot) =>
+      Effect.sync(() => {
+        worktrees.delete(NodePath.resolve(resolvedRoot));
+      }),
+    membersOf: (resolvedRoot) => lookup(NodePath.resolve(resolvedRoot)),
+    hasMembers: () => umbrellas.size > 0 || worktrees.size > 0,
     memberPathsWithin: (resolvedWorktreeRoot) => {
-      if (umbrellas.size === 0) return EMPTY;
+      if (umbrellas.size === 0 && worktrees.size === 0) return EMPTY;
       const root = NodePath.resolve(resolvedWorktreeRoot);
-      return (umbrellas.get(root) ?? EMPTY)
+      return lookup(root)
         .map((member) => NodePath.resolve(member.path))
         .filter((member) => isStrictlyWithin(root, member))
         .map((member) => NodePath.relative(root, member).split(NodePath.sep).join("/"));
@@ -65,6 +81,8 @@ export class UmbrellaMemberIndex extends Context.Reference<UmbrellaMemberIndexSh
   {
     defaultValue: () => ({
       replace: () => Effect.void,
+      registerWorktree: () => Effect.void,
+      forgetWorktree: () => Effect.void,
       membersOf: () => EMPTY,
       hasMembers: () => false,
       memberPathsWithin: () => EMPTY,

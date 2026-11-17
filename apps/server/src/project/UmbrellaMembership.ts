@@ -5,6 +5,7 @@ import type {
   ServerSettings as ServerSettingsSchema,
   UmbrellaMember,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -18,11 +19,14 @@ import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { UmbrellaMemberIndex, type UmbrellaMemberCheckout } from "../vcs/UmbrellaMemberIndex.ts";
+import { managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
+import { registerUmbrellaWorktreesIn } from "./umbrellaWorktreeLayout.ts";
 
 interface UmbrellaProject {
   readonly id: ProjectId;
@@ -281,8 +285,30 @@ export const make = Effect.gen(function* () {
     yield* PubSub.publish(changes, changed);
   });
 
+  const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  // Worktree-mode threads' folders, so their status and checkpoints leave members out after a restart.
+  const registerWorktrees = Effect.gen(function* () {
+    if (Option.isNone(serverConfig)) return;
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
+    );
+    yield* registerUmbrellaWorktreesIn(
+      managedWorktreesDirectories(
+        settings,
+        serverConfig.value.worktreesDir,
+        path,
+        yield* HostProcess.HomeDirectory,
+      ),
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(UmbrellaMemberIndex, index),
+    );
+  });
+
   yield* forkParked(
     Effect.gen(function* () {
+      yield* registerWorktrees;
       yield* rebuildIndex({ scan: true });
       yield* Effect.all(
         [
