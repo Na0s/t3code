@@ -172,7 +172,12 @@ export const make = Effect.gen(function* () {
   const componentsOf = Effect.fn("CheckpointStore.components")(function* (cwd: string) {
     const members = yield* membersOf(cwd);
     if (members.length === 0) return null;
-    const own = yield* isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false));
+    // An umbrella's own repository is rooted at its folder; one enclosing the folder is not its own.
+    const own =
+      (yield* fileSystem
+        .exists(`${cwd.replace(/[\\/]+$/, "")}/.git`)
+        .pipe(Effect.orElseSucceed(() => false))) &&
+      (yield* isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false)));
     return [
       ...(own ? [{ cwd, prefix: "" }] : []),
       ...members.map((member) => ({ cwd: member.path, prefix: `${member.relativePath}/` })),

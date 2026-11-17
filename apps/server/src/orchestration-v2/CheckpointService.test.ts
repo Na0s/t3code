@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointScopeId,
@@ -15,11 +16,15 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
+import * as UmbrellaMemberIndex from "../vcs/UmbrellaMemberIndex.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
@@ -232,4 +237,135 @@ it.effect("records a repository probe failure as an error checkpoint, not a miss
 
     assert.deepEqual(statuses, { baseline: "error", turn: "error" });
   }),
+);
+
+it.effect(
+  "checkpoints a plain umbrella worktree inside another repository by its members alone",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const vcsProcess = yield* VcsProcess.VcsProcess;
+      const git = (cwd: string, args: ReadonlyArray<string>) =>
+        vcsProcess
+          .run({
+            operation: "CheckpointService.test",
+            command: "git",
+            cwd,
+            args,
+            timeoutMs: 10_000,
+          })
+          .pipe(Effect.map((result) => result.stdout.trim()));
+      const initRepo = Effect.fnUntraced(function* (cwd: string) {
+        yield* fileSystem.makeDirectory(cwd, { recursive: true });
+        yield* git(cwd, ["init", "-b", "main"]);
+        yield* git(cwd, ["config", "user.email", "test@test.com"]);
+        yield* git(cwd, ["config", "user.name", "Test"]);
+        yield* fileSystem.writeFileString(`${cwd}/README.md`, "# original\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "initial"]);
+      });
+      const tmp = yield* fileSystem.realPath(
+        yield* fileSystem.makeTempDirectoryScoped({ prefix: "checkpoint-umbrella-" }),
+      );
+      // A T3 home inside a repository puts the thread's folder inside that repository too.
+      const enclosing = `${tmp}/home`;
+      yield* initRepo(enclosing);
+      const folder = `${enclosing}/.t3/worktrees/northwind/feature-1`;
+      yield* fileSystem.makeDirectory(folder, { recursive: true });
+      for (const name of ["api", "site"]) {
+        yield* initRepo(`${tmp}/northwind/${name}`);
+        yield* git(`${tmp}/northwind/${name}`, [
+          "worktree",
+          "add",
+          "-b",
+          "t3/feature",
+          `${folder}/${name}`,
+        ]);
+      }
+      yield* fileSystem.writeFileString(
+        `${folder}.t3-umbrella.json`,
+        JSON.stringify({
+          version: 1,
+          umbrellaRoot: `${tmp}/northwind`,
+          rootRepository: false,
+          members: ["api", "site"].map((name) => ({
+            source: `${tmp}/northwind/${name}`,
+            path: name,
+          })),
+        }),
+      );
+      const scope: OrchestrationV2CheckpointScope = {
+        id: CheckpointScopeId.make("checkpoint-scope:umbrella-worktree"),
+        threadId: ThreadId.make("thread:umbrella-worktree"),
+        runId: RunId.make("run:umbrella-worktree:1"),
+        nodeId: NodeId.make("node:umbrella-worktree:1"),
+        parentScopeId: null,
+        providerThreadId: ProviderThreadId.make("provider-thread:umbrella-worktree"),
+        kind: "root_run",
+        ordinalWithinParent: 0,
+        advancesAppRunCount: true,
+        cwd: folder,
+        createdAt: DateTime.makeUnsafe("2026-07-28T00:00:00.000Z"),
+      };
+
+      // The index starts cold, as right after a restart.
+      yield* Effect.gen(function* () {
+        const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+        const store = yield* CheckpointStore.CheckpointStore;
+        yield* checkpoints.captureBaseline({ scope, ordinalWithinScope: 0 });
+        const baseline = yield* checkpoints.materializeBaselineCheckpoint({
+          scope,
+          ordinalWithinScope: 0,
+          nodeId: scope.nodeId!,
+          capturedAt: scope.createdAt,
+        });
+        for (const name of ["api", "site"]) {
+          yield* fileSystem.writeFileString(`${folder}/${name}/README.md`, "# edited\n");
+        }
+        const turn = yield* checkpoints.capture({
+          scope,
+          ordinalWithinScope: 1,
+          runId: scope.runId!,
+          nodeId: scope.nodeId!,
+          appRunOrdinal: 1,
+          capturedAt: scope.createdAt,
+        });
+        assert.deepEqual(
+          {
+            baseline: baseline.status,
+            turn: turn.status,
+            files: turn.files.map((file) => file.path),
+          },
+          { baseline: "ready", turn: "ready", files: ["api/README.md", "site/README.md"] },
+        );
+        // The enclosing repository is not the folder's: it gets no checkpoint and no branch.
+        assert.strictEqual(yield* git(enclosing, ["for-each-ref", "refs/t3"]), "");
+        assert.isFalse(yield* store.isGitRepository(folder));
+
+        assert.isTrue(
+          yield* store.restoreCheckpoint({ cwd: folder, checkpointRef: baseline.ref! }),
+        );
+        for (const name of ["api", "site"]) {
+          assert.strictEqual(
+            yield* fileSystem.readFileString(`${folder}/${name}/README.md`),
+            "# original\n",
+          );
+          assert.strictEqual(yield* git(`${tmp}/northwind/${name}`, ["status", "--porcelain"]), "");
+        }
+      }).pipe(
+        Effect.provide(
+          CheckpointService.layer.pipe(
+            Layer.provideMerge(Layer.mergeAll(IdAllocator.layer, CheckpointStore.layer)),
+            Layer.provide(VcsDriverRegistry.layer),
+          ),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        VcsProcess.layer.pipe(
+          Layer.provideMerge(UmbrellaMemberIndex.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
 );

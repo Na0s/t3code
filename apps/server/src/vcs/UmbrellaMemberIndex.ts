@@ -19,16 +19,25 @@ export interface UmbrellaMemberIndexShape {
   readonly replace: (
     umbrellas: ReadonlyMap<string, ReadonlyArray<UmbrellaMemberCheckout>>,
   ) => Effect.Effect<void>;
-  /** Adds or replaces one worktree-mode thread's folder, which `replace` leaves alone. */
+  /**
+   * Adds or replaces one worktree-mode thread's folder, which `replace` leaves alone. A plain
+   * folder passes every spelling of its path as `plainAliases`, so Git never searches above it.
+   */
   readonly registerWorktree: (
     resolvedRoot: string,
     members: ReadonlyArray<UmbrellaMemberCheckout>,
+    plainAliases?: ReadonlyArray<string>,
   ) => Effect.Effect<void>;
   readonly forgetWorktree: (resolvedRoot: string) => Effect.Effect<void>;
   readonly membersOf: (resolvedRoot: string) => ReadonlyArray<UmbrellaMemberCheckout>;
   readonly hasMembers: () => boolean;
   /** Members of the umbrella rooted at this work tree that sit inside it, relative with `/` separators. */
   readonly memberPathsWithin: (resolvedWorktreeRoot: string) => ReadonlyArray<string>;
+  /**
+   * For a cwd in a plain umbrella worktree folder, the `GIT_CEILING_DIRECTORIES` that keeps Git
+   * from finding a repository that merely encloses the folder, such as a T3 home inside one.
+   */
+  readonly gitCeilingFor: (cwd: string) => string | null;
 }
 
 const EMPTY: ReadonlyArray<never> = [];
@@ -46,6 +55,8 @@ const isStrictlyWithin = (root: string, candidate: string) => {
 export const makeIndex = (): UmbrellaMemberIndexShape => {
   let umbrellas = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
   const worktrees = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
+  // Alias of a plain worktree folder → its registered root.
+  const plainFolders = new Map<string, string>();
   const lookup = (root: string) => umbrellas.get(root) ?? worktrees.get(root) ?? EMPTY;
   return {
     replace: (next) =>
@@ -54,13 +65,17 @@ export const makeIndex = (): UmbrellaMemberIndexShape => {
           Array.from(next, ([root, members]) => [NodePath.resolve(root), members] as const),
         );
       }),
-    registerWorktree: (resolvedRoot, members) =>
+    registerWorktree: (resolvedRoot, members, plainAliases) =>
       Effect.sync(() => {
-        worktrees.set(NodePath.resolve(resolvedRoot), members);
+        const root = NodePath.resolve(resolvedRoot);
+        worktrees.set(root, members);
+        for (const alias of plainAliases ?? []) plainFolders.set(NodePath.resolve(alias), root);
       }),
     forgetWorktree: (resolvedRoot) =>
       Effect.sync(() => {
-        worktrees.delete(NodePath.resolve(resolvedRoot));
+        const root = NodePath.resolve(resolvedRoot);
+        worktrees.delete(root);
+        for (const [alias, owner] of plainFolders) if (owner === root) plainFolders.delete(alias);
       }),
     membersOf: (resolvedRoot) => lookup(NodePath.resolve(resolvedRoot)),
     hasMembers: () => umbrellas.size > 0 || worktrees.size > 0,
@@ -71,6 +86,14 @@ export const makeIndex = (): UmbrellaMemberIndexShape => {
         .map((member) => NodePath.resolve(member.path))
         .filter((member) => isStrictlyWithin(root, member))
         .map((member) => NodePath.relative(root, member).split(NodePath.sep).join("/"));
+    },
+    gitCeilingFor: (cwd) => {
+      if (plainFolders.size === 0) return null;
+      const target = NodePath.resolve(cwd);
+      for (const alias of plainFolders.keys()) {
+        if (target === alias || isStrictlyWithin(alias, target)) return NodePath.dirname(alias);
+      }
+      return null;
     },
   };
 };
@@ -86,6 +109,7 @@ export class UmbrellaMemberIndex extends Context.Reference<UmbrellaMemberIndexSh
       membersOf: () => EMPTY,
       hasMembers: () => false,
       memberPathsWithin: () => EMPTY,
+      gitCeilingFor: () => null,
     }),
   },
 ) {}

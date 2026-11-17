@@ -24,6 +24,7 @@ import type { SourceControlProcessInput } from "@t3tools/source-control-core/ser
 
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -208,6 +209,7 @@ const canRetryFullFsync = (stderr: string) =>
 export const make = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const hostPlatform = yield* HostProcess.Platform;
+  const umbrellaMembers = yield* UmbrellaMemberIndex;
   const vcsProcesses = yield* Semaphore.make(VCS_PROCESS_CONCURRENCY);
   const nonGitProcesses = yield* Semaphore.make(NON_GIT_PROCESS_CONCURRENCY);
   const keyedProcesses = new Map<string, Semaphore.Semaphore>();
@@ -218,6 +220,14 @@ export const make = Effect.gen(function* () {
       keyedProcesses.set(concurrency.key, semaphore);
     }
     return semaphore.withPermits(1);
+  };
+
+  // A plain umbrella worktree folder is no repository, even inside one, such as a T3 home in a repo.
+  const gitCeilingEnv = (input: VcsProcessInput) => {
+    if (input.command !== "git") return {};
+    // Git runs in `cwd` through `-C` even when it spawns elsewhere.
+    const ceiling = umbrellaMembers.gitCeilingFor(input.cwd);
+    return ceiling === null ? {} : { GIT_CEILING_DIRECTORIES: ceiling };
   };
 
   const spawn = Effect.fn("VcsProcess.spawn")(function* (
@@ -241,6 +251,7 @@ export const make = Effect.gen(function* () {
           // Failures are read by English patterns; without LANG, macOS Git follows the system language.
           // LANGUAGE leaves LC_CTYPE, which hooks inherit, alone.
           ...(input.command === "git" ? { LANGUAGE: "C" } : {}),
+          ...gitCeilingEnv(input),
           ...input.env,
           ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
         },

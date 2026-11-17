@@ -101,7 +101,12 @@ export const registerUmbrellaWorktree = Effect.fn("UmbrellaWorktree.register")(f
       Effect.map((memberPath) => ({ path: memberPath, relativePath: member.path })),
     ),
   );
-  yield* index.registerWorktree(yield* realPath(layout.path), members);
+  const root = yield* realPath(layout.path);
+  yield* index.registerWorktree(
+    root,
+    members,
+    layout.rootRepository ? undefined : [...new Set([path.resolve(layout.path), root])],
+  );
 });
 
 /** Reads and registers the umbrella worktree at `cwd`, for callers that may run before the startup scan. */

@@ -137,6 +137,9 @@ it.layer(layerTest)("UmbrellaWorktree", (it) => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const umbrella = yield* makeUmbrella(rootRepository);
+        // A T3 home inside a repository puts every thread folder inside that repository too.
+        const { baseDir } = yield* ServerConfig.ServerConfig;
+        if (!(yield* fileSystem.exists(NodePath.join(baseDir, ".git")))) yield* initRepo(baseDir);
         const worktrees = yield* makeUmbrellaWorktrees;
         const created = yield* worktrees.create({
           umbrellaRoot: umbrella.root,
@@ -182,6 +185,9 @@ it.layer(layerTest)("UmbrellaWorktree", (it) => {
             contacts.replace(folder, umbrella.root),
           );
           assert.isFalse(yield* fileSystem.exists(NodePath.join(folder, ".git")));
+          // Git never finds the enclosing repository from the plain folder.
+          const outer = yield* Effect.exit(git(folder, ["rev-parse", "--show-toplevel"]));
+          assert.isTrue(outer._tag === "Failure");
         }
 
         const layout = yield* readUmbrellaWorktree(folder);

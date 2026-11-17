@@ -877,7 +877,10 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
                     driver: { checkpoints: checkpointsFor(cwd) },
                   } as unknown as VcsDriverRegistry.VcsDriverHandle),
               }),
-              FileSystem.layerNoop({ realPath: (value) => Effect.succeed(value) }),
+              FileSystem.layerNoop({
+                realPath: (value) => Effect.succeed(value),
+                exists: (value) => Effect.succeed(value === `${root}/.git`),
+              }),
             ),
           ),
           Effect.provideService(UmbrellaMemberIndex.UmbrellaMemberIndex, index),
