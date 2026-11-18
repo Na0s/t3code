@@ -10,6 +10,7 @@ import {
   umbrellaAdoptionTargets,
   umbrellaMemberLabel,
   umbrellaMembersForThread,
+  umbrellaMembersInFiles,
 } from "./umbrella.ts";
 
 const environmentId = EnvironmentId.make("desktop");
@@ -111,6 +112,40 @@ describe("umbrella membership", () => {
   it("labels outside members by folder name", () => {
     expect(umbrellaMemberLabel({ relativePath: "sites/web" })).toBe("sites/web");
     expect(umbrellaMemberLabel({ relativePath: "../../work/acme-site" })).toBe("acme-site");
+  });
+});
+
+describe("umbrellaMembersInFiles", () => {
+  const members = [
+    { relativePath: "api" },
+    { relativePath: "apps" },
+    { relativePath: "apps/web" },
+    { relativePath: "../../design/site" },
+  ];
+  const labels = (touched: ReadonlyArray<{ relativePath: string } | null>) =>
+    touched.map((member) => member?.relativePath ?? null);
+
+  it("names each member a file sits in once, in member order, and the root for the rest", () => {
+    expect(
+      labels(
+        umbrellaMembersInFiles(
+          members,
+          ["apps/web/index.ts", "api/routes.txt", "api/README.md", "apps-notes.md"],
+          false,
+        ),
+      ),
+    ).toEqual([null, "api", "apps/web"]);
+    expect(labels(umbrellaMembersInFiles(members, ["apps/README.md"], false))).toEqual(["apps"]);
+    expect(
+      labels(umbrellaMembersInFiles(members, ["../../design/site/index.html"], false)),
+    ).toEqual(["../../design/site"]);
+    expect(umbrellaMembersInFiles([], ["README.md"], false)).toEqual([]);
+  });
+
+  it("finds adopted members under the worktree folder's _external", () => {
+    expect(
+      labels(umbrellaMembersInFiles(members, ["_external/site/index.html", "api/a.ts"], true)),
+    ).toEqual(["api", "../../design/site"]);
   });
 });
 

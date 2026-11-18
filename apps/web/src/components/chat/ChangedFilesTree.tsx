@@ -40,6 +40,10 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   onToggleAllDirectories: () => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
+  /** The umbrella's projects the files are in, named beside the count. */
+  projects?:
+    | ReadonlyArray<{ readonly key: string; readonly label: string; readonly icon: ReactNode }>
+    | undefined;
 }) {
   const {
     runId,
@@ -76,6 +80,22 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
               className="text-xs leading-4"
             />
           )}
+          {props.projects && props.projects.length > 0 ? (
+            <span
+              data-changed-files-projects=""
+              className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-normal text-muted-foreground"
+            >
+              <span>
+                in {props.projects.length === 1 ? "1 project" : `${props.projects.length} projects`}
+              </span>
+              {props.projects.map((project) => (
+                <span key={project.key} className="inline-flex min-w-0 items-center gap-1">
+                  {project.icon}
+                  <span className="truncate text-foreground">{project.label}</span>
+                </span>
+              ))}
+            </span>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {hasDirectories && (
