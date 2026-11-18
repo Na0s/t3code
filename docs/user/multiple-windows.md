@@ -40,5 +40,7 @@ appearance stay shared by every window.
 ## Mini Mode
 
 Choose **Enter Mini Mode** in the main window's command palette to turn the main window into a
-compact panel. It lists your other open windows, so you can bring one to the front, and shows your
-usage limits. Choose **Expand** to return to the full app.
+compact panel. It leads with your usage limits: how much of each provider's plan is left and when it
+resets. The limits are reread when the panel opens or regains focus, and on **Refresh limits**. Below
+them it lists your other open windows, so you can bring one to the front or open a new one. Choose
+**Expand** to return to the full app.
