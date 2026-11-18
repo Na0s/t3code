@@ -33,6 +33,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  gatherUmbrellaThreads,
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
@@ -1632,6 +1633,55 @@ describe("groupSidebarThreadsByProject", () => {
     expect(summarize((group) => group.projectKey === "fleet")).toEqual([
       { projectKey: "t3code", threads: ["a", "b"] },
       { projectKey: "fleet", threads: [] },
+    ]);
+  });
+});
+
+describe("gatherUmbrellaThreads", () => {
+  it("gathers each umbrella's own and member threads where its first thread is", () => {
+    const northwind = ProjectId.make("northwind");
+    const api = ProjectId.make("api");
+    const acme = ProjectId.make("acme");
+    const umbrellas = [
+      {
+        projectKey: "northwind",
+        memberProjectRefs: [
+          { environmentId: localEnvironmentId, projectId: northwind },
+          { environmentId: localEnvironmentId, projectId: api },
+        ],
+      },
+      {
+        projectKey: "acme",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: acme }],
+      },
+    ];
+    const thread = (id: string, projectId: ProjectId) => ({
+      id,
+      environmentId: localEnvironmentId,
+      projectId,
+    });
+    const summarize = (threads: ReadonlyArray<ReturnType<typeof thread>>) =>
+      gatherUmbrellaThreads(umbrellas, threads).map((run) => ({
+        umbrella: run.umbrella?.projectKey ?? null,
+        threads: run.threads.map((entry) => entry.id),
+      }));
+
+    expect(
+      summarize([
+        thread("other-1", ProjectId.make("fleet")),
+        thread("api-1", api),
+        thread("other-2", ProjectId.make("fleet")),
+        thread("acme-1", acme),
+        thread("northwind-1", northwind),
+        thread("other-3", ProjectId.make("notes")),
+        thread("api-2", api),
+      ]),
+    ).toEqual([
+      { umbrella: null, threads: ["other-1"] },
+      { umbrella: "northwind", threads: ["api-1", "northwind-1", "api-2"] },
+      { umbrella: null, threads: ["other-2"] },
+      { umbrella: "acme", threads: ["acme-1"] },
+      { umbrella: null, threads: ["other-3"] },
     ]);
   });
 });

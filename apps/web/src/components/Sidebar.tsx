@@ -107,6 +107,7 @@ import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarFolderDrop } from "./sidebar/SidebarFolderDrop";
 import {
+  isUmbrellaProject,
   pickableProjectGroups,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
@@ -180,6 +181,7 @@ import {
 import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
+  gatherUmbrellaThreads,
   groupSidebarThreadsByProject,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
@@ -278,6 +280,7 @@ import {
 } from "../umbrellaMembership.logic";
 import {
   SidebarProjectFolderHeader,
+  SidebarUmbrellaHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
 import {
@@ -437,6 +440,8 @@ function useSidebarThreads(input: {
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
+  // Outside boring mode, each of these gathers its Active threads under its name.
+  readonly umbrellaGroups: readonly SidebarProjectSnapshot[];
 }) {
   const {
     projectScopeKey,
@@ -449,6 +454,7 @@ function useSidebarThreads(input: {
     routeRowThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
+    umbrellaGroups,
   } = input;
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
@@ -500,8 +506,27 @@ function useSidebarThreads(input: {
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
-  const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
-    partition;
+  const { pinnedThreads, workingThreads, snoozedThreads, settledThreads } = partition;
+  const umbrellaRuns =
+    folderGroups === null && umbrellaGroups.length > 0
+      ? gatherUmbrellaThreads(umbrellaGroups, partition.activeThreads)
+      : null;
+  const activeThreads = umbrellaRuns
+    ? umbrellaRuns.flatMap((run) => run.threads)
+    : partition.activeThreads;
+  const activeUmbrellaByThreadKey = new Map<
+    string,
+    { readonly group: SidebarProjectSnapshot; readonly first: boolean }
+  >();
+  for (const run of umbrellaRuns ?? []) {
+    if (run.umbrella === null) continue;
+    for (const [index, thread] of run.threads.entries()) {
+      activeUmbrellaByThreadKey.set(threadShellKey(thread), {
+        group: run.umbrella,
+        first: index === 0,
+      });
+    }
+  }
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -575,6 +600,8 @@ function useSidebarThreads(input: {
   }
   return {
     ...partition,
+    activeThreads,
+    activeUmbrellaByThreadKey,
     threads,
     workingShelfEnabled,
     searchableThreads: [
@@ -1331,6 +1358,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     draggableThreadKeys,
     activeReorderableThreadKeys,
     activeThreads,
+    activeUmbrellaByThreadKey,
     workingThreads,
     snoozedThreads,
     settledThreads,
@@ -1378,6 +1406,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+    umbrellaGroups: projectGroups.filter((group) => group.memberProjects.some(isUmbrellaProject)),
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -2033,6 +2062,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectFolders
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
+    // Umbrella names come and go without moving any thread row.
+    [...activeUmbrellaByThreadKey].flatMap(([key, { first }]) => (first ? [key] : [])).join("\n"),
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
   ].join("\0");
@@ -3389,6 +3420,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
+                        // Sits under an umbrella's name in the Active list.
+                        nested = false,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3414,6 +3447,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
+                            nested={nested}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3524,7 +3558,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          const umbrella =
+                            item.section === "active"
+                              ? activeUmbrellaByThreadKey.get(item.key)
+                              : undefined;
+                          if (umbrella?.first) {
+                            items.push(
+                              <SidebarUmbrellaHeader
+                                key={`umbrella:${umbrella.group.projectKey}`}
+                                group={umbrella.group}
+                                onContextMenu={handleProjectFolderContextMenu}
+                              />,
+                            );
+                          }
+                          items.push(
+                            renderThreadRow(
+                              threadByKey.get(item.key)!,
+                              item.section,
+                              undefined,
+                              umbrella !== undefined,
+                            ),
+                          );
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {

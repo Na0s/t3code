@@ -552,6 +552,8 @@ type SidebarThreadRowProps = {
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
+  // Indents the row under its umbrella's name.
+  nested?: boolean;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1440,6 +1442,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        props.nested && "ps-3",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1482,10 +1485,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 <span
                   className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
                 >
-                  {props.projectDisplayName}
                   {props.umbrellaMemberLabel ? (
-                    <span className="text-secondary-label/70"> · {props.umbrellaMemberLabel}</span>
-                  ) : null}
+                    <>
+                      {props.umbrellaMemberLabel}
+                      <span className="text-secondary-label/70"> · {props.projectDisplayName}</span>
+                    </>
+                  ) : (
+                    props.projectDisplayName
+                  )}
                 </span>
               ) : (
                 <span className="flex-1" />

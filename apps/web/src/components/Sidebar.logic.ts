@@ -1065,6 +1065,48 @@ export function groupSidebarThreadsByProject<
   return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
 }
 
+/**
+ * The default sidebar's rows in runs: each umbrella's threads, its own and its members', gather
+ * at the place of its first thread, and every other thread is a run of one with no umbrella.
+ */
+export function gatherUmbrellaThreads<
+  TGroup extends {
+    readonly memberProjectRefs: ReadonlyArray<{
+      readonly environmentId: EnvironmentId;
+      readonly projectId: string;
+    }>;
+  },
+  TThread extends Pick<SidebarThreadSummary, "environmentId" | "projectId">,
+>(
+  umbrellas: readonly TGroup[],
+  threads: readonly TThread[],
+): Array<{ readonly umbrella: TGroup | null; readonly threads: TThread[] }> {
+  const umbrellaByProject = new Map<string, TGroup>();
+  for (const umbrella of umbrellas) {
+    for (const ref of umbrella.memberProjectRefs) {
+      umbrellaByProject.set(`${ref.environmentId}:${ref.projectId}`, umbrella);
+    }
+  }
+  const runs: Array<{ readonly umbrella: TGroup | null; readonly threads: TThread[] }> = [];
+  const runByUmbrella = new Map<TGroup, (typeof runs)[number]>();
+  for (const thread of threads) {
+    const umbrella = umbrellaByProject.get(`${thread.environmentId}:${thread.projectId}`);
+    if (umbrella === undefined) {
+      runs.push({ umbrella: null, threads: [thread] });
+      continue;
+    }
+    const run = runByUmbrella.get(umbrella);
+    if (run) {
+      run.threads.push(thread);
+      continue;
+    }
+    const created = { umbrella, threads: [thread] };
+    runByUmbrella.set(umbrella, created);
+    runs.push(created);
+  }
+  return runs;
+}
+
 export type SidebarV2TopStatusKind =
   | "approval"
   | "done"
