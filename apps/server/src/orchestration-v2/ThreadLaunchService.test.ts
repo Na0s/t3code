@@ -3214,12 +3214,11 @@ it.effect("checks out every member of a plain umbrella folder into one thread fo
         { source: "/repo/api", path: "api" },
         { source: "/elsewhere/site", path: "_external/site" },
       ]);
+      // Members are checked out concurrently, so the call order is not fixed.
       assert.deepEqual(
-        harness.createWorktree.mock.calls.map(([input]) => [
-          input.cwd,
-          input.path,
-          input.newRefName,
-        ]),
+        harness.createWorktree.mock.calls
+          .map(([input]) => [input.cwd, input.path, input.newRefName])
+          .toSorted(([a], [b]) => String(a).localeCompare(String(b))),
         [
           ["/elsewhere/site", `${thread.worktreePath}/_external/site`, "feature"],
           ["/repo/api", `${thread.worktreePath}/api`, "feature"],

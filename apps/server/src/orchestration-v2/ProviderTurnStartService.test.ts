@@ -165,6 +165,15 @@ function startWithMissingWorktree(
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         Layer.succeed(FileSystem.FileSystem, {
           exists: () => Effect.succeed(false),
+          readFileString: (target: string) =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "FileSystem",
+                method: "readFileString",
+                pathOrDescriptor: target,
+              }),
+            ),
           realPath: (target: string) =>
             normalize(target) in realPaths
               ? Effect.succeed(realPaths[normalize(target)])
@@ -301,6 +310,15 @@ const layerRestoreLeaseTest = layerThreadWorktreeRestore.pipe(
       Layer.succeed(FileSystem.FileSystem, {
         exists: restoreLeaseExists,
         realPath: (target: string) => Effect.succeed(normalize(target)),
+        readFileString: (target: string) =>
+          Effect.fail(
+            PlatformError.systemError({
+              _tag: "NotFound",
+              module: "FileSystem",
+              method: "readFileString",
+              pathOrDescriptor: target,
+            }),
+          ),
       } as never),
       layerWorktreeLocation(),
       Layer.mock(GitWorkflow.GitWorkflowService)({
@@ -365,6 +383,15 @@ it.each([
               exists: () => Effect.succeed(false),
               realPath: (target: string) => Effect.succeed(target),
               makeDirectory,
+              readFileString: (target: string) =>
+                Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "readFileString",
+                    pathOrDescriptor: target,
+                  }),
+                ),
             } as never),
             Path.layer,
             Layer.mock(ServerConfig.ServerConfig)({
