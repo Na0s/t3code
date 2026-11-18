@@ -71,9 +71,10 @@ API, a website, and copy or design files beside them. Add the folder as a projec
 for repositories up to three folders below it, skipping hidden folders, dependency and vendored
 folders such as `node_modules`, `vendor`, and `venv`, linked worktrees, and submodules.
 
-Nothing changes until you confirm. When repositories are found, the diff panel offers **Use as
-umbrella**, and **Settings → Projects →** your project **→ Umbrella checkouts** lists them with a
-**Use as umbrella** switch. Both show every repository that will join before you turn it on.
+Nothing changes until you confirm. When repositories are found, the diff panel and the top of
+your project's page in **Settings → Projects** offer **Use as umbrella**, and **Umbrella
+checkouts** on that page lists them with a **Use as umbrella** switch. Each shows every repository
+that will join before you turn it on.
 Adding a checkout by path in that section also turns the umbrella on. Turn the switch off to stop.
 A folder inside another repository cannot be an umbrella; use that repository's root instead.
 
@@ -84,9 +85,10 @@ keeps it off. Reverting a turn restores only the members whose files differ from
 the folder is a repository itself, its status, diffs, commits, and checkpoints leave the members
 out.
 
-Projects you already have for a member fold into the umbrella's sidebar row: the same folder on
-the umbrella's machine, or the same repository on any connected machine. Their threads name the
-member they belong to. Use **Add to umbrella** and **Remove _member_ from umbrella** from a project
+Projects you already have for a member fold into the umbrella: the same folder on the umbrella's
+machine, or the same repository on any connected machine. The sidebar lists the umbrella's active
+threads and its members' together under its name, and a member's thread names its member first.
+A command palette search lists the umbrella with its matching members under it. Use **Add to umbrella** and **Remove _member_ from umbrella** from a project
 folder's menu in the sidebar or from the command palette. For a clone on another machine,
 removing it only stops grouping it there; its grouping rule in **Settings → Projects**
 brings it back. To add a checkout stored elsewhere on the same machine, or to remove or restore a
