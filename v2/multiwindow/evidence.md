@@ -1,0 +1,26 @@
+## Evidence
+
+Steps: Start the desktop app with two projects from each of two synthetic folders (`northwind/api`, `northwind/storefront`, `hobby/pixel-dungeon`, `hobby/synth-plugin`), one replayed thread each. Filter the main window to `api` and `storefront`. Search the command palette for `window` and `mini mode`. Open **New Window** and filter it to `pixel-dungeon` and `synth-plugin`. Close that window with its native close button and save it as `Hobby`. Open **Settings → General**, reopen `Hobby`, and load a local page in its browser panel. Enter Mini Mode from the main window, then expand. On base, repeat each step as far as it goes, then close the only window with its native close button.
+
+Environment for every capture: Linux (WSL2), Electron desktop dev build (`vp run dev:desktop`) on a 1280×800 Xvfb screen, light theme, fresh synthetic data (isolated `--home-dir` and Electron profile), replay provider, real X input (XTEST) for clicks, keys and the native close button.
+
+Proven: base has no second window, window palette entries, Windows settings, save prompt, Mini Mode, or per-window preview. Head has all six. The saved `Hobby` profile kept its two-project filter and bounds, and reopened with them.
+
+| Capture | Before — [7d32075e37](https://github.com/pingdotgg/t3code/commit/7d32075e3757ded707914e2450c3e392a9665765) | After — [636249f975](https://github.com/Na0s/t3code/commit/636249f975a67a408f2b03a4f5dbfc6ba1530339) |
+| --- | --- | --- |
+| Separate project filters | ![Before: the single window, its sidebar filtered to api and storefront; there is no way to open another](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/before/01-two-windows.png) | ![After: two windows side by side, the left filtered to api and storefront, the right to synth-plugin and pixel-dungeon](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/after/01-two-windows.png) |
+| Command palette, `window` | ![Before: palette search for window lists only settings rows](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/before/02-command-palette.png) | ![After: palette lists New Window with Ctrl+Alt+Shift+N, Enter Mini Mode, and the Windows settings row](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/after/02-command-palette.png) |
+| Settings → General | ![Before: Confirmations is followed directly by Display](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/before/03-settings-windows.png) | ![After: a Windows section lists the main window and the closed Hobby profile, with rename, theme, Open and delete controls](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/after/03-settings-windows.png) |
+| Native close button | ![Before: clicking the close button closes the only window at once; the screen is empty and nothing asks to save](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/before/04-close-prompt.png) | ![After: closing the unsaved window asks Save this window? with a name field and Cancel, Don't Save and Save](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/after/04-close-prompt.png) |
+| Mini Mode | ![Before: palette search for mini lists no Mini Mode command](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/before/05-mini-mode.png) | ![After: the main window is a 320×460 panel listing the Hobby window and usage limits (usage redacted), with Expand and New Window](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/after/05-mini-mode.png) |
+| Browser preview | ![Before: the local page previews in the main window, the only window there is](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/before/06-preview.png) | ![After: the same page previews in the Hobby window's browser panel](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/after/06-preview.png) |
+
+Recordings start after the app has loaded. The Mini Mode recording paints the usage area out on every frame.
+
+| Case | Before | After |
+| --- | --- | --- |
+| Open a new window and filter it | [Before video](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/video/before-new-window.webm) | [After video](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/video/after-new-window.webm) |
+| Close an unsaved window | [Before video](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/video/before-close.webm) | [After video](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/video/after-close.webm) |
+| Mini Mode and back | [Before video](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/video/before-mini.webm) | [After video](https://raw.githubusercontent.com/Na0s/t3code/pr-evidence/v2/multiwindow/video/after-mini.webm) |
+
+Not captured: the native **Window** menu. On Linux the app draws its own title bar (window controls overlay) and shows no menu bar, so there is nothing to capture here; its entries are covered by `DesktopApplicationMenu.test.ts`. macOS and Windows were not run.
