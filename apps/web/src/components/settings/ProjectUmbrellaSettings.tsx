@@ -1,14 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AuthSettingsWriteScope, repositoryGroupingDisplayNameOf } from "@t3tools/contracts";
+import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
+import { UmbrellaIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 
 import { useUmbrellaMembershipEdits } from "../../hooks/useUmbrellaMembershipEdits";
-import type {
-  SidebarProjectGroupMember,
-  SidebarProjectSnapshot,
-} from "../../sidebarProjectGrouping";
+import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentsWithScope } from "../../state/session";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -59,33 +59,79 @@ function UmbrellaAdoptForm(props: {
   );
 }
 
-/** Members, exclusions, and adoption for each project in the group that can hold checkouts. */
-export function ProjectUmbrellaSettings({ group }: { group: SidebarProjectSnapshot }) {
+/** Each project in the group that can hold checkouts, with its umbrella state and writability. */
+function useUmbrellaProjects(group: SidebarProjectSnapshot) {
   const { environments } = useEnvironments();
   const pendingWrites = useAtomValue(pendingScopedWritesAtom);
   const shownEnvironments = applyPendingScopedWrites(environments, pendingWrites);
-  const edits = useUmbrellaMembershipEdits();
   const umbrellas = group.memberProjects.filter(
     (project) =>
       !project.isScratch &&
       !group.foldedUmbrellaMembers.has(`${project.environmentId}:${project.id}`),
   );
   const writableIds = useEnvironmentsWithScope(umbrellas, AuthSettingsWriteScope);
-  if (umbrellas.length === 0) return null;
-
-  const rowsFor = (project: SidebarProjectGroupMember) => {
+  return umbrellas.map((project) => {
     const environment = shownEnvironments.find(
       (candidate) => candidate.environmentId === project.environmentId,
     );
-    const environmentLabel = project.environmentLabel ?? environment?.label ?? "this environment";
     const overrides = environment?.serverConfig?.settings.projectSettingsOverrides[project.id];
-    const enabled = overrides?.umbrellaEnabled === true;
-    const excluded = overrides?.umbrellaExcludedPaths ?? [];
-    const suggestions = project.umbrellaSuggestions ?? [];
-    const disabled =
-      !writableIds.has(project.environmentId) ||
-      environment?.connection.phase !== "connected" ||
-      !environment.serverConfig;
+    return {
+      project,
+      environmentLabel: project.environmentLabel ?? environment?.label ?? "this environment",
+      enabled: overrides?.umbrellaEnabled === true,
+      excluded: overrides?.umbrellaExcludedPaths ?? [],
+      suggestions: project.umbrellaSuggestions ?? [],
+      disabled:
+        !writableIds.has(project.environmentId) ||
+        environment?.connection.phase !== "connected" ||
+        !environment.serverConfig,
+    };
+  });
+}
+
+/** Offers the umbrella at the top of a project's settings when its folder holds checkouts. */
+export function ProjectUmbrellaPrompt({ group }: { group: SidebarProjectSnapshot }) {
+  const edits = useUmbrellaMembershipEdits();
+  const candidate = useUmbrellaProjects(group).find(
+    (entry) =>
+      !entry.enabled &&
+      !entry.disabled &&
+      entry.suggestions.length > 0 &&
+      entry.project.umbrellaEnclosingRepository === undefined,
+  );
+  if (candidate === undefined) return null;
+  const { project, suggestions } = candidate;
+  return (
+    <Alert variant="info">
+      <UmbrellaIcon aria-hidden />
+      <AlertTitle>
+        {suggestions.length === 1 ? "1 project" : `${suggestions.length} projects`} detected within
+        this folder: {suggestions.map(umbrellaMemberLabel).join(", ")}.
+      </AlertTitle>
+      <AlertDescription>Use {group.displayName} as umbrella project?</AlertDescription>
+      <AlertAction>
+        <Button size="sm" onClick={() => void edits.confirmEnable(project)}>
+          Use as umbrella
+        </Button>
+      </AlertAction>
+    </Alert>
+  );
+}
+
+/** Members, exclusions, and adoption for each project in the group that can hold checkouts. */
+export function ProjectUmbrellaSettings({ group }: { group: SidebarProjectSnapshot }) {
+  const edits = useUmbrellaMembershipEdits();
+  const umbrellas = useUmbrellaProjects(group);
+  if (umbrellas.length === 0) return null;
+
+  const rowsFor = ({
+    project,
+    environmentLabel,
+    enabled,
+    excluded,
+    suggestions,
+    disabled,
+  }: (typeof umbrellas)[number]) => {
     const prefix = umbrellas.length > 1 ? `${environmentLabel} · ` : "";
     if (project.umbrellaEnclosingRepository !== undefined) {
       return (

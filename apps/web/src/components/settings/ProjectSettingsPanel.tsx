@@ -51,7 +51,7 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
-import { ProjectUmbrellaSettings } from "./ProjectUmbrellaSettings";
+import { ProjectUmbrellaPrompt, ProjectUmbrellaSettings } from "./ProjectUmbrellaSettings";
 import {
   defaultProjectIcon,
   hasDefaultProjectIcon,
@@ -518,6 +518,7 @@ function ProjectDetail({
   return (
     <>
       <SettingsPageContainer className="gap-6">
+        <ProjectUmbrellaPrompt group={group} />
         <Alert variant="info">
           <InfoIcon aria-hidden />
           <AlertDescription>
