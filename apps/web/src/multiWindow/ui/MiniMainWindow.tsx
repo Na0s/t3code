@@ -104,7 +104,10 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
           notifyWindowActionFailure("Couldn't leave Mini Mode", cause);
         });
       }}
-      onNewWindow={() => openNewDesktopWindow(bridge)}
+      onNewWindow={
+        // Off in Settings, the main process refuses new windows, so don't offer one.
+        windowsState?.multiWindowEnabled === false ? undefined : () => openNewDesktopWindow(bridge)
+      }
       onFocusWindow={(windowId) => {
         bridge.focus(windowId).catch((cause: unknown) => {
           notifyWindowActionFailure("Couldn't focus the window", cause);
@@ -134,7 +137,8 @@ export function MiniPanel({
   readonly onRefresh: () => void;
   readonly onOpenExternal: (url: string) => void;
   readonly onExpand: () => void;
-  readonly onNewWindow: () => void;
+  /** Omitted while multiple windows are turned off. */
+  readonly onNewWindow?: (() => void) | undefined;
   readonly onFocusWindow: (windowId: number) => void;
 }) {
   return (
@@ -168,12 +172,14 @@ export function MiniPanel({
           {windows !== null && windows.length > 0 ? (
             <span className="text-2xs text-muted-foreground tabular-nums">{windows.length}</span>
           ) : null}
-          <span className="ms-auto">
-            <Button size="compact" variant="ghost" onClick={onNewWindow}>
-              <AppWindowIcon />
-              New Window
-            </Button>
-          </span>
+          {onNewWindow === undefined ? null : (
+            <span className="ms-auto">
+              <Button size="compact" variant="ghost" onClick={onNewWindow}>
+                <AppWindowIcon />
+                New Window
+              </Button>
+            </span>
+          )}
         </div>
         <div className="min-h-0 flex-1">
           <ScrollArea scrollFade>

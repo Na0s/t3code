@@ -23,6 +23,7 @@ const LONG_TITLE =
 async function renderPanel(
   usage: MiniUsagePresentations,
   windows: Parameters<typeof MiniPanel>[0]["windows"],
+  { multiWindowEnabled = true }: { readonly multiWindowEnabled?: boolean } = {},
 ) {
   await page.viewport(320, 460);
   const onFocusWindow = vi.fn();
@@ -35,7 +36,7 @@ async function renderPanel(
       onRefresh={() => {}}
       onOpenExternal={() => {}}
       onExpand={() => {}}
-      onNewWindow={() => {}}
+      onNewWindow={multiWindowEnabled ? () => {} : undefined}
       onFocusWindow={onFocusWindow}
     />,
   );
@@ -62,6 +63,17 @@ describe("MiniPanel", () => {
     await expect.element(windows.getByText("Unsaved")).toBeVisible();
     await windows.getByRole("button", { name: /Northwind/ }).click();
     expect(onFocusWindow).toHaveBeenCalledWith(2);
+  });
+
+  it("offers no New Window while multiple windows are turned off", async () => {
+    const { screen } = await renderPanel(
+      presentations([CLAUDE]),
+      [openWindow(2, "Northwind", "Rate limit review")],
+      { multiWindowEnabled: false },
+    );
+    await using _screen = screen;
+    await expect.element(screen.getByRole("button", { name: "Expand" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "New Window" }).query()).toBeNull();
   });
 
   it("keeps usage, the window list and both actions on screen when every list is long", async () => {
