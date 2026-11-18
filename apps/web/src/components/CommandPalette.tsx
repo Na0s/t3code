@@ -809,8 +809,15 @@ function OpenCommandPaletteDialog(props: {
     [browseNavigation],
   );
 
-  const openProjectFromSearch = async (project: (typeof projects)[number]) => {
-    const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+  // A member row opens its own project, not the umbrella group it folds into.
+  const openProjectFromSearch = async (
+    project: (typeof projects)[number],
+    options?: { readonly wholeGroup: boolean },
+  ) => {
+    const group =
+      options?.wholeGroup === false
+        ? undefined
+        : projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
     const groupedProjectKeys = group
       ? new Set(
           group.memberProjectRefs.map(
@@ -855,6 +862,7 @@ function OpenCommandPaletteDialog(props: {
       projectGroupByTargetKey,
       locationByEnvironmentId: projectEnvironmentLocationById,
       runProject: openProjectFromSearch,
+      openMemberProject: (project) => openProjectFromSearch(project, { wholeGroup: false }),
       pin: projectPin,
     }),
     rowOrderKey("project"),

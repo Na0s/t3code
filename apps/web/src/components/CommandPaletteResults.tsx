@@ -270,6 +270,7 @@ function CommandPaletteResultRow(props: {
         props.onExecuteItem(props.item);
       }}
     >
+      {props.item.parentValue === undefined ? null : <span aria-hidden className="w-4 shrink-0" />}
       <CommandPaletteTitleIcon>{props.item.icon}</CommandPaletteTitleIcon>
       {props.item.description || props.item.threadContentMatch ? (
         <span className="flex min-w-0 flex-1 flex-col">
