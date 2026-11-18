@@ -14,8 +14,11 @@ export function useCommandPaletteWindowItems(): ReadonlyArray<CommandPaletteActi
   const context = readDesktopWindowContext();
   const currentProfileId = selectCurrentWindowProfile(windowsState, context)?.id ?? null;
 
-  const items: CommandPaletteActionItem[] = [
-    {
+  // Off, the saved windows cannot open either.
+  const multiWindowEnabled = windowsState?.multiWindowEnabled !== false;
+  const items: CommandPaletteActionItem[] = [];
+  if (multiWindowEnabled) {
+    items.push({
       kind: "action",
       value: "action:window-new",
       title: "New Window",
@@ -23,9 +26,9 @@ export function useCommandPaletteWindowItems(): ReadonlyArray<CommandPaletteActi
       icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "window.new",
       run: async () => openNewDesktopWindow(bridge),
-    },
-  ];
-  for (const profile of windowsState?.profiles ?? []) {
+    });
+  }
+  for (const profile of multiWindowEnabled ? (windowsState?.profiles ?? []) : []) {
     if (profile.isDefault || profile.id === currentProfileId) continue;
     items.push({
       kind: "action",

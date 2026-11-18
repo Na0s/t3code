@@ -4,6 +4,7 @@ import { toastManager } from "../../components/ui/toast";
 import { registerCommands, registerMenuAction } from "../../shortcuts/dispatcher";
 import { useUiStateStore } from "../../uiStateStore";
 import { desktopWindowsBridge } from "../windowContext";
+import { readDesktopWindowsState } from "../windowsState";
 
 export function notifyWindowActionFailure(title: string, cause: unknown): void {
   console.error(title, cause);
@@ -29,6 +30,8 @@ export function registerDesktopWindowCommands(): () => void {
   const disposers = [
     registerCommands({
       "window.new": (event) => {
+        // Off, the chord is free for whatever else is bound to it.
+        if (readDesktopWindowsState()?.multiWindowEnabled === false) return false;
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) openNewDesktopWindow(bridge);

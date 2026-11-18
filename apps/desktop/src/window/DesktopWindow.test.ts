@@ -318,6 +318,12 @@ function layerTest(input: {
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
+    setMultiWindowEnabled: (enabled) =>
+      Effect.sync(() => {
+        const changed = desktopSettings.multiWindowEnabled !== enabled;
+        desktopSettings = { ...desktopSettings, multiWindowEnabled: enabled };
+        return { settings: desktopSettings, changed };
+      }),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
@@ -1495,6 +1501,57 @@ describe("DesktopWindow", () => {
             { isMain: false, profileId: saved?.id ?? null, name: "Work" },
           ],
         );
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("opens no secondary window while multi-window is off and saves new profiles", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const secondary = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: main.window,
+        createdWindows: [main.window, secondary.window],
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const windows = yield* DesktopWindow.DesktopWindow;
+        yield* windows.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const saved = yield* windows.createProfile({
+          name: " Hobby ",
+          projectScopeKeys: ["env:/hobby", "env:/hobby"],
+          theme: null,
+        });
+        assert.deepEqual(
+          {
+            name: saved.name,
+            projectScopeKeys: saved.projectScopeKeys,
+            isDefault: saved.isDefault,
+          },
+          { name: "Hobby", projectScopeKeys: ["env:/hobby"], isDefault: false },
+        );
+
+        yield* windows.setMultiWindowEnabled(false);
+        assert.isFalse((yield* windows.windowsState).multiWindowEnabled);
+        const blocked = [
+          yield* Effect.flip(windows.openNewWindow({})),
+          yield* Effect.flip(windows.openProfile(saved.id)),
+        ];
+        assert.deepEqual(
+          blocked.map((error) => error._tag === "DesktopWindowProfileError" && error.reason),
+          ["multi-window-disabled", "multi-window-disabled"],
+        );
+        // The main window still opens from its own profile.
+        yield* windows.openProfile("main");
+        assert.equal(yield* Ref.get(createCount), 1);
+
+        yield* windows.setMultiWindowEnabled(true);
+        yield* windows.openProfile(saved.id);
+        assert.equal(yield* Ref.get(createCount), 2);
       }).pipe(Effect.provide(layer));
     }),
   );

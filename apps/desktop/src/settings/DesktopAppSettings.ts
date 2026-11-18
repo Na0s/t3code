@@ -37,6 +37,7 @@ export interface DesktopSettings {
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   /** The default (main window) profile is always first. */
   readonly windowProfiles: ReadonlyArray<DesktopWindowProfileSettings>;
+  readonly multiWindowEnabled: boolean;
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
@@ -100,6 +101,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   localEnvironmentEnabled: true,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   windowProfiles: [DEFAULT_WINDOW_PROFILE],
+  multiWindowEnabled: true,
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
@@ -140,6 +142,7 @@ const DesktopSettingsDocument = Schema.Struct({
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: optionalReadableKey(Schema.Boolean),
   windowProfiles: optionalReadableKey(Schema.Array(Schema.Unknown)),
+  multiWindowEnabled: optionalReadableKey(Schema.Boolean),
   serverExposureMode: optionalReadableKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: optionalReadableKey(Schema.Boolean),
   tailscaleServePort: optionalReadableKey(Schema.Number),
@@ -201,6 +204,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly load: Effect.Effect<DesktopSettings>;
     readonly get: Effect.Effect<DesktopSettings>;
     readonly setLocalEnvironmentEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setMultiWindowEnabled: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setWindowProfilePlacement: (
@@ -360,6 +366,7 @@ function normalizeDesktopSettingsDocument(
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     windowProfiles: readWindowProfiles(parsed),
+    multiWindowEnabled: parsed.multiWindowEnabled !== false,
     serverExposureMode:
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
@@ -405,6 +412,9 @@ function toDesktopSettingsDocument(
         : [{ id: defaultProfile.id, name: defaultProfile.name }]),
       ...otherProfiles,
     ];
+  }
+  if (settings.multiWindowEnabled !== defaults.multiWindowEnabled) {
+    document.multiWindowEnabled = settings.multiWindowEnabled;
   }
   if (settings.serverExposureMode !== defaults.serverExposureMode) {
     document.serverExposureMode = settings.serverExposureMode;
@@ -543,6 +553,12 @@ function setWslOnly(settings: DesktopSettings, enabled: boolean): DesktopSetting
         ...settings,
         wslOnly: enabled,
       };
+}
+
+function setMultiWindowEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.multiWindowEnabled === enabled
+    ? settings
+    : { ...settings, multiWindowEnabled: enabled };
 }
 
 function setLocalEnvironmentEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
@@ -774,6 +790,10 @@ export const make = Effect.gen(function* () {
         return yield* persist((settings) => setLocalEnvironmentEnabled(settings, enabled));
       },
     ),
+    setMultiWindowEnabled: Effect.fn("desktop.settings.setMultiWindowEnabled")(function* (enabled) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+      return yield* persist((settings) => setMultiWindowEnabled(settings, enabled));
+    }),
     applyWslWindowsFallback: persist(applyWslWindowsFallback).pipe(
       Effect.withSpan("desktop.settings.applyWslWindowsFallback"),
     ),
@@ -842,6 +862,11 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setLocalEnvironmentEnabled: Effect.fn("DesktopAppSettings.setLocalEnvironmentEnabled")(
           function (enabled) {
             return update((settings) => setLocalEnvironmentEnabled(settings, enabled));
+          },
+        ),
+        setMultiWindowEnabled: Effect.fn("DesktopAppSettings.setMultiWindowEnabled")(
+          function (enabled) {
+            return update((settings) => setMultiWindowEnabled(settings, enabled));
           },
         ),
         applyWslWindowsFallback: update(applyWslWindowsFallback),

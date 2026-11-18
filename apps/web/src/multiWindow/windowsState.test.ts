@@ -45,6 +45,7 @@ function windowsState(overrides: Partial<DesktopWindowsState> = {}): DesktopWind
       { windowId: 2, isMain: false, profileId: "work", name: "Work", title: "", focused: true },
     ],
     miniMode: false,
+    multiWindowEnabled: true,
     ...overrides,
   };
 }

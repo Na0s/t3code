@@ -72,6 +72,7 @@ const windowMenuKey = (state: DesktopWindowsState) =>
     profiles: state.profiles.map((profile) => [profile.id, profile.name]),
     open: state.windows.flatMap((window) => (window.profileId === null ? [] : [window.profileId])),
     miniMode: state.miniMode,
+    multiWindowEnabled: state.multiWindowEnabled,
   });
 
 const describeUpdate = (version: string | null) =>
@@ -368,27 +369,31 @@ export const make = Effect.gen(function* () {
         // Electron's default Window submenu adds a Ctrl+W close role off macOS.
         role: "windowMenu",
         submenu: [
-          {
-            label: "New Window",
-            // The renderer's window.new keybinding owns the chord and adds its project filter.
-            accelerator: "CmdOrCtrl+Alt+Shift+N",
-            registerAccelerator: false,
-            click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
-          },
-          { type: "separator" },
-          {
-            label: "Main Window",
-            click: openProfileClick(DEFAULT_DESKTOP_WINDOW_PROFILE_ID),
-          },
-          ...windowsState.profiles
-            .filter((profile) => !profile.isDefault)
-            .map((profile): Electron.MenuItemConstructorOptions => ({
-              label: profile.name,
-              type: "checkbox",
-              checked: openWindowProfileIds.has(profile.id),
-              click: openProfileClick(profile.id),
-            })),
-          { type: "separator" },
+          ...(windowsState.multiWindowEnabled
+            ? ([
+                {
+                  label: "New Window",
+                  // The renderer's window.new keybinding owns the chord and adds its project filter.
+                  accelerator: "CmdOrCtrl+Alt+Shift+N",
+                  registerAccelerator: false,
+                  click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
+                },
+                { type: "separator" },
+                {
+                  label: "Main Window",
+                  click: openProfileClick(DEFAULT_DESKTOP_WINDOW_PROFILE_ID),
+                },
+                ...windowsState.profiles
+                  .filter((profile) => !profile.isDefault)
+                  .map((profile): Electron.MenuItemConstructorOptions => ({
+                    label: profile.name,
+                    type: "checkbox",
+                    checked: openWindowProfileIds.has(profile.id),
+                    click: openProfileClick(profile.id),
+                  })),
+                { type: "separator" },
+              ] satisfies Electron.MenuItemConstructorOptions[])
+            : []),
           {
             label: "Mini Mode",
             type: "checkbox",

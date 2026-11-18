@@ -1,4 +1,5 @@
 import {
+  DesktopCreateWindowProfileInputSchema,
   DesktopOpenWindowInputSchema,
   DesktopResolveWindowCloseInputSchema,
   DesktopUpdateWindowProfileInputSchema,
@@ -67,6 +68,15 @@ const focus = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.windows.focus")(function* (windowId) {
     yield* (yield* DesktopWindow.DesktopWindow).focusWindow(windowId);
+  }),
+});
+
+const createProfile = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.WINDOWS_CREATE_PROFILE_CHANNEL,
+  payload: DesktopCreateWindowProfileInputSchema,
+  result: DesktopWindowProfileSchema,
+  handler: Effect.fn("desktop.ipc.windows.createProfile")(function* (input) {
+    return yield* (yield* DesktopWindow.DesktopWindow).createProfile(input);
   }),
 });
 
@@ -140,6 +150,15 @@ const setMiniMode = DesktopIpc.makeIpcMethod({
   }),
 });
 
+const setMultiWindowEnabled = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.WINDOWS_SET_MULTI_WINDOW_ENABLED_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windows.setMultiWindowEnabled")(function* (enabled) {
+    yield* (yield* DesktopWindow.DesktopWindow).setMultiWindowEnabled(enabled);
+  }),
+});
+
 const registerHub = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.WINDOWS_REGISTER_HUB_CHANNEL,
   payload: Schema.Void,
@@ -165,6 +184,7 @@ export const methods = [
   openNew,
   openProfile,
   focus,
+  createProfile,
   saveAsProfile,
   updateProfile,
   deleteProfile,
@@ -172,6 +192,7 @@ export const methods = [
   setCloseRequestListening,
   resolveCloseRequest,
   setMiniMode,
+  setMultiWindowEnabled,
   registerHub,
   requestHubLink,
 ] as const;

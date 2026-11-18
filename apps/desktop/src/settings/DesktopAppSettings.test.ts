@@ -28,6 +28,7 @@ const DesktopSettingsPatch = Schema.Struct({
   ),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
   windowProfiles: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  multiWindowEnabled: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
@@ -235,6 +236,7 @@ describe("DesktopSettings", () => {
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
+          multiWindowEnabled: true,
           windowProfiles: [
             {
               ...DesktopAppSettings.DEFAULT_WINDOW_PROFILE,
@@ -317,6 +319,7 @@ describe("DesktopSettings", () => {
           true,
         );
         yield* settings.setServerExposureMode("network-accessible");
+        yield* settings.setMultiWindowEnabled(false);
 
         const persisted = yield* decodeDesktopSettingsPatch(
           yield* fileSystem.readFileString(environment.desktopSettingsPath),
@@ -324,6 +327,7 @@ describe("DesktopSettings", () => {
         assert.deepEqual(persisted, {
           mainWindowBounds: { x: -1200, y: 40, width: 400, height: 360 },
           mainWindowMaximized: true,
+          multiWindowEnabled: false,
           serverExposureMode: "network-accessible",
         } satisfies typeof DesktopSettingsPatch.Type);
 
@@ -334,6 +338,14 @@ describe("DesktopSettings", () => {
         const restoredMain = DesktopAppSettings.defaultWindowProfile(restored);
         assert.deepEqual(restoredMain.bounds, persisted.mainWindowBounds);
         assert.isTrue(restoredMain.maximized);
+        assert.isFalse(restored.multiWindowEnabled);
+
+        // The default leaves the key out, so an older build's file stays as it was.
+        yield* settings.setMultiWindowEnabled(true);
+        const reenabled = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        assert.isUndefined(reenabled.multiWindowEnabled);
       }),
     ),
   );
@@ -401,6 +413,7 @@ describe("DesktopSettings", () => {
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
+          multiWindowEnabled: true,
           windowProfiles: [DesktopAppSettings.DEFAULT_WINDOW_PROFILE],
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
@@ -429,6 +442,7 @@ describe("DesktopSettings", () => {
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
+          multiWindowEnabled: true,
           windowProfiles: [DesktopAppSettings.DEFAULT_WINDOW_PROFILE],
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,

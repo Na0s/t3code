@@ -10,6 +10,10 @@ Choose **New Window** in the command palette or the app menu, or press **Cmd+Opt
 macOS or **Ctrl+Alt+Shift+N** on Windows and Linux. The new window starts with the current window's
 project filter. Change the shortcut under **Settings → Keybindings** (`window.new`).
 
+To keep to one window, turn off **Multiple windows** under **Settings → General → Windows**. New
+Window, its shortcut, and opening saved windows are then unavailable; windows already open stay open
+until you close them.
+
 ## Save a window
 
 When you close a window you have not saved, T3 Code asks whether to save it. Enter a name and choose
@@ -21,12 +25,16 @@ Reopen a saved window with **Open window: _name_** in the command palette, or fr
 
 ## Manage saved windows
 
-**Settings → General → Windows** lists the main window and every saved window. From there you can
-rename a window, open or focus it, or delete it. Deleting a saved window that is open leaves it
+**Settings → General → Windows** lists the main window with your saved windows below it. From there
+you can rename a window, open or focus it, or delete it. **Add saved window** creates one without
+opening it: give it a name, the projects it shows, and a theme. Deleting a saved window that is open leaves it
 open as an unsaved window. A window you have not saved yet can be saved from the same section.
 
-Each saved window can follow the main window's theme or use a theme of its own. Changing the theme
-from inside a window with its own theme changes only that window. Light, dark, and system
+By default a window takes on its projects' icon colours: one project tints the window's theme with
+that project's colour, and several projects lay a left-to-right blend of their colours over it. A
+window that shows all projects looks like the main window. Pick a theme for a saved window to use
+that theme instead, untinted. Changing the theme from inside a window with its own theme changes
+only that window. Light, dark, and system
 appearance stay shared by every window.
 
 ## Mini Mode

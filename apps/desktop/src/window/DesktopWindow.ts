@@ -13,6 +13,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Electron from "electron";
 
 import {
+  type DesktopCreateWindowProfileInput,
   type DesktopOpenWindowInput,
   type DesktopSnapShotEvent,
   type DesktopTheme,
@@ -149,7 +150,12 @@ export type DesktopWindowError =
 export class DesktopWindowProfileError extends Schema.TaggedError<DesktopWindowProfileError>()(
   "DesktopWindowProfileError",
   {
-    reason: Schema.Literals(["profile-not-found", "default-profile", "not-a-secondary-window"]),
+    reason: Schema.Literals([
+      "profile-not-found",
+      "default-profile",
+      "not-a-secondary-window",
+      "multi-window-disabled",
+    ]),
     profileId: Schema.NullOr(Schema.String),
   },
 ) {
@@ -161,6 +167,8 @@ export class DesktopWindowProfileError extends Schema.TaggedError<DesktopWindowP
         return "The main window's profile cannot be deleted.";
       case "not-a-secondary-window":
         return "Only a secondary window can do this.";
+      case "multi-window-disabled":
+        return "Multiple windows are turned off in Settings.";
     }
   }
 }
@@ -216,6 +224,9 @@ export class DesktopWindow extends Context.Service<
     ) => Effect.Effect<void, DesktopWindowsOperationError>;
     readonly openProfile: (profileId: string) => Effect.Effect<void, DesktopWindowsOperationError>;
     readonly focusWindow: (windowId: number) => Effect.Effect<void>;
+    readonly createProfile: (
+      input: DesktopCreateWindowProfileInput,
+    ) => Effect.Effect<DesktopWindowProfile, DesktopWindowsOperationError>;
     readonly saveWindowAsProfile: (
       window: Electron.BrowserWindow,
       name: string,
@@ -240,6 +251,10 @@ export class DesktopWindow extends Context.Service<
       decision: DesktopWindowCloseDecision,
     ) => Effect.Effect<void, DesktopWindowsOperationError>;
     readonly setMiniMode: (enabled: boolean) => Effect.Effect<void>;
+    /** Turning it off blocks new secondary windows and leaves open ones open. */
+    readonly setMultiWindowEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
     readonly registerHub: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly requestHubLink: (window: Electron.BrowserWindow) => Effect.Effect<void>;
   }
@@ -634,6 +649,7 @@ export const make = Effect.gen(function* () {
         focused: entry.focused,
       })),
       miniMode: miniPlacement !== null,
+      multiWindowEnabled: settings.multiWindowEnabled,
     } satisfies DesktopWindowsState;
   });
 
@@ -1495,6 +1511,7 @@ export const make = Effect.gen(function* () {
 
   const reopenProfilesOpenAtQuit: Effect.Effect<void> = Effect.gen(function* () {
     const settings = yield* desktopSettings.get;
+    if (!settings.multiWindowEnabled) return;
     for (const profile of settings.windowProfiles) {
       if (!profile.openAtQuit || profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID) continue;
       yield* openSecondary({ profile, projectScopeKeys: profile.projectScopeKeys });
@@ -1563,6 +1580,24 @@ export const make = Effect.gen(function* () {
       suggestedName: entry.unsavedName,
     });
     yield* electronWindow.reveal(entry.window);
+  });
+
+  const requireMultiWindowEnabled = Effect.gen(function* () {
+    if ((yield* desktopSettings.get).multiWindowEnabled) return;
+    return yield* new DesktopWindowProfileError({
+      reason: "multi-window-disabled",
+      profileId: null,
+    });
+  });
+
+  const toWindowProfile = (
+    profile: DesktopAppSettings.DesktopWindowProfileSettings,
+  ): DesktopWindowProfile => ({
+    id: profile.id,
+    name: profile.name,
+    projectScopeKeys: profile.projectScopeKeys,
+    theme: profile.theme,
+    isDefault: profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
   });
 
   const requireSecondary = (window: Electron.BrowserWindow) => {
@@ -1881,6 +1916,7 @@ export const make = Effect.gen(function* () {
       });
     }),
     openNewWindow: Effect.fn("desktop.window.openNewWindow")(function* (input) {
+      yield* requireMultiWindowEnabled;
       yield* openSecondary({
         profile: null,
         projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(
@@ -1905,6 +1941,7 @@ export const make = Effect.gen(function* () {
       if (profile === undefined) {
         return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId });
       }
+      yield* requireMultiWindowEnabled;
       yield* openSecondary({ profile, projectScopeKeys: profile.projectScopeKeys });
     }),
     focusWindow: Effect.fn("desktop.window.focusWindow")(function* (windowId) {
@@ -1920,14 +1957,29 @@ export const make = Effect.gen(function* () {
         // Saving a saved window as another profile starts from its current filter.
         if (current !== undefined) entry.projectScopeKeys = current.projectScopeKeys;
       }
-      const profile = yield* createProfileFor(entry, name);
-      return {
-        id: profile.id,
-        name: profile.name,
-        projectScopeKeys: profile.projectScopeKeys,
-        theme: profile.theme,
-        isDefault: false,
-      };
+      return toWindowProfile(yield* createProfileFor(entry, name));
+    }),
+    createProfile: Effect.fn("desktop.window.createProfile")(function* (input) {
+      const id = (yield* random.uuidV4()).replace(/-/g, "");
+      yield* updateProfiles((profiles) => [
+        ...profiles,
+        {
+          id,
+          name: input.name.trim(),
+          projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(input.projectScopeKeys),
+          theme: input.theme,
+          bounds: null,
+          maximized: false,
+          openAtQuit: false,
+        },
+      ]);
+      const saved = (yield* desktopSettings.get).windowProfiles.find(
+        (candidate) => candidate.id === id,
+      );
+      if (saved === undefined) {
+        return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId: id });
+      }
+      return toWindowProfile(saved);
     }),
     updateProfile: Effect.fn("desktop.window.updateProfile")(function* (input) {
       yield* Effect.annotateCurrentSpan({ profileId: input.profileId });
@@ -2008,6 +2060,11 @@ export const make = Effect.gen(function* () {
       },
     ),
     setMiniMode,
+    setMultiWindowEnabled: Effect.fn("desktop.window.setMultiWindowEnabled")(function* (enabled) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+      yield* desktopSettings.setMultiWindowEnabled(enabled);
+      yield* syncWindows();
+    }),
     registerHub: Effect.fn("desktop.window.registerHub")(function (window) {
       return Effect.sync(() => {
         const entry = entryOf(window);

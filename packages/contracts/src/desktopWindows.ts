@@ -17,7 +17,7 @@ export const DesktopWindowProjectScopeKeysSchema = Schema.Array(
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
 ).check(Schema.isMaxLength(1000));
 
-/** A theme preference id, or null to follow the default window profile's theme. */
+/** A theme preference id, or null for the main window's theme tinted with the filtered projects' icon colours. */
 export const DesktopWindowProfileThemeSchema = Schema.NullOr(
   Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 );
@@ -49,6 +49,8 @@ export const DesktopWindowsStateSchema = Schema.Struct({
   profiles: Schema.Array(DesktopWindowProfileSchema),
   windows: Schema.Array(DesktopOpenWindowSchema),
   miniMode: Schema.Boolean,
+  /** Off: no new secondary windows open; windows already open stay open. */
+  multiWindowEnabled: Schema.Boolean,
 });
 export type DesktopWindowsState = typeof DesktopWindowsStateSchema.Type;
 
@@ -69,6 +71,13 @@ export const DesktopOpenWindowInputSchema = Schema.Struct({
   projectScopeKeys: Schema.optionalKey(DesktopWindowProjectScopeKeysSchema),
 });
 export type DesktopOpenWindowInput = typeof DesktopOpenWindowInputSchema.Type;
+
+export const DesktopCreateWindowProfileInputSchema = Schema.Struct({
+  name: DesktopWindowProfileNameSchema,
+  projectScopeKeys: DesktopWindowProjectScopeKeysSchema,
+  theme: DesktopWindowProfileThemeSchema,
+});
+export type DesktopCreateWindowProfileInput = typeof DesktopCreateWindowProfileInputSchema.Type;
 
 export const DesktopUpdateWindowProfileInputSchema = Schema.Struct({
   profileId: DesktopWindowProfileIdSchema,
@@ -114,6 +123,8 @@ export interface DesktopWindowsBridge {
   /** Focuses the profile's window when it is open, otherwise opens it. */
   openProfile: (profileId: string) => Promise<void>;
   focus: (windowId: number) => Promise<void>;
+  /** Saves a profile without opening its window. */
+  createProfile: (input: DesktopCreateWindowProfileInput) => Promise<DesktopWindowProfile>;
   /** Saves the calling window as a new profile. */
   saveAsProfile: (name: string) => Promise<DesktopWindowProfile>;
   updateProfile: (input: DesktopUpdateWindowProfileInput) => Promise<void>;
@@ -125,6 +136,7 @@ export interface DesktopWindowsBridge {
   onCloseRequest: (listener: (request: DesktopWindowCloseRequest) => void) => () => void;
   resolveCloseRequest: (requestId: string, decision: DesktopWindowCloseDecision) => Promise<void>;
   setMiniMode: (enabled: boolean) => Promise<void>;
+  setMultiWindowEnabled: (enabled: boolean) => Promise<void>;
   /** Main window only: its renderer serves secondary windows' environment connections. */
   registerHub: () => void;
   /** Secondary windows only: asks for a port to the hub, delivered as a `DesktopHubLinkMessage`. */

@@ -95,7 +95,12 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     installPrepared: () => Effect.die("unexpected installPrepared"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
-const emptyWindowsState: DesktopWindowsState = { profiles: [], windows: [], miniMode: false };
+const emptyWindowsState: DesktopWindowsState = {
+  profiles: [],
+  windows: [],
+  miniMode: false,
+  multiWindowEnabled: true,
+};
 
 const layerDesktopWindow = (
   selectedAction: Deferred.Deferred<string>,
@@ -399,6 +404,7 @@ describe("DesktopApplicationMenu", () => {
             },
           ],
           miniMode: true,
+          multiWindowEnabled: true,
         },
       );
 
@@ -442,6 +448,40 @@ describe("DesktopApplicationMenu", () => {
       items[0]?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
       assert.equal(yield* Deferred.await(selectedAction), "new-window");
     }),
+  );
+
+  it.effect(
+    "drops New Window and saved windows from the Window menu when multi-window is off",
+    () =>
+      Effect.gen(function* () {
+        const applicationMenuTemplate =
+          yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+        yield* configureMenu(
+          yield* Deferred.make<string>(),
+          applicationMenuTemplate,
+          {},
+          {},
+          {
+            ...emptyWindowsState,
+            profiles: [
+              { id: "main", name: "Main", projectScopeKeys: [], theme: null, isDefault: true },
+              { id: "work", name: "Work", projectScopeKeys: [], theme: null, isDefault: false },
+            ],
+            multiWindowEnabled: false,
+          },
+        );
+
+        const windowMenu = (yield* Deferred.await(applicationMenuTemplate)).find(
+          (item) => item.role === "windowMenu",
+        );
+        if (!Array.isArray(windowMenu?.submenu)) {
+          throw new Error("Expected the Window menu submenu to be an array.");
+        }
+        assert.deepEqual(
+          windowMenu.submenu.flatMap((item) => (item.label === undefined ? [] : [item.label])),
+          ["Mini Mode"],
+        );
+      }),
   );
 
   it.effect("tells the user which update the menu check found", () =>

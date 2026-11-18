@@ -142,6 +142,7 @@ const windows: DesktopWindowsBridge = {
   openProfile: (profileId) =>
     ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_PROFILE_CHANNEL, profileId),
   focus: (windowId) => ipcRenderer.invoke(IpcChannels.WINDOWS_FOCUS_CHANNEL, windowId),
+  createProfile: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_CREATE_PROFILE_CHANNEL, input),
   saveAsProfile: (name) => ipcRenderer.invoke(IpcChannels.WINDOWS_SAVE_AS_PROFILE_CHANNEL, name),
   updateProfile: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_UPDATE_PROFILE_CHANNEL, input),
   deleteProfile: (profileId) =>
@@ -173,6 +174,8 @@ const windows: DesktopWindowsBridge = {
   resolveCloseRequest: (requestId, decision) =>
     ipcRenderer.invoke(IpcChannels.WINDOWS_RESOLVE_CLOSE_REQUEST_CHANNEL, { requestId, decision }),
   setMiniMode: (enabled) => ipcRenderer.invoke(IpcChannels.WINDOWS_SET_MINI_MODE_CHANNEL, enabled),
+  setMultiWindowEnabled: (enabled) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_SET_MULTI_WINDOW_ENABLED_CHANNEL, enabled),
   registerHub: () => {
     void ipcRenderer.invoke(IpcChannels.WINDOWS_REGISTER_HUB_CHANNEL).catch(() => undefined);
   },
