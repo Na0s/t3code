@@ -5,6 +5,7 @@ import {
   removeUmbrellaMember,
   restoreUmbrellaMember,
   setUmbrellaEnabled,
+  umbrellaMemberLabel,
 } from "@t3tools/client-runtime/state/umbrella";
 import type { ProjectSettingsOverrides, UmbrellaMember } from "@t3tools/contracts";
 
@@ -41,7 +42,14 @@ export function useUmbrellaMembershipEdits() {
         umbrellaConfirmationMessage(umbrella.title, umbrella.umbrellaSuggestions ?? []),
         { initialFocus: "confirm" },
       );
-      if (confirmed === true) edit(umbrella, (current) => setUmbrellaEnabled(current, true));
+      if (confirmed !== true) return;
+      edit(umbrella, (current) => setUmbrellaEnabled(current, true));
+      const names = (umbrella.umbrellaSuggestions ?? []).map(umbrellaMemberLabel).join(", ");
+      toastManager.add({
+        type: "success",
+        title: `${umbrella.title} is now an umbrella`,
+        description: `Its threads checkpoint ${names}, and the diff panel shows their changes.`,
+      });
     },
     adopt: (umbrella: Umbrella, path: string) =>
       edit(umbrella, (current) => adoptUmbrellaMember(umbrella, current, path)),

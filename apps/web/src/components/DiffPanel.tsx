@@ -14,7 +14,10 @@ import {
   type UmbrellaMember,
 } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { umbrellaMembersForThread } from "@t3tools/client-runtime/state/umbrella";
+import {
+  umbrellaMemberLabel,
+  umbrellaMembersForThread,
+} from "@t3tools/client-runtime/state/umbrella";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -28,6 +31,7 @@ import {
   ChevronRightIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
+  UmbrellaIcon,
 } from "lucide-react";
 import * as Schema from "effect/Schema";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
@@ -42,6 +46,7 @@ import { toolCallDiff } from "../lib/toolCallDiff";
 import { useCheckpointDiff, useTurnItemDetail } from "~/state/queries";
 import { revisionedQuery } from "~/state/revisionedQuery";
 import { cn } from "~/lib/utils";
+import { ProjectFavicon } from "./ProjectFavicon";
 import {
   resolveToolCallDiffTarget,
   selectThreadBranchBaseRef,
@@ -300,6 +305,7 @@ export default function DiffPanel({
     activeThread && !activeThread.worktreePath && umbrellaMembers.length === 0
       ? (activeProject?.umbrellaSuggestions ?? NO_UMBRELLA_MEMBERS)
       : NO_UMBRELLA_MEMBERS;
+  const umbrellaSuggestionNames = umbrellaSuggestions.map(umbrellaMemberLabel).join(", ");
   const umbrellaEdits = useUmbrellaMembershipEdits();
   const umbrellaMemberStatuses = useAtomValue(
     visible && activeThread && umbrellaMembers.length > 0
@@ -1374,10 +1380,11 @@ export default function DiffPanel({
     <DiffPanelShell mode={mode} header={headerRow}>
       {activeProject && umbrellaSuggestions.length > 0 ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
+          <UmbrellaIcon aria-hidden className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">
             {umbrellaSuggestions.length === 1
-              ? "Found a repository in this folder."
-              : `Found ${umbrellaSuggestions.length} repositories in this folder.`}
+              ? `Found a repository in this folder: ${umbrellaSuggestionNames}.`
+              : `Found ${umbrellaSuggestions.length} repositories in this folder: ${umbrellaSuggestionNames}.`}
           </span>
           <Button
             type="button"
@@ -1395,7 +1402,9 @@ export default function DiffPanel({
         </div>
       ) : !isGitRepo && !toolCallSelection ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-          Turn diffs are unavailable because this project is not a git repository.
+          {umbrellaSuggestions.length > 0
+            ? "This folder is not a git repository. Use it as an umbrella to see each of its repositories' changes here."
+            : "Turn diffs are unavailable because this project is not a git repository."}
         </div>
       ) : selectedRunId !== null && orderedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
@@ -1418,24 +1427,38 @@ export default function DiffPanel({
               <div
                 role="tablist"
                 aria-label="Repositories"
-                className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/70 px-2 py-1"
+                className="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border/70 px-2"
               >
                 {umbrella.sections.map((section) => {
                   const selected = section.memberPath === (umbrellaSection?.memberPath ?? null);
                   return (
-                    <Button
+                    <button
                       key={section.memberPath ?? ""}
                       type="button"
                       role="tab"
                       aria-selected={selected}
-                      size="xs"
-                      variant={selected ? "secondary" : "ghost"}
-                      className="shrink-0"
-                      title={section.cwd}
+                      className={cn(
+                        "-mb-px flex h-8 shrink-0 cursor-pointer items-center gap-1.5 border-b-2 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                        selected
+                          ? "border-foreground font-medium text-foreground"
+                          : "border-transparent text-muted-foreground hover:text-foreground",
+                      )}
                       onClick={() => selectUmbrellaSection(section.memberPath)}
                     >
+                      <ProjectFavicon
+                        project={
+                          section.memberPath === null && activeProject
+                            ? activeProject
+                            : {
+                                environmentId: activeThread.environmentId,
+                                workspaceRoot: section.cwd,
+                                title: section.label,
+                              }
+                        }
+                        className={cn("size-3.5", !selected && "opacity-60 grayscale")}
+                      />
                       {section.label}
-                    </Button>
+                    </button>
                   );
                 })}
               </div>

@@ -112,14 +112,15 @@ export function resolveUmbrellaMenuAction<TProject>(
   return null;
 }
 
-/** The confirmation that lists every checkout an umbrella will take in before it is turned on. */
+/** The confirmation that lists every checkout an umbrella will take in, and what changes, before it is turned on. */
 export function umbrellaConfirmationMessage(
   title: string,
   checkouts: ReadonlyArray<Pick<UmbrellaMember, "relativePath">>,
 ): string {
   return [
     `Use ${title} as an umbrella?`,
-    "Turns record checkpoints in these checkouts, and reverting a turn restores them:",
+    `${title} will span these checkouts:`,
     ...checkouts.map((checkout) => `• ${umbrellaMemberLabel(checkout)}`),
+    `The diff panel shows each one's changes, turns checkpoint them so reverting a turn restores them, and their projects' threads group under ${title}. You can turn this off in project settings.`,
   ].join("\n");
 }

@@ -113,9 +113,10 @@ describe("umbrellaConfirmationMessage", () => {
     ).toBe(
       [
         "Use Acme as an umbrella?",
-        "Turns record checkpoints in these checkouts, and reverting a turn restores them:",
+        "Acme will span these checkouts:",
         "• api",
         "• acme-site",
+        "The diff panel shows each one's changes, turns checkpoint them so reverting a turn restores them, and their projects' threads group under Acme. You can turn this off in project settings.",
       ].join("\n"),
     );
   });
