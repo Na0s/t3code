@@ -61,6 +61,7 @@ import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 import { DesktopWindowsHost } from "../multiWindow/ui/DesktopWindowsHost";
+import { DesktopWindowTint } from "../multiWindow/ui/DesktopWindowTint";
 import { MiniMainWindow } from "../multiWindow/ui/MiniMainWindow";
 import { installDesktopWindowTheme } from "../multiWindow/ui/windowTheme";
 import { useIsMiniMainWindow } from "../multiWindow/windowsState";
@@ -201,6 +202,7 @@ function RootRouteBranch() {
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <SshPasswordPromptDialog />
+      {secondaryWindow ? <DesktopWindowTint /> : null}
       <SnapShotCoordinator />
       <ReopenClosedViewShortcut />
       <ConfirmDialogHost />

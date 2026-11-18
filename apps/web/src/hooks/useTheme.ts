@@ -147,6 +147,17 @@ export function setWindowThemeOverride(next: WindowThemeOverride | null): void {
   emitChange();
 }
 
+// A desktop window's project colour, applied over whichever theme it shows.
+let windowThemeTint: string | null = null;
+
+/** Null removes the tint. */
+export function setWindowThemeTint(tint: string | null): void {
+  if (tint === windowThemeTint) return;
+  windowThemeTint = tint;
+  lastAppliedTheme = null;
+  applyTheme(getStored(), { suppressTransitions: true });
+}
+
 function readEffectiveThemeHalves(): ThemeHalves | null {
   return windowThemeOverride === null ? readStoredThemeHalves() : null;
 }
@@ -355,7 +366,11 @@ function applyTheme(theme: Theme, { suppressTransitions = false, preservePreview
     appearanceMode,
     themeHalves,
   );
-  applyThemePalette(resolveThemeHalf(theme, themeHalves, resolvedAppearance), resolvedAppearance);
+  applyThemePalette(
+    resolveThemeHalf(theme, themeHalves, resolvedAppearance),
+    resolvedAppearance,
+    windowThemeTint,
+  );
   document.documentElement.classList.toggle("dark", resolvedAppearance === "dark");
   lastAppliedTheme = { theme, systemDark, followSystem, appearanceMode, themeHalves };
   syncBrowserChromeTheme();

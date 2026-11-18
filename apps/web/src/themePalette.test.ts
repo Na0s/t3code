@@ -674,6 +674,47 @@ describe("context chip colors", () => {
     }
   });
 
+  it("recolours a theme around a window tint, keeps its canvas, and drops the tint again", () => {
+    const properties = new Map<string, string>();
+    const dataset: { themeId?: string } = {};
+    vi.stubGlobal("window", { localStorage: { getItem: () => null } });
+    vi.stubGlobal("document", {
+      documentElement: {
+        dataset,
+        style: {
+          setProperty: (name: string, value: string) => properties.set(name, value),
+          removeProperty: (name: string) => properties.delete(name),
+        },
+      },
+    });
+    invalidateCustomThemes();
+    const tint = "oklch(62.3% 0.214 259.815)";
+    const hueOf = (value: string) => toOklch(value)!.h!;
+    try {
+      applyThemePalette("system", "light", tint);
+      // The standard theme paints from index.css, which reads the variables only under a theme id.
+      expect(dataset.themeId).toBeTruthy();
+      expect(asHex(properties.get("--app-theme-canvas")!)).toBe(
+        asHex(getStandardThemeColors("light").canvas),
+      );
+      expect(asHex(properties.get("--app-theme-accent")!)).toBe(asHex(tint));
+      expect(Math.abs(hueOf(properties.get("--app-theme-sidebar")!) - hueOf(tint))).toBeLessThan(1);
+
+      applyThemePalette("ember", "dark", tint);
+      expect(dataset.themeId).toBe("ember");
+      const ember = getThemeColorsForMode(getThemeDefinition("ember")!, "dark")!;
+      expect(asHex(properties.get("--app-theme-canvas")!)).toBe(asHex(ember.canvas));
+      expect(asHex(properties.get("--app-theme-accent")!)).toBe(asHex(tint));
+
+      applyThemePalette("system", "light");
+      expect(dataset.themeId).toBeUndefined();
+      expect(properties.has("--app-theme-accent")).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      invalidateCustomThemes();
+    }
+  });
+
   it("solves the invalid state's error color to 5:1 on every chip surface", () => {
     for (const colors of palettes) {
       const invalid = contextChipVariables(colors)["--context-chip-invalid"];
