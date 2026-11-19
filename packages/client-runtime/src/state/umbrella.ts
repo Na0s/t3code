@@ -23,6 +23,17 @@ export function umbrellaMemberLabel(member: Pick<UmbrellaMember, "relativePath">
     : member.relativePath;
 }
 
+/** The member each folded project's threads work in, labelled, by scoped project key. */
+export function umbrellaMemberLabelsByProjectKey(
+  foldedMembers: Iterable<ReadonlyMap<string, Pick<UmbrellaMember, "relativePath">>>,
+): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const members of foldedMembers) {
+    for (const [key, member] of members) labels.set(key, umbrellaMemberLabel(member));
+  }
+  return labels;
+}
+
 /**
  * The members as a thread sees them: their own checkouts, or, for a worktree-mode thread, their
  * worktrees inside the thread's folder.

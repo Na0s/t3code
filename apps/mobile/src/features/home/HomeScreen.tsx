@@ -14,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { umbrellaMemberLabelsByProjectKey } from "@t3tools/client-runtime/state/umbrella";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -94,7 +95,6 @@ import {
   findHomeProjectScope,
   type HomeProjectSortOrder,
   sortHomeProjectScopes,
-  umbrellaMemberLabelsByProjectKey,
 } from "./homeThreadList";
 import { createSwipeRowActivation } from "./swipe-row-activation";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
@@ -328,7 +328,9 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [projects, selectedEnvironmentId, projectGroupingMode],
   );
-  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(projectScopes);
+  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(
+    projectScopes.map((scope) => scope.umbrellaMembers),
+  );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();

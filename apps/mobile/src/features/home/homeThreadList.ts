@@ -7,7 +7,6 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
 import {
   getThreadSortTimestamp,
   toSortableTimestamp,
@@ -77,19 +76,6 @@ export function buildHomeProjectScopes(input: {
       archived: group.archived,
     };
   });
-}
-
-/** The umbrella member each folded project's threads work in, by scoped project key. */
-export function umbrellaMemberLabelsByProjectKey(
-  scopes: ReadonlyArray<Pick<HomeProjectScope, "umbrellaMembers">>,
-): ReadonlyMap<string, string> {
-  return new Map(
-    scopes.flatMap((scope) =>
-      [...scope.umbrellaMembers].map(
-        ([key, member]) => [key, umbrellaMemberLabel(member)] as const,
-      ),
-    ),
-  );
 }
 
 /** The scope the thread list's project filter shows; an archived or unknown key shows all projects. */

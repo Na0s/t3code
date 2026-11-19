@@ -273,7 +273,7 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
-import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
+import { umbrellaMemberLabelsByProjectKey } from "@t3tools/client-runtime/state/umbrella";
 import { useUmbrellaMembershipEdits } from "../hooks/useUmbrellaMembershipEdits";
 import {
   resolveUmbrellaMenuAction,
@@ -878,12 +878,8 @@ function useSidebarLookups() {
       ),
     ),
   );
-  const umbrellaMemberLabelByKey = new Map(
-    projectGroups.flatMap((group) =>
-      [...group.foldedUmbrellaMembers].map(
-        ([key, member]) => [key, umbrellaMemberLabel(member)] as const,
-      ),
-    ),
+  const umbrellaMemberLabelByKey = umbrellaMemberLabelsByProjectKey(
+    projectGroups.map((group) => group.foldedUmbrellaMembers),
   );
   const projectGroupByScopeKey = new Map(
     projectGroups.map((project) => [project.projectKey, project] as const),

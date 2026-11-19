@@ -11,6 +11,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { umbrellaMemberLabelsByProjectKey } from "@t3tools/client-runtime/state/umbrella";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_LIST_ROW_LAYOUT } from "./threadListAnimations";
 import { useAtomValue } from "@effect/atom-react";
@@ -53,7 +54,6 @@ import {
   buildHomeProjectScopes,
   resolveHomeProjectFilterScope,
   sortHomeProjectScopes,
-  umbrellaMemberLabelsByProjectKey,
 } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -209,7 +209,9 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ),
     [projectScopes],
   );
-  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(projectScopes);
+  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(
+    projectScopes.map((scope) => scope.umbrellaMembers),
+  );
   const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, options);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
