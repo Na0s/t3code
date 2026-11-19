@@ -197,7 +197,7 @@ export const make = Effect.gen(function* () {
   // Serialized, with settings read inside, so a slow rebuild cannot restore what a later one dropped.
   const rebuildLock = yield* Semaphore.make(1);
   const rebuildIndex = Effect.fn("UmbrellaMembership.rebuildIndex")(
-    function* (options: { readonly scan: boolean }) {
+    function* (scan: "peek" | "read") {
       const projects = yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []));
       const overrides = yield* readSettings;
       const umbrellas = new Map<string, ReadonlyArray<UmbrellaMemberCheckout>>();
@@ -208,7 +208,7 @@ export const make = Effect.gen(function* () {
           Effect.gen(function* () {
             // Git only leaves out the members of umbrellas the user turned on.
             if (!umbrellaSettingsOf(overrides[project.id]).enabled) return;
-            const state = yield* stateFor(project, overrides, options.scan ? "read" : "peek");
+            const state = yield* stateFor(project, overrides, scan);
             if (state === undefined || state.members.length === 0) return;
             for (const member of state.members) {
               byMemberPath.set(member.path, [...(byMemberPath.get(member.path) ?? []), project.id]);
@@ -255,7 +255,7 @@ export const make = Effect.gen(function* () {
     ) as ProjectId[];
     lastSettings = next;
     if (changed.length === 0) return;
-    yield* rebuildIndex({ scan: false });
+    yield* rebuildIndex("peek");
     yield* PubSub.publish(changes, changed);
   });
 
@@ -268,7 +268,7 @@ export const make = Effect.gen(function* () {
         change.nestedRepositoriesResolved === true ? [change.workspaceRoot] : [],
       ),
     );
-    if (rescanned.size > 0) yield* rebuildIndex({ scan: false });
+    if (rescanned.size > 0) yield* rebuildIndex("peek");
     const changed = new Set(
       batch.flatMap((change) =>
         change.repositoryIdentityResolved
@@ -308,7 +308,7 @@ export const make = Effect.gen(function* () {
   yield* forkParked(
     Effect.gen(function* () {
       yield* registerWorktrees;
-      yield* rebuildIndex({ scan: true });
+      yield* rebuildIndex("read");
       yield* Effect.all(
         [
           Stream.runForEach(settingsChanges, onSettings),
@@ -317,7 +317,7 @@ export const make = Effect.gen(function* () {
             Stream.runForEach(onEnrichment),
           ),
           // Rescans enabled umbrellas and drops projects removed or moved since.
-          rebuildIndex({ scan: false }).pipe(
+          rebuildIndex("peek").pipe(
             Effect.repeat(Schedule.spaced(Duration.minutes(5))),
             Effect.delay(Duration.minutes(5)),
           ),
@@ -333,7 +333,7 @@ export const make = Effect.gen(function* () {
 
   return UmbrellaMembership.of({
     stateOf,
-    refreshIndex: rebuildIndex({ scan: false }),
+    refreshIndex: rebuildIndex("peek"),
     subscribeChanges: PubSub.subscribe(changes),
   });
 });
