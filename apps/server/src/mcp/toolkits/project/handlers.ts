@@ -58,10 +58,9 @@ function worktreeCheckHint(
   strategy: { readonly startFromOrigin?: boolean | undefined },
 ) {
   if (error._tag === "ThreadLaunchNotRepositoryError") {
-    const projects = (error.nestedRepositories ?? []).filter(
-      (repository) => repository.projectId !== undefined,
-    );
-    const holders = projects.filter((repository) => repository.hasBaseRef === true);
+    const nested = error.nestedRepositories ?? [];
+    const projects = nested.filter((repository) => repository.projectId !== undefined);
+    const holders = projects.filter((repository) => repository.hasBaseRef);
     const candidates = holders.length > 0 ? holders : projects;
     const suggestion =
       candidates.length === 0
@@ -70,7 +69,7 @@ function worktreeCheckHint(
             .map((repository) => `"${repository.projectId}" (${repository.relativePath})`)
             .join(", ")}`;
     const umbrella =
-      (error.nestedRepositories ?? []).length > 0
+      nested.length > 0
         ? ` To span all of its checkouts, ask the user to turn on Use as umbrella for "${error.projectTitle}".`
         : "";
     return `Use workspaceStrategy: {type: "root"}, or ${suggestion}.${umbrella}`;

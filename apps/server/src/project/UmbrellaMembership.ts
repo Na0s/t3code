@@ -367,6 +367,16 @@ export const attachUmbrellaMembers = Effect.fnUntraced(function* <P extends Umbr
   );
 });
 
+/** Looks the umbrella layer up once: a project's enabled members, or none without the layer. */
+export const makeUmbrellaMembersOf = Effect.map(
+  Effect.serviceOption(UmbrellaMembership),
+  (membership) =>
+    (project: UmbrellaProject): Effect.Effect<ReadonlyArray<UmbrellaMember>> =>
+      Option.isNone(membership)
+        ? Effect.succeed([])
+        : membership.value.stateOf(project).pipe(Effect.map((state) => state?.members ?? [])),
+);
+
 /** Projects whose members may have changed; nothing without the umbrella layer. */
 export const subscribeUmbrellaChanges = Effect.serviceOption(UmbrellaMembership).pipe(
   Effect.flatMap(

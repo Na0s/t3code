@@ -1266,7 +1266,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
-  const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
+  const umbrellaMembersOf = yield* UmbrellaMembership.makeUmbrellaMembersOf;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const remoteDelegation = yield* RemoteDelegation.RemoteDelegation;
 
@@ -2702,10 +2702,8 @@ const make = Effect.gen(function* () {
       );
       let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
       const umbrellaMembers =
-        input.isolation === "worktree" && Option.isSome(umbrellaMembership)
-          ? ((yield* umbrellaMembership.value.stateOf(
-              yield* requireProject(parent.thread.projectId),
-            ))?.members ?? [])
+        input.isolation === "worktree"
+          ? yield* umbrellaMembersOf(yield* requireProject(parent.thread.projectId))
           : [];
       if (
         input.isolation === "worktree" &&

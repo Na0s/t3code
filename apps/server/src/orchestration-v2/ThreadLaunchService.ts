@@ -202,16 +202,15 @@ export class ThreadLaunchBranchConflictError extends Schema.TaggedError<ThreadLa
 }
 
 /** A Git checkout inside a project folder that is not itself a repository. */
-export const NestedRepository = Schema.Struct({
+const NestedRepository = Schema.Struct({
   /** Relative to the project folder, with `/` separators. */
   relativePath: Schema.String,
   /** The project rooted at this checkout, when there is one. */
   projectId: Schema.optional(ProjectId),
   projectTitle: Schema.optional(Schema.String),
   /** Whether the requested base ref resolves in this checkout. */
-  hasBaseRef: Schema.optional(Schema.Boolean),
+  hasBaseRef: Schema.Boolean,
 });
-export type NestedRepository = typeof NestedRepository.Type;
 
 export class ThreadLaunchNotRepositoryError extends Schema.TaggedError<ThreadLaunchNotRepositoryError>()(
   "ThreadLaunchNotRepositoryError",
@@ -227,19 +226,13 @@ export class ThreadLaunchNotRepositoryError extends Schema.TaggedError<ThreadLau
     const base = `Project "${this.projectTitle}" (${this.workspaceRoot}) is not a Git repository.`;
     const nested = this.nestedRepositories ?? [];
     if (nested.length === 0) return base;
-    const names = nested.map((repository) => repository.relativePath).join(", ");
-    const holders = nested.filter((repository) => repository.hasBaseRef === true);
-    const located =
-      this.baseRef !== undefined && holders.length > 0
-        ? ` "${this.baseRef}" is in ${holders
-            .map((repository) =>
-              repository.projectTitle === undefined
-                ? repository.relativePath
-                : `${repository.relativePath} (project "${repository.projectTitle}")`,
-            )
-            .join(", ")}.`
-        : "";
-    return `${base} It holds Git repositories: ${names}.${located} To give each one a worktree, turn on Use as umbrella in this project's settings. To work in one of them, start the thread in its project.`;
+    const holders = nested
+      .filter((repository) => repository.hasBaseRef)
+      .map(({ relativePath, projectTitle }) =>
+        projectTitle === undefined ? relativePath : `${relativePath} (project "${projectTitle}")`,
+      );
+    const located = holders.length > 0 ? ` "${this.baseRef}" is in ${holders.join(", ")}.` : "";
+    return `${base} It holds Git repositories: ${nested.map((repository) => repository.relativePath).join(", ")}.${located} To give each one a worktree, turn on Use as umbrella in this project's settings. To work in one of them, start the thread in its project.`;
   }
 }
 
@@ -308,13 +301,7 @@ const make = Effect.gen(function* () {
   const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
   const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
   // An umbrella's worktree mode checks out every member, whether or not its root is a repository.
-  const umbrellaMembersOf = (project: {
-    readonly id: ProjectId;
-    readonly workspaceRoot: string;
-  }) =>
-    Option.isNone(umbrellaMembership)
-      ? Effect.succeed([])
-      : umbrellaMembership.value.stateOf(project).pipe(Effect.map((state) => state?.members ?? []));
+  const umbrellaMembersOf = yield* UmbrellaMembership.makeUmbrellaMembersOf;
   /** Whether `refName` names a commit in the checkout at `cwd`, without asking a remote. */
   const refResolvesLocally = (cwd: string, refName: string) =>
     // `:/text` is a commit search, which cannot be asked for a commit type.
@@ -346,9 +333,9 @@ const make = Effect.gen(function* () {
       ),
     );
   // A plain folder's checkouts, so a refused worktree launch can say where to start instead.
-  const nestedRepositoriesOf = Effect.fn("ThreadLaunchService.nestedRepositoriesOf")(function* (
-    project: { readonly id: ProjectId; readonly workspaceRoot: string },
-    baseRef: string | undefined,
+  const notRepository = Effect.fn("ThreadLaunchService.notRepository")(function* (
+    project: { readonly id: ProjectId; readonly title: string; readonly workspaceRoot: string },
+    baseRef: string,
   ) {
     const state = Option.isNone(umbrellaMembership)
       ? undefined
@@ -356,10 +343,7 @@ const make = Effect.gen(function* () {
     const root = project.workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
     const checkouts =
       state !== undefined
-        ? state.suggestions.map((member) => ({
-            path: member.path,
-            relativePath: member.relativePath,
-          }))
+        ? state.suggestions
         : (yield* discoverNestedRepositories(project.workspaceRoot)).map((checkoutPath) => {
             const normalized = checkoutPath.replaceAll("\\", "/");
             return {
@@ -369,7 +353,7 @@ const make = Effect.gen(function* () {
                 : normalized,
             };
           });
-    return yield* Effect.forEach(
+    const nestedRepositories = yield* Effect.forEach(
       checkouts.slice(0, MAX_REPORTED_NESTED_REPOSITORIES),
       (checkout) =>
         Effect.all(
@@ -377,20 +361,27 @@ const make = Effect.gen(function* () {
             projects
               .getByWorkspaceRoot(checkout.path)
               .pipe(Effect.orElseSucceed(() => Option.none())),
-            baseRef === undefined ? Effect.undefined : refResolvesLocally(checkout.path, baseRef),
+            refResolvesLocally(checkout.path, baseRef),
           ],
           { concurrency: "unbounded" },
         ).pipe(
-          Effect.map(([owner, hasBaseRef]): NestedRepository => ({
+          Effect.map(([owner, hasBaseRef]) => ({
             relativePath: checkout.relativePath,
             ...(Option.isSome(owner)
               ? { projectId: owner.value.id, projectTitle: owner.value.title }
               : {}),
-            ...(hasBaseRef === undefined ? {} : { hasBaseRef }),
+            hasBaseRef,
           })),
         ),
       { concurrency: 4 },
     );
+    return yield* new ThreadLaunchNotRepositoryError({
+      projectId: project.id,
+      projectTitle: project.title,
+      workspaceRoot: project.workspaceRoot,
+      baseRef,
+      nestedRepositories,
+    });
   });
   // A project-folder launch that names no branch records the folder's checkout, as the composer does.
   const launchBranch = (strategy: ThreadLaunchWorkspaceStrategy, workspaceRoot: string) =>
@@ -526,13 +517,7 @@ const make = Effect.gen(function* () {
     );
     const umbrellaMembers = yield* umbrellaMembersOf(project);
     if (repositoryRoot === null && umbrellaMembers.length === 0)
-      return yield* new ThreadLaunchNotRepositoryError({
-        projectId: project.id,
-        projectTitle: project.title,
-        workspaceRoot: cwd,
-        baseRef,
-        nestedRepositories: yield* nestedRepositoriesOf(project, baseRef),
-      });
+      return yield* notRepository(project, baseRef);
     const rootResolves =
       repositoryRoot !== null &&
       (hasBaseCommit ||
@@ -825,21 +810,8 @@ const make = Effect.gen(function* () {
             .repositoryRoot(project.workspaceRoot)
             .pipe(Effect.orElseSucceed(() => undefined))) === null
         ) {
-          return yield* mapError(
-            input,
-            "provision-worktree",
-            threadId,
-          )(
-            new ThreadLaunchNotRepositoryError({
-              projectId: project.id,
-              projectTitle: project.title,
-              workspaceRoot: project.workspaceRoot,
-              baseRef: input.workspaceStrategy.baseRef,
-              nestedRepositories: yield* nestedRepositoriesOf(
-                project,
-                input.workspaceStrategy.baseRef,
-              ),
-            }),
+          return yield* notRepository(project, input.workspaceStrategy.baseRef).pipe(
+            Effect.mapError(mapError(input, "provision-worktree", threadId)),
           );
         }
         if (runId !== null) {

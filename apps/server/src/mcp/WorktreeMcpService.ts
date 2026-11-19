@@ -81,7 +81,7 @@ const make = Effect.gen(function* () {
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
-  const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
+  const umbrellaMembersOf = yield* UmbrellaMembership.makeUmbrellaMembersOf;
 
   // Serialize handoffs per thread to avoid creating two worktrees and orphaning one.
   const handoffThreadsInFlight = new Set<string>();
@@ -349,9 +349,7 @@ const make = Effect.gen(function* () {
 
     const project = yield* loadProject(scope, projection.thread.projectId);
     const projectCwd = project.workspaceRoot;
-    const umbrellaMembers = Option.isNone(umbrellaMembership)
-      ? []
-      : ((yield* umbrellaMembership.value.stateOf(project))?.members ?? []);
+    const umbrellaMembers = yield* umbrellaMembersOf(project);
     if (umbrellaMembers.length > 0) {
       const baseRef = input.baseRef ?? "HEAD";
       return yield* bindWorktree(scope, input, project, {
