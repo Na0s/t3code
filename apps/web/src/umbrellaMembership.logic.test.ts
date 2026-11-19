@@ -10,6 +10,10 @@ import {
 } from "./umbrellaMembership.logic";
 
 const desktop = EnvironmentId.make("desktop");
+const grouping = {
+  sidebarProjectGroupingMode: "repository" as const,
+  sidebarProjectGroupingOverrides: {},
+};
 const project = (
   id: string,
   workspaceRoot: string,
@@ -47,14 +51,14 @@ const projects = [acme, globex, api, web, tools];
 
 describe("umbrellaMembershipActions", () => {
   it("offers a free project every umbrella on its environment and a member only its exit", () => {
-    const free = umbrellaMembershipActions([tools], projects);
+    const free = umbrellaMembershipActions([tools], projects, grouping);
     expect(free.adoptions.map(({ umbrella, path }) => [umbrella.id, path])).toEqual([
       ["acme", "/work/tools"],
       ["globex", "/work/tools"],
     ]);
     expect(free.removals).toEqual([]);
 
-    const joined = umbrellaMembershipActions([api], projects);
+    const joined = umbrellaMembershipActions([api], projects, grouping);
     expect(joined.adoptions).toEqual([]);
     expect(joined.removals.map(({ umbrella, member }) => [umbrella.id, member.path])).toEqual([
       ["acme", "/clients/acme/api"],
@@ -63,7 +67,7 @@ describe("umbrellaMembershipActions", () => {
 
   it("lists each folded project of an umbrella group once and ignores scratch projects", () => {
     const scratch = project("scratch", "/tmp/scratch", { isScratch: true });
-    const actions = umbrellaMembershipActions([acme, api, web, api, scratch], projects);
+    const actions = umbrellaMembershipActions([acme, api, web, api, scratch], projects, grouping);
     expect(actions.adoptions).toEqual([]);
     expect(actions.removals.map(({ member }) => member.relativePath)).toEqual(["api", "web"]);
   });
@@ -72,8 +76,8 @@ describe("umbrellaMembershipActions", () => {
 describe("umbrellaMenuItems", () => {
   it("maps clicked ids back to the adoption or removal they name", () => {
     const actions = {
-      adoptions: umbrellaMembershipActions([tools], projects).adoptions,
-      removals: umbrellaMembershipActions([api, web], projects).removals,
+      adoptions: umbrellaMembershipActions([tools], projects, grouping).adoptions,
+      removals: umbrellaMembershipActions([api, web], projects, grouping).removals,
     };
     const items = umbrellaMenuItems(actions);
     expect(items.map((item) => [item.label, item.children?.map((child) => child.label)])).toEqual([
@@ -95,7 +99,7 @@ describe("umbrellaMenuItems", () => {
   });
 
   it("uses a single item when one removal is possible", () => {
-    const actions = umbrellaMembershipActions([api], projects);
+    const actions = umbrellaMembershipActions([api], projects, grouping);
     expect(umbrellaMenuItems(actions)).toEqual([
       { id: "umbrella-remove:0", label: "Remove api from umbrella", detail: "acme" },
     ]);

@@ -1768,7 +1768,7 @@ function OpenCommandPaletteDialog(props: {
       )
     : undefined;
   const umbrellaActions = contextualProject
-    ? umbrellaMembershipActions([contextualProject], projects)
+    ? umbrellaMembershipActions([contextualProject], projects, clientSettings)
     : { adoptions: [], removals: [] };
   for (const { umbrella, path } of umbrellaActions.adoptions) {
     actionItems.push({

@@ -1320,7 +1320,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) => {
       const api = readLocalApi();
       if (!api) return;
-      const umbrellaActions = umbrellaMembershipActions(group.memberProjects, projects);
+      const umbrellaActions = umbrellaMembershipActions(
+        group.memberProjects,
+        projects,
+        projectGroupingSettings,
+      );
       void (async () => {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(

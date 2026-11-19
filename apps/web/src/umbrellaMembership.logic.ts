@@ -1,6 +1,9 @@
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   findUmbrellaMembership,
+  type ProjectGroupingSettings,
+} from "@t3tools/client-runtime/state/project-grouping";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import {
   umbrellaAdoptionTargets,
   umbrellaMemberLabel,
 } from "@t3tools/client-runtime/state/umbrella";
@@ -26,6 +29,7 @@ export interface UmbrellaRemoval<TProject> {
 export function umbrellaMembershipActions<TProject extends EnvironmentProject>(
   subjects: ReadonlyArray<EnvironmentProject>,
   projects: ReadonlyArray<TProject>,
+  settings: ProjectGroupingSettings,
 ): {
   readonly adoptions: ReadonlyArray<UmbrellaAdoption<TProject>>;
   readonly removals: ReadonlyArray<UmbrellaRemoval<TProject>>;
@@ -34,7 +38,7 @@ export function umbrellaMembershipActions<TProject extends EnvironmentProject>(
   const removals = new Map<string, UmbrellaRemoval<TProject>>();
   for (const project of subjects) {
     if (project.isScratch) continue;
-    const membership = findUmbrellaMembership(project, projects);
+    const membership = findUmbrellaMembership(project, projects, settings);
     if (membership !== null) {
       const { umbrella, member } = membership;
       removals.set(

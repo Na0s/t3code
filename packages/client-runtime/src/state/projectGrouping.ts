@@ -321,42 +321,72 @@ export function isUmbrellaProject(project: Pick<EnvironmentProject, "umbrellaMem
 }
 
 /**
- * Where each project that is an umbrella's member folds: the same folder on the umbrella's
- * environment, or the same repository on any environment. Umbrellas never fold into another.
+ * The umbrella a project belongs to as a member, matching how the sidebar folds it: its folder
+ * on the umbrella's environment, or else its repository on any environment. Only a folder match
+ * is the umbrella's own checkout; a repository match is a separate clone that merely groups there.
+ * Scratch projects and projects set to group separately belong to none.
  */
+export function findUmbrellaMembership<
+  TProject extends Pick<
+    EnvironmentProject,
+    "environmentId" | "id" | "workspaceRoot" | "umbrellaMembers"
+  >,
+>(
+  project: Pick<
+    EnvironmentProject,
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+  >,
+  projects: ReadonlyArray<TProject>,
+  settings: ProjectGroupingSettings,
+): {
+  readonly umbrella: TProject;
+  readonly member: UmbrellaMember;
+  readonly match: "folder" | "repository";
+} | null {
+  if (project.isScratch || resolveProjectGroupingMode(project, settings) === "separate") {
+    return null;
+  }
+  const projectPath = normalizeProjectPathForComparison(project.workspaceRoot);
+  const umbrellas = projects.filter(
+    (umbrella) => !(umbrella.id === project.id && umbrella.environmentId === project.environmentId),
+  );
+  for (const umbrella of umbrellas) {
+    if (umbrella.environmentId !== project.environmentId) continue;
+    const member = umbrella.umbrellaMembers?.find(
+      (candidate) => normalizeProjectPathForComparison(candidate.path) === projectPath,
+    );
+    if (member) return { umbrella, member, match: "folder" };
+  }
+  if (!project.repositoryIdentity) return null;
+  const repositoryKey = repositoryGroupingKeyOf(project.repositoryIdentity);
+  for (const umbrella of umbrellas) {
+    const member = umbrella.umbrellaMembers?.find(
+      (candidate) =>
+        candidate.repositoryIdentity &&
+        repositoryGroupingKeyOf(candidate.repositoryIdentity) === repositoryKey,
+    );
+    if (member) return { umbrella, member, match: "repository" };
+  }
+  return null;
+}
+
+/** Where each umbrella member project folds, when that is not already its own group. */
 function foldIntoUmbrellas<TProject extends EnvironmentProject>(
   winners: ReadonlyMap<string, TProject>,
   logicalKeyByPhysicalKey: ReadonlyMap<string, string>,
   settings: ProjectGroupingSettings,
 ): Map<string, { readonly key: string; readonly member: UmbrellaMember }> {
-  const byPath = new Map<string, { key: string; member: UmbrellaMember }>();
-  const byRepository = new Map<string, { key: string; member: UmbrellaMember }>();
-  for (const [physicalKey, project] of winners) {
-    if (!isUmbrellaProject(project)) continue;
-    const key = logicalKeyByPhysicalKey.get(physicalKey)!;
-    for (const member of project.umbrellaMembers ?? []) {
-      const pathKey = derivePhysicalProjectKeyFromPath(project.environmentId, member.path);
-      if (!byPath.has(pathKey)) byPath.set(pathKey, { key, member });
-      const repositoryKey = member.repositoryIdentity
-        ? repositoryGroupingKeyOf(member.repositoryIdentity)
-        : null;
-      if (repositoryKey && !byRepository.has(repositoryKey)) {
-        byRepository.set(repositoryKey, { key, member });
-      }
-    }
-  }
+  const umbrellas = [...winners.values()].filter(isUmbrellaProject);
   const folded = new Map<string, { readonly key: string; readonly member: UmbrellaMember }>();
-  if (byPath.size === 0 && byRepository.size === 0) return folded;
+  if (umbrellas.length === 0) return folded;
   for (const [physicalKey, project] of winners) {
-    if (isUmbrellaProject(project) || project.isScratch) continue;
-    if (resolveProjectGroupingMode(project, settings) === "separate") continue;
-    const target =
-      byPath.get(physicalKey) ??
-      (project.repositoryIdentity
-        ? byRepository.get(repositoryGroupingKeyOf(project.repositoryIdentity))
-        : undefined);
-    if (target !== undefined && target.key !== logicalKeyByPhysicalKey.get(physicalKey)) {
-      folded.set(physicalKey, target);
+    // Umbrellas never fold into another.
+    if (isUmbrellaProject(project)) continue;
+    const membership = findUmbrellaMembership(project, umbrellas, settings);
+    if (membership === null) continue;
+    const key = logicalKeyByPhysicalKey.get(derivePhysicalProjectKey(membership.umbrella))!;
+    if (key !== logicalKeyByPhysicalKey.get(physicalKey)) {
+      folded.set(physicalKey, { key, member: membership.member });
     }
   }
   return folded;

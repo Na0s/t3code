@@ -1,8 +1,4 @@
-import {
-  repositoryGroupingKeyOf,
-  type ProjectSettingsOverrides,
-  type UmbrellaMember,
-} from "@t3tools/contracts";
+import type { ProjectSettingsOverrides, UmbrellaMember } from "@t3tools/contracts";
 
 import { umbrellaWorktreeMemberPaths } from "@t3tools/shared/umbrellaWorktree";
 
@@ -149,48 +145,6 @@ export function restoreUmbrellaMember(
     overrides?.umbrellaAdoptedPaths ?? [],
     without(umbrella.workspaceRoot, overrides?.umbrellaExcludedPaths, path),
   );
-}
-
-/**
- * The umbrella a project belongs to as a member, matching how the sidebar folds it: its folder
- * on the umbrella's environment, or else its repository on any environment. Only a folder match
- * is the umbrella's own checkout; a repository match is a separate clone that merely groups there.
- */
-export function findUmbrellaMembership<TProject extends UmbrellaProject>(
-  project: Pick<
-    EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
-  >,
-  projects: ReadonlyArray<TProject>,
-): {
-  readonly umbrella: TProject;
-  readonly member: UmbrellaMember;
-  readonly match: "folder" | "repository";
-} | null {
-  const projectPath = normalizeProjectPathForComparison(project.workspaceRoot);
-  const repositoryKey = project.repositoryIdentity
-    ? repositoryGroupingKeyOf(project.repositoryIdentity)
-    : null;
-  const umbrellas = projects.filter(
-    (umbrella) => !(umbrella.id === project.id && umbrella.environmentId === project.environmentId),
-  );
-  for (const umbrella of umbrellas) {
-    if (umbrella.environmentId !== project.environmentId) continue;
-    const member = umbrella.umbrellaMembers?.find(
-      (candidate) => normalizeProjectPathForComparison(candidate.path) === projectPath,
-    );
-    if (member) return { umbrella, member, match: "folder" };
-  }
-  if (repositoryKey === null) return null;
-  for (const umbrella of umbrellas) {
-    const member = umbrella.umbrellaMembers?.find(
-      (candidate) =>
-        candidate.repositoryIdentity &&
-        repositoryGroupingKeyOf(candidate.repositoryIdentity) === repositoryKey,
-    );
-    if (member) return { umbrella, member, match: "repository" };
-  }
-  return null;
 }
 
 /** Umbrellas on the project's environment that could adopt its folder. */

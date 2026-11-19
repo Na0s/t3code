@@ -2,9 +2,9 @@ import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
+import { findUmbrellaMembership, type ProjectGroupingSettings } from "./projectGrouping.ts";
 import {
   adoptUmbrellaMember,
-  findUmbrellaMembership,
   removeUmbrellaMember,
   restoreUmbrellaMember,
   umbrellaAdoptionTargets,
@@ -14,6 +14,10 @@ import {
 } from "./umbrella.ts";
 
 const environmentId = EnvironmentId.make("desktop");
+const grouping: ProjectGroupingSettings = {
+  sidebarProjectGroupingMode: "repository",
+  sidebarProjectGroupingOverrides: {},
+};
 const apiIdentity = {
   canonicalKey: "github.com/acme/api",
   locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl: "x" },
@@ -93,17 +97,24 @@ describe("umbrella membership", () => {
     });
     const projects = [umbrella, here, laptop, elsewhere];
 
-    expect(findUmbrellaMembership(here, projects)).toMatchObject({
+    expect(findUmbrellaMembership(here, projects, grouping)).toMatchObject({
       umbrella: { id: umbrella.id },
       match: "folder",
     });
     // Another machine's clone only groups under the umbrella; removing it must not exclude the
     // umbrella's own checkout.
-    expect(findUmbrellaMembership(laptop, projects)).toMatchObject({
+    expect(findUmbrellaMembership(laptop, projects, grouping)).toMatchObject({
       member: { relativePath: "api" },
       match: "repository",
     });
-    expect(findUmbrellaMembership(elsewhere, projects)).toBeNull();
+    expect(findUmbrellaMembership(elsewhere, projects, grouping)).toBeNull();
+    // A project set to group separately stays out of the umbrella, as the sidebar keeps it.
+    expect(
+      findUmbrellaMembership(here, projects, {
+        ...grouping,
+        sidebarProjectGroupingOverrides: { [`${environmentId}:/clients/acme/api`]: "separate" },
+      }),
+    ).toBeNull();
     expect(umbrellaAdoptionTargets(here, projects)).toEqual([]);
     expect(umbrellaAdoptionTargets(project("site", "/work/site"), projects)).toEqual([umbrella]);
     expect(umbrellaAdoptionTargets(elsewhere, projects)).toEqual([]);
