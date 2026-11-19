@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AuthSettingsWriteScope, repositoryGroupingDisplayNameOf } from "@t3tools/contracts";
 import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
+import { isAbsolutePath } from "@t3tools/shared/path";
 import { UmbrellaIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 
@@ -16,8 +17,6 @@ import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { applyPendingScopedWrites, pendingScopedWritesAtom } from "./scopedSettings";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-
-const isAbsolutePath = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
 
 function UmbrellaAdoptForm(props: {
   disabled: boolean;

@@ -1,5 +1,6 @@
 import type { ProjectSettingsOverrides, UmbrellaMember } from "@t3tools/contracts";
 
+import { isAbsolutePath } from "@t3tools/shared/path";
 import { umbrellaWorktreeMemberPaths } from "@t3tools/shared/umbrellaWorktree";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -73,11 +74,9 @@ export function umbrellaMembersInFiles<TMember extends Pick<UmbrellaMember, "rel
   ];
 }
 
-const isAbsolute = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
-
 /** Settings may hold paths relative to the umbrella root; compare them resolved. */
 function sameSettingPath(root: string, entry: string, path: string): boolean {
-  const resolved = isAbsolute(entry) ? entry : `${root.replace(/[\\/]+$/, "")}/${entry}`;
+  const resolved = isAbsolutePath(entry) ? entry : `${root.replace(/[\\/]+$/, "")}/${entry}`;
   return normalizeProjectPathForComparison(resolved) === normalizeProjectPathForComparison(path);
 }
 
