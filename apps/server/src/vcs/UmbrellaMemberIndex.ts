@@ -14,7 +14,7 @@ export interface UmbrellaMemberCheckout {
   readonly relativePath: string;
 }
 
-export interface UmbrellaMemberIndexShape {
+interface UmbrellaMemberIndexShape {
   /** Replaces every umbrella, keyed by symlink-resolved root. */
   readonly replace: (
     umbrellas: ReadonlyMap<string, ReadonlyArray<UmbrellaMemberCheckout>>,

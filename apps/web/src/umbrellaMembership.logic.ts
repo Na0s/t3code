@@ -9,7 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/umbrella";
 import type { ContextMenuItem, UmbrellaMember } from "@t3tools/contracts";
 
-export interface UmbrellaAdoption<TProject> {
+interface UmbrellaAdoption<TProject> {
   readonly umbrella: TProject;
   readonly path: string;
 }

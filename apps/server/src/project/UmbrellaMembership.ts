@@ -32,7 +32,7 @@ interface UmbrellaProject {
   readonly workspaceRoot: string;
 }
 
-export interface UmbrellaState {
+interface UmbrellaState {
   readonly members: ReadonlyArray<UmbrellaMember>;
   readonly suggestions: ReadonlyArray<UmbrellaMember>;
   readonly enclosingRepository: string | null;

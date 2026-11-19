@@ -30,7 +30,7 @@ import {
   umbrellaWorktreeRepositories,
 } from "./umbrellaWorktreeLayout.ts";
 
-export interface CreateUmbrellaWorktreeInput {
+interface CreateUmbrellaWorktreeInput {
   readonly umbrellaRoot: string;
   /** The umbrella's enabled members. */
   readonly members: ReadonlyArray<Pick<UmbrellaMember, "path" | "relativePath">>;
@@ -603,5 +603,3 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
     renameBranch,
   };
 });
-
-export type UmbrellaWorktrees = Effect.Success<typeof makeUmbrellaWorktrees>;

@@ -1,7 +1,7 @@
 import type { UmbrellaMember, VcsStatusResult } from "@t3tools/contracts";
 import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
 
-export interface UmbrellaDiffSection {
+interface UmbrellaDiffSection {
   /** The member's path, or null for the umbrella root. */
   readonly memberPath: string | null;
   readonly label: string;
