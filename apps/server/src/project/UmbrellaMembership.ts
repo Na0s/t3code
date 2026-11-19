@@ -1,7 +1,6 @@
 import type {
   ProjectId,
   ProjectSettingsOverrides,
-  RepositoryIdentity,
   ServerSettings as ServerSettingsSchema,
   UmbrellaMember,
 } from "@t3tools/contracts";
@@ -60,42 +59,9 @@ function umbrellaSettingsOf(
 type UmbrellaSettings = ReturnType<typeof umbrellaSettingsOf>;
 
 /**
- * Discovered checkouts plus adopted ones, minus exclusions, ordered by relative path. Relative
- * settings paths resolve against the root; a checkout found both ways counts as nested.
- */
-function resolveUmbrellaMembers(input: {
-  readonly path: Path.Path;
-  readonly workspaceRoot: string;
-  readonly nested: ReadonlyArray<string>;
-  readonly adopted: ReadonlyArray<string>;
-  readonly excluded: ReadonlyArray<string>;
-  readonly identityOf: (memberPath: string) => RepositoryIdentity | null;
-}): ReadonlyArray<UmbrellaMember> {
-  const { path } = input;
-  const root = path.resolve(input.workspaceRoot);
-  const resolve = (value: string) => path.resolve(root, value);
-  const excluded = new Set(input.excluded.map(resolve));
-  const members = new Map<string, UmbrellaMember["source"]>();
-  for (const nested of input.nested) members.set(resolve(nested), "nested");
-  for (const adopted of input.adopted) {
-    const memberPath = resolve(adopted);
-    if (!members.has(memberPath)) members.set(memberPath, "adopted");
-  }
-  return Array.from(members, ([memberPath, source]) => ({ memberPath, source }))
-    .filter(({ memberPath }) => memberPath !== root && !excluded.has(memberPath))
-    .map(({ memberPath, source }) => ({
-      path: memberPath,
-      relativePath: path.relative(root, memberPath).split(path.sep).join("/"),
-      repositoryIdentity: input.identityOf(memberPath),
-      source,
-    }))
-    .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath));
-}
-
-/**
- * Members take effect only once the user turns the umbrella on; until then they are suggestions.
- * A root inside another repository's work tree cannot be an umbrella: that repository's paths
- * are relative to its own top level, not to the umbrella.
+ * Discovered checkouts plus adopted ones, minus exclusions; a checkout found both ways is nested.
+ * They are suggestions until the user turns the umbrella on. A root inside another repository's
+ * work tree cannot be one: that repository's paths are relative to its own top level.
  */
 export function umbrellaStateOf(input: {
   readonly path: Path.Path;
@@ -107,16 +73,26 @@ export function umbrellaStateOf(input: {
   if (input.enclosingRepository !== null) {
     return { ...EMPTY_STATE, enclosingRepository: input.enclosingRepository };
   }
-  const candidates = resolveUmbrellaMembers({
-    path: input.path,
-    workspaceRoot: input.workspaceRoot,
-    nested: input.nested,
-    adopted: input.settings.adopted,
-    excluded: input.settings.excluded,
-    identityOf: () => null,
-  });
+  const { path, settings } = input;
+  const root = path.resolve(input.workspaceRoot);
+  const resolve = (value: string) => path.resolve(root, value);
+  const excluded = new Set(settings.excluded.map(resolve));
+  const sources = new Map<string, UmbrellaMember["source"]>();
+  for (const nested of input.nested) sources.set(resolve(nested), "nested");
+  for (const adopted of settings.adopted) {
+    const memberPath = resolve(adopted);
+    if (!sources.has(memberPath)) sources.set(memberPath, "adopted");
+  }
+  const candidates = Array.from(sources, ([memberPath, source]) => ({
+    path: memberPath,
+    relativePath: path.relative(root, memberPath).split(path.sep).join("/"),
+    repositoryIdentity: null,
+    source,
+  }))
+    .filter((member) => member.path !== root && !excluded.has(member.path))
+    .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath));
   if (candidates.length === 0) return EMPTY_STATE;
-  return input.settings.enabled
+  return settings.enabled
     ? { ...EMPTY_STATE, members: candidates }
     : { ...EMPTY_STATE, suggestions: candidates };
 }
