@@ -84,6 +84,17 @@ const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
 const managedWorktreesDir = "/tmp/provider-turn-start-worktrees";
 // fs.realpath applies `..` and `.` before following symlinks.
+// No folder here is an umbrella worktree.
+const noUmbrellaManifest = (target: string) =>
+  Effect.fail(
+    PlatformError.systemError({
+      _tag: "NotFound",
+      module: "FileSystem",
+      method: "readFileString",
+      pathOrDescriptor: target,
+    }),
+  );
+
 const normalize = (target: string) => {
   const parts: Array<string> = [];
   for (const part of target.split("/")) {
@@ -165,15 +176,7 @@ function startWithMissingWorktree(
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         Layer.succeed(FileSystem.FileSystem, {
           exists: () => Effect.succeed(false),
-          readFileString: (target: string) =>
-            Effect.fail(
-              PlatformError.systemError({
-                _tag: "NotFound",
-                module: "FileSystem",
-                method: "readFileString",
-                pathOrDescriptor: target,
-              }),
-            ),
+          readFileString: noUmbrellaManifest,
           realPath: (target: string) =>
             normalize(target) in realPaths
               ? Effect.succeed(realPaths[normalize(target)])
@@ -310,15 +313,7 @@ const layerRestoreLeaseTest = layerThreadWorktreeRestore.pipe(
       Layer.succeed(FileSystem.FileSystem, {
         exists: restoreLeaseExists,
         realPath: (target: string) => Effect.succeed(normalize(target)),
-        readFileString: (target: string) =>
-          Effect.fail(
-            PlatformError.systemError({
-              _tag: "NotFound",
-              module: "FileSystem",
-              method: "readFileString",
-              pathOrDescriptor: target,
-            }),
-          ),
+        readFileString: noUmbrellaManifest,
       } as never),
       layerWorktreeLocation(),
       Layer.mock(GitWorkflow.GitWorkflowService)({
@@ -383,15 +378,7 @@ it.each([
               exists: () => Effect.succeed(false),
               realPath: (target: string) => Effect.succeed(target),
               makeDirectory,
-              readFileString: (target: string) =>
-                Effect.fail(
-                  PlatformError.systemError({
-                    _tag: "NotFound",
-                    module: "FileSystem",
-                    method: "readFileString",
-                    pathOrDescriptor: target,
-                  }),
-                ),
+              readFileString: noUmbrellaManifest,
             } as never),
             Path.layer,
             Layer.mock(ServerConfig.ServerConfig)({
