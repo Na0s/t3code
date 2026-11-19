@@ -166,7 +166,6 @@ const make = Effect.gen(function* () {
   >(
     scope: McpThreadInvocationScope,
     input: WorktreeMcpHandoffInput,
-    projectId: ProjectId,
     project: {
       readonly id: ProjectId;
       readonly workspaceRoot: string;
@@ -285,7 +284,7 @@ const make = Effect.gen(function* () {
           setupScript = yield* setupScriptRunner
             .runForThread({
               threadId: scope.thread.threadId,
-              projectId,
+              projectId: project.id,
               projectCwd,
               worktreePath,
               project: {
@@ -354,8 +353,9 @@ const make = Effect.gen(function* () {
       ? []
       : ((yield* umbrellaMembership.value.stateOf(project))?.members ?? []);
     if (umbrellaMembers.length > 0) {
-      return yield* bindWorktree(scope, input, projection.thread.projectId, project, {
-        baseRef: input.baseRef ?? "HEAD",
+      const baseRef = input.baseRef ?? "HEAD";
+      return yield* bindWorktree(scope, input, project, {
+        baseRef,
         startedFromOrigin: false,
         create: Effect.gen(function* () {
           const startFromOrigin =
@@ -371,7 +371,7 @@ const make = Effect.gen(function* () {
             .create({
               umbrellaRoot: projectCwd,
               members: umbrellaMembers,
-              baseRef: input.baseRef ?? "HEAD",
+              baseRef,
               startFromOrigin,
               branch: input.branch,
               flattenOnConflict: false,
@@ -450,7 +450,7 @@ const make = Effect.gen(function* () {
       }
     }
 
-    return yield* bindWorktree(scope, input, projection.thread.projectId, project, {
+    return yield* bindWorktree(scope, input, project, {
       baseRef,
       startedFromOrigin,
       create: gitWorkflow

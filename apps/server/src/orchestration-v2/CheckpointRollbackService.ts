@@ -240,11 +240,14 @@ export const layer: Layer.Layer<
 
       const { worktreePath, branch } = context.thread;
       // Recreated only where the server would have made it, as turn start does.
-      const umbrellaWorktree =
-        worktreePath != null && (yield* umbrellaWorktrees.read(worktreePath)) !== null;
-      if (umbrellaWorktree && branch != null && (yield* isManagedWorktreePath(worktreePath!))) {
+      if (
+        worktreePath != null &&
+        branch != null &&
+        (yield* umbrellaWorktrees.read(worktreePath)) !== null &&
+        (yield* isManagedWorktreePath(worktreePath))
+      ) {
         // Each missing repository comes back on its own; a folder with files in it is left alone.
-        yield* umbrellaWorktrees.restoreMissing({ worktreePath: worktreePath!, branch });
+        yield* umbrellaWorktrees.restoreMissing({ worktreePath, branch });
       } else if (worktreePath != null && branch != null) {
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
         const leftover =

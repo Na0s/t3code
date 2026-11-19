@@ -454,13 +454,19 @@ export const make = Effect.gen(function* () {
       (thread) =>
         Effect.gen(function* () {
           const project = projects.get(thread.projectId);
+          const { worktreePath } = thread;
           if (project === undefined || thread.branch === null) return;
+          // A worktree folder can outlive its .git, and git there fails with not_a_repository.
+          // An unreadable .git keeps the worktree, so git fails there and the thread is skipped.
+          const hasCheckout =
+            worktreePath !== null &&
+            (yield* fileSystem
+              .exists(path.join(worktreePath, ".git"))
+              .pipe(Effect.orElseSucceed(() => true)));
           if (
-            thread.worktreePath !== null &&
-            !(yield* fileSystem
-              .exists(path.join(thread.worktreePath, ".git"))
-              .pipe(Effect.orElseSucceed(() => true))) &&
-            (yield* readUmbrellaWorktree(thread.worktreePath).pipe(
+            worktreePath !== null &&
+            !hasCheckout &&
+            (yield* readUmbrellaWorktree(worktreePath).pipe(
               Effect.provideService(FileSystem.FileSystem, fileSystem),
               Effect.provideService(Path.Path, path),
             )) !== null
@@ -468,17 +474,7 @@ export const make = Effect.gen(function* () {
             plainUmbrellaThreads.add(thread.id);
             return;
           }
-          // A worktree folder can outlive its .git, and git there fails with not_a_repository.
-          // An unreadable .git keeps the worktree, so git fails there and the thread is skipped.
-          lookupCwdByThreadId.set(
-            thread.id,
-            thread.worktreePath !== null &&
-              (yield* fileSystem
-                .exists(path.join(thread.worktreePath, ".git"))
-                .pipe(Effect.orElseSucceed(() => true)))
-              ? thread.worktreePath
-              : project.workspaceRoot,
-          );
+          lookupCwdByThreadId.set(thread.id, hasCheckout ? worktreePath : project.workspaceRoot);
         }),
       { concurrency: 8, discard: true },
     );
