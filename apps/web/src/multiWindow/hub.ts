@@ -7,16 +7,14 @@ import { Atom } from "effect/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { type HubLinkRequest, type HubLinkResponse, onHubLinkPort, toRpcPort } from "./hubLink";
+import {
+  type HubLinkRequest,
+  type HubLinkResponse,
+  isHubLinkRequest,
+  onHubLinkPort,
+  toRpcPort,
+} from "./hubLink";
 import { desktopWindowsBridge, readDesktopWindowContext } from "./windowContext";
-
-const isHubLinkRequest = (data: unknown): data is HubLinkRequest =>
-  typeof data === "object" &&
-  data !== null &&
-  typeof (data as { readonly leaseId?: unknown }).leaseId === "number" &&
-  ((data as { readonly type?: unknown }).type === "release" ||
-    ((data as { readonly type?: unknown }).type === "lease" &&
-      typeof (data as { readonly environmentId?: unknown }).environmentId === "string"));
 
 /**
  * Serves secondary windows' environment connections from this window's own

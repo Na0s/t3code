@@ -1,15 +1,34 @@
 import { DESKTOP_HUB_LINK_MESSAGE_TYPE, type DesktopHubLinkMessage } from "@t3tools/contracts";
 import type { RpcPort } from "@t3tools/client-runtime/rpc";
+import * as Schema from "effect/Schema";
 
 /** Messages a secondary window sends the hub over its link port. */
-export type HubLinkRequest =
-  | { readonly type: "lease"; readonly leaseId: number; readonly environmentId: string }
-  | { readonly type: "release"; readonly leaseId: number };
+const HubLinkRequest = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("lease"),
+    leaseId: Schema.Number,
+    environmentId: Schema.String,
+  }),
+  Schema.Struct({ type: Schema.Literal("release"), leaseId: Schema.Number }),
+]);
+export type HubLinkRequest = typeof HubLinkRequest.Type;
+export const isHubLinkRequest = Schema.is(HubLinkRequest);
 
 /** The hub's answers. A `leased` message transfers the lease's session port. */
-export type HubLinkResponse =
-  | { readonly type: "leased"; readonly leaseId: number; readonly prepared: unknown }
-  | { readonly type: "leaseFailed"; readonly leaseId: number; readonly error: unknown };
+const HubLinkResponse = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("leased"),
+    leaseId: Schema.Number,
+    prepared: Schema.Unknown,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("leaseFailed"),
+    leaseId: Schema.Number,
+    error: Schema.Unknown,
+  }),
+]);
+export type HubLinkResponse = typeof HubLinkResponse.Type;
+export const isHubLinkResponse = Schema.is(HubLinkResponse);
 
 export function toRpcPort(port: MessagePort): RpcPort {
   return {

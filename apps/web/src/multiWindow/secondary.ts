@@ -9,7 +9,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { type HubLinkRequest, type HubLinkResponse, onHubLinkPort, toRpcPort } from "./hubLink";
+import { type HubLinkRequest, isHubLinkResponse, onHubLinkPort, toRpcPort } from "./hubLink";
 import { desktopWindowsBridge } from "./windowContext";
 
 const hubGone = (detail: string) =>
@@ -27,13 +27,6 @@ interface Link {
   readonly port: MessagePort;
   readonly leases: Map<number, ActiveLease>;
 }
-
-const isHubLinkResponse = (data: unknown): data is HubLinkResponse =>
-  typeof data === "object" &&
-  data !== null &&
-  typeof (data as { readonly leaseId?: unknown }).leaseId === "number" &&
-  ((data as { readonly type?: unknown }).type === "leased" ||
-    (data as { readonly type?: unknown }).type === "leaseFailed");
 
 /** A session port that can also be ended locally when the hub disappears without a word. */
 function endableRpcPort(port: MessagePort): {
