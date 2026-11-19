@@ -5,7 +5,6 @@ import {
   composeWindowTitle,
   nextUnsavedWindowName,
   resolveWindowCloseAction,
-  resolveWindowCloseDecision,
   type DesktopWindowCloseInput,
 } from "./DesktopWindowProfiles.ts";
 
@@ -60,17 +59,6 @@ describe("resolveWindowCloseAction", () => {
                 }
                 if (quitting) expect(action).toBe("close");
               }
-  });
-});
-
-describe("resolveWindowCloseDecision", () => {
-  it("maps the renderer's answer to keeping, closing, or saving under a trimmed name", () => {
-    expect(resolveWindowCloseDecision({ action: "cancel" })).toEqual({ kind: "keep-open" });
-    expect(resolveWindowCloseDecision({ action: "discard" })).toEqual({ kind: "close" });
-    expect(resolveWindowCloseDecision({ action: "save", name: "  Work  " })).toEqual({
-      kind: "save-and-close",
-      name: "Work",
-    });
   });
 });
 

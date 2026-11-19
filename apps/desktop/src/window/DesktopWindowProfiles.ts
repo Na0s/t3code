@@ -1,6 +1,4 @@
-import type { DesktopWindowCloseDecision } from "@t3tools/contracts";
-
-export type DesktopWindowCloseAction =
+type DesktopWindowCloseAction =
   /** Let the window close. */
   | "close"
   /** Keep the main window's renderer running for the secondary windows it serves. */
@@ -27,24 +25,6 @@ export function resolveWindowCloseAction(input: DesktopWindowCloseInput): Deskto
   if (input.isMain) return input.secondaryWindowCount > 0 ? "hide" : "close";
   if (input.saved || !input.rendererCanPrompt) return "close";
   return input.promptPending ? "keep-open" : "prompt";
-}
-
-type DesktopWindowCloseOutcome =
-  | { readonly kind: "keep-open" }
-  | { readonly kind: "close" }
-  | { readonly kind: "save-and-close"; readonly name: string };
-
-export function resolveWindowCloseDecision(
-  decision: DesktopWindowCloseDecision,
-): DesktopWindowCloseOutcome {
-  switch (decision.action) {
-    case "cancel":
-      return { kind: "keep-open" };
-    case "discard":
-      return { kind: "close" };
-    case "save":
-      return { kind: "save-and-close", name: decision.name.trim() };
-  }
 }
 
 const UNSAVED_WINDOW_NAME_PREFIX = "Window ";

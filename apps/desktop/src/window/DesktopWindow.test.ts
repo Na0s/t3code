@@ -1486,7 +1486,7 @@ describe("DesktopWindow", () => {
         assert.equal(secondary.close.mock.calls.length, 0);
         yield* windows.resolveCloseRequest(secondary.window, request.requestId, {
           action: "save",
-          name: "Work",
+          name: "  Work  ",
         });
         assert.equal(secondary.close.mock.calls.length, 1);
         const state = yield* windows.windowsState;

@@ -68,7 +68,6 @@ import {
   composeWindowTitle,
   nextUnsavedWindowName,
   resolveWindowCloseAction,
-  resolveWindowCloseDecision,
 } from "./DesktopWindowProfiles.ts";
 
 const TITLEBAR_HEIGHT = 40;
@@ -505,7 +504,6 @@ interface AppWindowEntry {
   readonly window: Electron.BrowserWindow;
   readonly windowId: number;
   readonly isMain: boolean;
-  readonly context: DesktopWindowContext;
   /** Null while a secondary window is unsaved; the main window holds the default profile. */
   profileId: string | null;
   unsavedName: string;
@@ -531,9 +529,15 @@ interface AppWindowEntry {
 
 const serializeWindowsState = (state: DesktopWindowsState) => JSON.stringify(state);
 
-const isCrossDocumentMainFrameNavigation = (
-  event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
-) => event.isMainFrame && !event.isSameDocument;
+const toWindowProfile = (
+  profile: DesktopAppSettings.DesktopWindowProfileSettings,
+): DesktopWindowProfile => ({
+  id: profile.id,
+  name: profile.name,
+  projectScopeKeys: profile.projectScopeKeys,
+  theme: profile.theme,
+  isDefault: profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
+});
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -633,13 +637,7 @@ export const make = Effect.gen(function* () {
     const settings = yield* desktopSettings.get;
     const live = liveEntries().sort((left, right) => Number(right.isMain) - Number(left.isMain));
     return {
-      profiles: settings.windowProfiles.map((profile) => ({
-        id: profile.id,
-        name: profile.name,
-        projectScopeKeys: profile.projectScopeKeys,
-        theme: profile.theme,
-        isDefault: profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
-      })),
+      profiles: settings.windowProfiles.map(toWindowProfile),
       windows: live.map((entry) => ({
         windowId: entry.windowId,
         isMain: entry.isMain,
@@ -813,22 +811,6 @@ export const make = Effect.gen(function* () {
       window,
       windowId: window.id,
       isMain,
-      context:
-        spec.role === "main"
-          ? {
-              windowId: window.id,
-              isMain: true,
-              profileId: DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
-              projectScopeKeys: [],
-              theme: null,
-            }
-          : {
-              windowId: window.id,
-              isMain: false,
-              profileId: spec.profile?.id ?? null,
-              projectScopeKeys: spec.profile?.projectScopeKeys ?? spec.projectScopeKeys,
-              theme: spec.profile?.theme ?? null,
-            },
       profileId:
         spec.role === "main" ? DEFAULT_DESKTOP_WINDOW_PROFILE_ID : (spec.profile?.id ?? null),
       unsavedName: spec.role === "main" ? "" : spec.unsavedName,
@@ -1120,7 +1102,7 @@ export const make = Effect.gen(function* () {
       else notifyHubPeerGone(entry.windowId);
     };
     window.webContents.on("did-start-navigation", (event) => {
-      if (isCrossDocumentMainFrameNavigation(event)) rendererGone();
+      if (event.isMainFrame && !event.isSameDocument) rendererGone();
     });
     window.webContents.on("destroyed", rendererGone);
 
@@ -1545,35 +1527,45 @@ export const make = Effect.gen(function* () {
     if (environment.platform !== "darwin") main.window.close();
   });
 
-  const createProfileFor = Effect.fn("desktop.window.createProfileFor")(function* (
-    entry: AppWindowEntry,
-    name: string,
+  const newId = Effect.map(random.uuidV4(), (uuid) => uuid.replace(/-/g, ""));
+
+  /** Saves a new profile, as normalized; fails if normalizing dropped it. */
+  const addProfile = Effect.fn("desktop.window.addProfile")(function* (
+    profile: Omit<DesktopAppSettings.DesktopWindowProfileSettings, "id" | "openAtQuit">,
   ) {
-    const id = (yield* random.uuidV4()).replace(/-/g, "");
-    const placement = entry.readPlacement();
-    const profile: DesktopAppSettings.DesktopWindowProfileSettings = {
-      id,
-      name: name.trim(),
-      projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(entry.projectScopeKeys),
-      theme: null,
-      bounds: placement?.bounds ?? null,
-      maximized: placement?.isMaximized ?? false,
-      openAtQuit: false,
-    };
-    yield* desktopSettings.updateWindowProfiles((profiles) => [...profiles, profile]);
+    const id = yield* newId;
+    yield* desktopSettings.updateWindowProfiles((profiles) => [
+      ...profiles,
+      { ...profile, id, name: profile.name.trim(), openAtQuit: false },
+    ]);
     const saved = (yield* desktopSettings.get).windowProfiles.find(
       (candidate) => candidate.id === id,
     );
     if (saved === undefined) {
       return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId: id });
     }
-    entry.profileId = id;
+    return saved;
+  });
+
+  const createProfileFor = Effect.fn("desktop.window.createProfileFor")(function* (
+    entry: AppWindowEntry,
+    name: string,
+  ) {
+    const placement = entry.readPlacement();
+    const saved = yield* addProfile({
+      name,
+      projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(entry.projectScopeKeys),
+      theme: null,
+      bounds: placement?.bounds ?? null,
+      maximized: placement?.isMaximized ?? false,
+    });
+    entry.profileId = saved.id;
     yield* syncWindows();
     return saved;
   });
 
   const requestClose = Effect.fn("desktop.window.requestClose")(function* (entry: AppWindowEntry) {
-    const requestId = (yield* random.uuidV4()).replace(/-/g, "");
+    const requestId = yield* newId;
     entry.pendingCloseRequestId = requestId;
     if (entry.window.isDestroyed()) return;
     entry.window.webContents.send(WINDOWS_CLOSE_REQUEST_CHANNEL, {
@@ -1589,16 +1581,6 @@ export const make = Effect.gen(function* () {
       reason: "multi-window-disabled",
       profileId: null,
     });
-  });
-
-  const toWindowProfile = (
-    profile: DesktopAppSettings.DesktopWindowProfileSettings,
-  ): DesktopWindowProfile => ({
-    id: profile.id,
-    name: profile.name,
-    projectScopeKeys: profile.projectScopeKeys,
-    theme: profile.theme,
-    isDefault: profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
   });
 
   const requireSecondary = (window: Electron.BrowserWindow) => {
@@ -1904,16 +1886,13 @@ export const make = Effect.gen(function* () {
     windowContext: Effect.fn("desktop.window.windowContext")(function* (window) {
       const entry = entryOf(window);
       if (entry === undefined) return Option.none<DesktopWindowContext>();
-      if (entry.isMain) return Option.some(entry.context);
       // A reloaded secondary window resumes its live filter and profile, not its opening ones.
-      const profile =
-        entry.profileId === null
-          ? undefined
-          : (yield* desktopSettings.get).windowProfiles.find(
-              (candidate) => candidate.id === entry.profileId,
-            );
+      const profile = (yield* desktopSettings.get).windowProfiles.find(
+        (candidate) => candidate.id === entry.profileId,
+      );
       return Option.some<DesktopWindowContext>({
-        ...entry.context,
+        windowId: entry.windowId,
+        isMain: entry.isMain,
         profileId: entry.profileId,
         projectScopeKeys: entry.projectScopeKeys,
         theme: profile?.theme ?? null,
@@ -1964,25 +1943,14 @@ export const make = Effect.gen(function* () {
       return toWindowProfile(yield* createProfileFor(entry, name));
     }),
     createProfile: Effect.fn("desktop.window.createProfile")(function* (input) {
-      const id = (yield* random.uuidV4()).replace(/-/g, "");
-      yield* updateProfiles((profiles) => [
-        ...profiles,
-        {
-          id,
-          name: input.name.trim(),
-          projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(input.projectScopeKeys),
-          theme: input.theme,
-          bounds: null,
-          maximized: false,
-          openAtQuit: false,
-        },
-      ]);
-      const saved = (yield* desktopSettings.get).windowProfiles.find(
-        (candidate) => candidate.id === id,
-      );
-      if (saved === undefined) {
-        return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId: id });
-      }
+      const saved = yield* addProfile({
+        name: input.name,
+        projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(input.projectScopeKeys),
+        theme: input.theme,
+        bounds: null,
+        maximized: false,
+      });
+      yield* syncWindows();
       return toWindowProfile(saved);
     }),
     updateProfile: Effect.fn("desktop.window.updateProfile")(function* (input) {
@@ -2056,9 +2024,8 @@ export const make = Effect.gen(function* () {
         const entry = entryOf(window);
         if (entry === undefined || entry.pendingCloseRequestId !== requestId) return;
         entry.pendingCloseRequestId = null;
-        const outcome = resolveWindowCloseDecision(decision);
-        if (outcome.kind === "keep-open") return;
-        if (outcome.kind === "save-and-close") yield* createProfileFor(entry, outcome.name);
+        if (decision.action === "cancel") return;
+        if (decision.action === "save") yield* createProfileFor(entry, decision.name);
         entry.closeApproved = true;
         window.close();
       },
