@@ -25,38 +25,24 @@ Reopen a saved window with **Open window: _name_** in the command palette, or fr
 
 ## Manage saved windows
 
-**Settings → General → Windows** lists the main window with your saved windows below it. From there
-you can rename a window by editing its name in place, pick its theme, open or focus it, or delete it.
-Each saved window's row fades in its theme's accent colour from the right edge, or its projects'
-colours when it uses **Project colour**. The theme menu shows each theme's light and dark colours.
-**Add saved window** creates one without opening it: type its name in the new row, then pick the
-projects it shows and a theme. The project list is grouped as the sidebar groups projects, with a
-group's projects indented under it. Deleting a saved window that is open leaves it open as an
+**Settings → General → Windows** lists the main window with your saved windows below it. Rename a
+window by editing its name in place, pick its theme, open or focus it, or delete it. **Add saved
+window** creates one without opening it. Deleting a saved window that is open leaves it open as an
 unsaved window. A window you have not saved yet can be saved from the same section.
 
-By default a window shows its projects' icon colours across the top of its sidebar, behind the T3
-Code name and the Search row: one project's colour, or a left-to-right blend of several. The rest
-of the window keeps its theme. Projects whose icon is an image or an emoji add no colour, and a
-window that shows all projects, or only such projects, looks like the main window. Pick a theme for
-a saved window to use that theme instead, without project colours. Changing the theme from inside
-a window with its own theme changes only that window. Light, dark, and system appearance stay
-shared by every window.
+A window with a project filter uses **Project colour** by default: its projects' icon colours tint
+the top of its sidebar, and the rest of the window keeps the main window's theme. Projects whose
+icon is an image or an emoji add no colour. Pick a theme for a saved window to use that theme
+instead. Changing the theme from inside a window with its own theme changes only that window.
+Light, dark, and system appearance stay shared by every window.
 
 ## Mini Mode
 
 Choose **Enter Mini Mode** in the main window's command palette to turn the main window into a
-compact panel. Its top bar offers **Search**, **New Window** (while multiple windows are on) and
-**Expand**, which returns to the full app. Opening a search result or the full settings also
-returns to the full app. On macOS the panel has no close, minimise or zoom buttons.
+compact panel. **Expand** returns to the full app, as does opening a search result or the full
+settings. On macOS the panel has no close, minimise or zoom buttons.
 
-The tabs along the bottom each show one thing:
-
-- **Windows**: your other open windows, each with its project filter, name, and what it is showing.
-  Choose one to bring it to the front.
-- **Settings**: the multiple windows switch, and a link to all settings.
-- **Pull requests**: the list your Pull requests page opens with. Choosing one opens it in your
-  browser.
-- **Usage**: how much of each provider's plan is left and when it resets. The panel opens on this
-  tab. The limits are reread when the tab opens or the window regains focus, and on **Refresh
-  limits**.
-- **Update**: the version you are running and whether an update is ready.
+The panel's tabs show your other open windows, the multiple windows switch, the list your Pull
+requests page opens with, each provider's usage limits, and whether an update is ready. It opens on
+**Usage**, which rereads the limits when the tab opens, when the window regains focus, and on
+**Refresh limits**.
