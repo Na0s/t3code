@@ -483,17 +483,10 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
         ),
     );
     for (const member of members) yield* removeRepository(member);
-    if (failures.length > 0) {
-      return yield* fail(
-        "UmbrellaWorktree.remove",
-        `Could not remove the worktree of ${failures.join("; ")}.`,
-      );
-    }
-    const root = repositories.find((repository) => repository.relativePath === "");
-    if (root !== undefined) {
-      yield* removeRepository(root);
-    } else if (yield* present(layout.path)) {
-      yield* removePlainFolder(layout.path, input.force);
+    if (failures.length === 0) {
+      const root = repositories.find((repository) => repository.relativePath === "");
+      if (root !== undefined) yield* removeRepository(root);
+      else if (yield* present(layout.path)) yield* removePlainFolder(layout.path, input.force);
     }
     if (failures.length > 0) {
       return yield* fail(

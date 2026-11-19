@@ -190,6 +190,16 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
 
+  const hasBothRefs = (
+    cwd: string,
+    input: { readonly fromCheckpointRef: CheckpointRef; readonly toCheckpointRef: CheckpointRef },
+  ) =>
+    hasRef(cwd, input.fromCheckpointRef).pipe(
+      Effect.flatMap((found) =>
+        found ? hasRef(cwd, input.toCheckpointRef) : Effect.succeed(false),
+      ),
+    );
+
   const hasCheckpointWorkspace: CheckpointStore["Service"]["hasCheckpointWorkspace"] = Effect.fn(
     "CheckpointStore.hasCheckpointWorkspace",
   )(function* (cwd) {
@@ -347,14 +357,7 @@ export const make = Effect.gen(function* () {
     component: CheckpointComponent,
     input: DiffCheckpointsInput,
   ) {
-    if (
-      !(
-        (yield* hasRef(component.cwd, input.fromCheckpointRef)) &&
-        (yield* hasRef(component.cwd, input.toCheckpointRef))
-      )
-    ) {
-      return "";
-    }
+    if (!(yield* hasBothRefs(component.cwd, input))) return "";
     const checkpoints = yield* resolveCheckpoints(component.cwd);
     return yield* checkpoints.diffCheckpoints({
       ...input,
@@ -402,13 +405,8 @@ export const make = Effect.gen(function* () {
     }
     const perComponent = yield* Effect.forEach(components, (component) =>
       Effect.gen(function* () {
-        if (
-          !(
-            (yield* hasRef(component.cwd, input.fromCheckpointRef)) &&
-            (yield* hasRef(component.cwd, input.toCheckpointRef))
-          )
-        ) {
-          return { component, authored: new Set<string>() as ReadonlySet<string> | null };
+        if (!(yield* hasBothRefs(component.cwd, input))) {
+          return { component, authored: new Set<string>() };
         }
         const checkpoints = yield* resolveCheckpoints(component.cwd);
         const authored = yield* checkpoints.listAuthoredPaths({ ...input, cwd: component.cwd });
