@@ -485,7 +485,7 @@ function AssistantChangedFilesSectionInner({
         activeProject.umbrellaMembers,
         checkpointFiles.map((file) => file.path),
         Boolean(thread?.worktreePath),
-      ).map((member) => {
+      ).map(({ member, folder }) => {
         const project = member
           ? {
               environmentId: activeProject.environmentId,
@@ -494,7 +494,7 @@ function AssistantChangedFilesSectionInner({
             }
           : activeProject;
         return {
-          key: member?.path ?? "",
+          folder,
           label: project.title,
           icon: <ProjectFavicon project={project} className="size-3.5" />,
         };

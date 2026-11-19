@@ -47,20 +47,19 @@ export function umbrellaMembersForThread<
 }
 
 /**
- * The members a turn's files touch, in member order, matched by each file's path under the
- * umbrella folder or, for a worktree-mode thread, its folder. Null leads when files sit in the
- * umbrella's own repository, outside every member.
+ * The members a turn's files touch, in member order, each with its folder in the file paths: under
+ * the umbrella folder or, for a worktree-mode thread, its folder. A null member with folder "" leads
+ * when files sit in the umbrella's own repository, outside every member.
  */
 export function umbrellaMembersInFiles<TMember extends Pick<UmbrellaMember, "relativePath">>(
   members: ReadonlyArray<TMember>,
   filePaths: ReadonlyArray<string>,
   worktreeMode: boolean,
-): ReadonlyArray<TMember | null> {
+): ReadonlyArray<{ readonly member: TMember | null; readonly folder: string }> {
   if (members.length === 0) return [];
   const relativePaths = members.map((member) => member.relativePath);
-  const prefixes = (worktreeMode ? umbrellaWorktreeMemberPaths(relativePaths) : relativePaths).map(
-    (path, index) => ({ prefix: `${path}/`, index }),
-  );
+  const folders = worktreeMode ? umbrellaWorktreeMemberPaths(relativePaths) : relativePaths;
+  const prefixes = folders.map((path, index) => ({ prefix: `${path}/`, index }));
   // A member nested in another's folder owns its own files.
   prefixes.sort((left, right) => right.prefix.length - left.prefix.length);
   const touched = new Set<number>();
@@ -70,7 +69,12 @@ export function umbrellaMembersInFiles<TMember extends Pick<UmbrellaMember, "rel
     if (owner === undefined) root = true;
     else touched.add(owner.index);
   }
-  return [...(root ? [null] : []), ...members.filter((_, index) => touched.has(index))];
+  return [
+    ...(root ? [{ member: null, folder: "" }] : []),
+    ...members.flatMap((member, index) =>
+      touched.has(index) ? [{ member, folder: folders[index]! }] : [],
+    ),
+  ];
 }
 
 const isAbsolute = (value: string) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);

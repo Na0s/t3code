@@ -2156,6 +2156,36 @@ describe("ChangedFilesCard", () => {
       });
     },
   );
+
+  it("names each umbrella project after its folder, not in the header", async () => {
+    await using screen = await render(
+      <ChangedFilesCard
+        runId={RunId.make("run-1")}
+        files={["notes.md", "api/src/a.ts", "_external/site/b.ts", "_external/c.ts"].map(
+          (path) => ({ path, kind: "modified", additions: 1, deletions: 0 }),
+        )}
+        totals={{ count: 4, additions: 4, deletions: 0 }}
+        allDirectoriesExpanded
+        resolvedTheme="light"
+        onToggleAllDirectories={() => {}}
+        onOpenTurnDiff={() => {}}
+        projects={[
+          { folder: "", label: "Northwind", icon: null },
+          { folder: "api", label: "API service", icon: null },
+          { folder: "_external/site", label: "Site", icon: null },
+        ]}
+      />,
+    );
+    const row = (path: string) =>
+      screen.container.querySelector(`[data-changed-file-row="${path}"]`)?.textContent;
+    expect(screen.container.querySelector("[data-changed-files-projects]")?.textContent).toBe(
+      "in 3 projects",
+    );
+    expect(row("api/src")).toContain("api/srcAPI service");
+    expect(row("_external")).not.toContain("Site");
+    expect(row("_external/site")).toContain("siteSite");
+    expect(screen.container.textContent).not.toContain("Northwind");
+  });
 });
 
 it("keeps concurrent approvals actionable outside collapsed work and restores settled rows", async () => {

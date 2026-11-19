@@ -122,8 +122,9 @@ describe("umbrellaMembersInFiles", () => {
     { relativePath: "apps/web" },
     { relativePath: "../../design/site" },
   ];
-  const labels = (touched: ReadonlyArray<{ relativePath: string } | null>) =>
-    touched.map((member) => member?.relativePath ?? null);
+  const labels = (
+    touched: ReadonlyArray<{ member: { relativePath: string } | null; folder: string }>,
+  ) => touched.map((entry) => entry.member?.relativePath ?? null);
 
   it("names each member a file sits in once, in member order, and the root for the rest", () => {
     expect(
@@ -144,8 +145,13 @@ describe("umbrellaMembersInFiles", () => {
 
   it("finds adopted members under the worktree folder's _external", () => {
     expect(
-      labels(umbrellaMembersInFiles(members, ["_external/site/index.html", "api/a.ts"], true)),
-    ).toEqual(["api", "../../design/site"]);
+      umbrellaMembersInFiles(members, ["_external/site/index.html", "api/a.ts"], true).map(
+        (entry) => [entry.member?.relativePath, entry.folder],
+      ),
+    ).toEqual([
+      ["api", "api"],
+      ["../../design/site", "_external/site"],
+    ]);
   });
 });
 
