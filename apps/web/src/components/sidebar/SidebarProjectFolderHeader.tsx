@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ContextMenuSource } from "@t3tools/contracts";
-import { ChevronDownIcon, SquarePenIcon, UmbrellaIcon } from "lucide-react";
+import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";
@@ -126,41 +126,6 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           <TooltipPopup>New thread in {group.displayName}</TooltipPopup>
         </Tooltip>
       </span>
-    </li>
-  );
-});
-
-/** An umbrella's name above its threads in the default sidebar's Active list. */
-export const SidebarUmbrellaHeader = memo(function SidebarUmbrellaHeader(props: {
-  group: SidebarProjectSnapshot;
-  onContextMenu: (
-    group: SidebarProjectSnapshot,
-    position: { x: number; y: number },
-    source: ContextMenuSource,
-  ) => void;
-}) {
-  const { group } = props;
-  return (
-    <li
-      data-testid="sidebar-umbrella-header"
-      className="mt-1.5 flex h-7 list-none items-center gap-2 px-(--sidebar-row-content-inset) first:mt-0"
-      onContextMenu={(event) => {
-        event.preventDefault();
-        props.onContextMenu(
-          group,
-          { x: event.clientX, y: event.clientY },
-          contextMenuSourceOf(event),
-        );
-      }}
-    >
-      <ProjectFavicon project={group} className="size-4 shrink-0" />
-      <span className="min-w-0 truncate text-xs font-medium text-sidebar-foreground/90">
-        {group.displayName}
-      </span>
-      <UmbrellaIcon
-        aria-label="Umbrella"
-        className="size-3 shrink-0 text-sidebar-muted-foreground"
-      />
     </li>
   );
 });

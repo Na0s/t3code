@@ -282,7 +282,6 @@ import {
 } from "../umbrellaMembership.logic";
 import {
   SidebarProjectFolderHeader,
-  SidebarUmbrellaHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
 import {
@@ -542,6 +541,7 @@ function useSidebarThreads(input: {
       activeUmbrellaByThreadKey.set(threadShellKey(thread), {
         group: run.umbrella,
         first: index === 0,
+        last: index === run.threads.length - 1,
       });
     }
   }
@@ -2080,8 +2080,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectFolders
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
-    // Umbrella names come and go without moving any thread row.
-    [...activeUmbrellaByThreadKey].flatMap(([key, { first }]) => (first ? [key] : [])).join("\n"),
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
   ].join("\0");
@@ -3438,8 +3436,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
-                        // Sits under an umbrella's name in the Active list.
-                        nested = false,
+                        // Sits among its umbrella's threads in the Active list.
+                        umbrella?: { group: SidebarProjectSnapshot; first: boolean; last: boolean },
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3465,7 +3463,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
-                            nested={nested}
+                            umbrella={umbrella?.group.memberProjects.find(isUmbrellaProject)}
+                            umbrellaFirst={umbrella?.first}
+                            umbrellaLast={umbrella?.last}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3576,25 +3576,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
-                          const umbrella =
-                            item.section === "active"
-                              ? activeUmbrellaByThreadKey.get(item.key)
-                              : undefined;
-                          if (umbrella?.first) {
-                            items.push(
-                              <SidebarUmbrellaHeader
-                                key={`umbrella:${umbrella.group.projectKey}`}
-                                group={umbrella.group}
-                                onContextMenu={handleProjectFolderContextMenu}
-                              />,
-                            );
-                          }
                           items.push(
                             renderThreadRow(
                               threadByKey.get(item.key)!,
                               item.section,
                               undefined,
-                              umbrella !== undefined,
+                              item.section === "active"
+                                ? activeUmbrellaByThreadKey.get(item.key)
+                                : undefined,
                             ),
                           );
                           continue;

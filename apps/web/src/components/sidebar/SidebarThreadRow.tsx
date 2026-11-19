@@ -553,8 +553,11 @@ type SidebarThreadRowProps = {
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
-  // Indents the row under its umbrella's name.
-  nested?: boolean;
+  // Indents the row among its umbrella's threads, with the umbrella's icon in the gutter of the
+  // first and a line down to the last.
+  umbrella?: ProjectFaviconProject | undefined;
+  umbrellaFirst?: boolean | undefined;
+  umbrellaLast?: boolean | undefined;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1438,10 +1441,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
-        props.nested && "ps-3",
+        props.umbrella && "relative ps-5",
         sortable?.isDragging && "relative z-20",
       )}
     >
+      {props.umbrella && props.umbrellaFirst ? (
+        <ProjectFavicon
+          project={props.umbrella}
+          className="pointer-events-none absolute start-[3px] top-[11px] size-3.5"
+        />
+      ) : null}
+      {props.umbrella ? (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute start-2.5 w-px bg-sidebar-border",
+            props.umbrellaFirst ? "top-[29px]" : "top-0",
+            props.umbrellaLast ? "bottom-2" : "-bottom-px",
+          )}
+        />
+      ) : null}
       <Tooltip disabled={isRenaming || snoozeMenuOpen || sortable?.isDragging}>
         <TooltipTrigger
           render={
