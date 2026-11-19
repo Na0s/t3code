@@ -122,7 +122,6 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     create: () => Effect.die("unexpected BrowserWindow creation"),
     main: Effect.succeedNone,
     currentMainOrFirst: Effect.succeedNone,
-    focusedMainOrFirst: Effect.succeedNone,
     apps: Effect.succeed([]),
     focusedApp: Effect.succeedNone,
     registerApp: () => Effect.void,

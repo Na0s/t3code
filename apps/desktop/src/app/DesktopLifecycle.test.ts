@@ -73,7 +73,6 @@ function layerElectronWindow(destroyAll: Effect.Effect<void> = Effect.void) {
     create: () => Effect.die("unexpected window creation"),
     main: Effect.die("unexpected main window read"),
     currentMainOrFirst: Effect.die("unexpected current window read"),
-    focusedMainOrFirst: Effect.die("unexpected focused window read"),
     apps: Effect.succeed([]),
     focusedApp: Effect.succeedNone,
     registerApp: () => Effect.void,

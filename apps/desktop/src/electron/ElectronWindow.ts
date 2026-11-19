@@ -117,7 +117,6 @@ export class ElectronWindow extends Context.Service<
     ) => Effect.Effect<Electron.BrowserWindow, ElectronWindowCreateError>;
     readonly main: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly currentMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
-    readonly focusedMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     /** Windows that load the app renderer: the main window first, then secondary windows. */
     readonly apps: Effect.Effect<ReadonlyArray<Electron.BrowserWindow>>;
     /** The focused app window, else the main window; never a popup or auxiliary window. */
@@ -204,24 +203,6 @@ export const make = Effect.gen(function* () {
     return first;
   });
 
-  const focusedMainOrFirst = Effect.gen(function* () {
-    const focused = yield* Effect.try({
-      try: () => Option.fromNullishOr(Electron.BrowserWindow.getFocusedWindow() ?? null),
-      catch: (cause) =>
-        new ElectronWindowOperationError({
-          operation: "get-focused-window",
-          platform,
-          windowId: null,
-          channel: null,
-          cause,
-        }),
-    }).pipe(Effect.orDie);
-    if (Option.isSome(focused) && !(yield* isWindowDestroyed(focused.value))) {
-      return focused;
-    }
-    return yield* currentMainOrFirst;
-  });
-
   const liveApps = Effect.gen(function* () {
     const main = yield* liveMain;
     const apps: Electron.BrowserWindow[] = Option.isSome(main) ? [main.value] : [];
@@ -291,7 +272,6 @@ export const make = Effect.gen(function* () {
     }),
     main: liveMain,
     currentMainOrFirst,
-    focusedMainOrFirst,
     apps: liveApps,
     focusedApp,
     registerApp: Effect.fn("ElectronWindow.registerApp")(function (window) {

@@ -341,13 +341,13 @@ function layerTest(input: {
     currentMainOrFirst: Ref.get(input.mainWindow).pipe(
       Effect.map(Option.orElse(() => Option.fromNullishOr(input.fallbackWindow ?? null))),
     ),
-    focusedMainOrFirst:
-      input.focusedWindow === undefined
-        ? Ref.get(input.mainWindow)
-        : Effect.succeedSome(input.focusedWindow),
-    // Popups and auxiliary windows are never app windows, so focus falls back to main.
     apps: Effect.map(Ref.get(input.mainWindow), Option.toArray),
-    focusedApp: Ref.get(input.mainWindow),
+    // Popups and auxiliary windows are never app windows, so focus falls back to main.
+    focusedApp: Effect.map(Ref.get(input.mainWindow), (main) =>
+      input.focusedWindow !== undefined && Option.contains(main, input.focusedWindow)
+        ? Option.some(input.focusedWindow)
+        : main,
+    ),
     registerApp: () => Effect.void,
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
@@ -480,7 +480,6 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
         }),
       main: Ref.get(mainWindow),
       currentMainOrFirst,
-      focusedMainOrFirst: currentMainOrFirst,
       apps: Effect.map(Ref.get(mainWindow), Option.toArray),
       focusedApp: Ref.get(mainWindow),
       registerApp: () => Effect.void,
