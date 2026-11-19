@@ -4,12 +4,14 @@ import type {
   DesktopWindowsBridge,
 } from "@t3tools/contracts";
 import { CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
+import { useRenderedAppearance } from "../../hooks/useTheme";
 import { desktopWindowsBridge, readDesktopWindowContext } from "../../multiWindow/windowContext";
 import { selectCurrentWindow, useDesktopWindowsState } from "../../multiWindow/windowsState";
 import { useProjectScopeGroups } from "../../multiWindow/ui/useProjectScopeGroups";
+import { useProjectTintColors } from "../../multiWindow/ui/useProjectTintColors";
 import { notifyWindowActionFailure } from "../../multiWindow/ui/windowActions";
 import {
   normalizeWindowProfileName,
@@ -17,6 +19,8 @@ import {
   themeSelectValue,
   WINDOW_PROFILE_NAME_MAX_LENGTH,
 } from "../../multiWindow/ui/windowProfiles.logic";
+import { rightFadeBackground } from "../../multiWindow/ui/windowTint.logic";
+import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useThemeCards } from "../CommandPaletteThemeItems";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
@@ -26,8 +30,12 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { ThemePreviewCircle, type ThemeCardDefinition } from "./ThemePreviewCircles";
 
 type ProjectScopeGroups = ReturnType<typeof useProjectScopeGroups>;
+
+// The theme's accent, or its projects' colours, washes a window's row this strongly at the right.
+const ROW_THEME_WASH_PERCENT = 16;
 
 /** Saved desktop windows; renders nothing outside a multi-window desktop shell. */
 export function WindowsSettingsSection() {
@@ -98,7 +106,7 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
       {savedProfiles.length > 0 || creating ? (
         // Saved windows nest under the main window, whose renderer serves them.
         <div className="ps-5 sm:ps-7">
-          <div className="border-s border-border/60 *:not-first:border-t *:not-first:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
+          <div className="overflow-hidden rounded-ee-xl border-s border-border/60 *:not-first:border-t *:not-first:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
             {savedProfiles.map((profile) => (
               <WindowProfileRow
                 key={profile.id}
@@ -175,6 +183,48 @@ function projectFilterSummary(projectGroups: ProjectScopeGroups, keys: readonly 
   return names.length === 0 ? "All projects" : names.join(", ");
 }
 
+interface WindowThemeOption {
+  readonly value: string;
+  readonly label: string;
+  /** A theme's light and dark previews; the project colour option has none. */
+  readonly previews: ThemeCardDefinition["previews"];
+  /** What a window with this theme shows of it: the theme's accent, or its projects' colours. */
+  readonly colors: readonly string[];
+}
+
+function useWindowThemeOptions(projects: readonly SidebarProjectSnapshot[]): WindowThemeOption[] {
+  const themeCards = useThemeCards();
+  const appearance = useRenderedAppearance();
+  const projectColors = useProjectTintColors(projects);
+  return [
+    // Without a project filter there is no project colour to take on.
+    {
+      value: themeSelectValue(null),
+      label: projects.length > 0 ? "Project colour" : "Follow main window",
+      previews: [],
+      colors: projectColors,
+    },
+    ...themeCards.map((card) => {
+      const preview =
+        card.previews.find((candidate) => candidate.mode === appearance) ?? card.previews[0];
+      return {
+        value: card.id ?? "system",
+        label: card.label,
+        previews: card.previews,
+        colors: preview === undefined ? [] : [preview.colors.accent],
+      };
+    }),
+  ];
+}
+
+/** The row's wash of its theme's colours, from the right edge. */
+function themeWashStyle(options: readonly WindowThemeOption[], theme: string | null) {
+  const colors = options.find((option) => option.value === themeSelectValue(theme))?.colors ?? [];
+  return colors.length === 0
+    ? undefined
+    : { backgroundImage: rightFadeBackground(colors, ROW_THEME_WASH_PERCENT) };
+}
+
 function WindowProfileRow({
   bridge,
   profile,
@@ -190,6 +240,7 @@ function WindowProfileRow({
   readonly isCurrentWindow: boolean;
   readonly canOpen: boolean;
 }) {
+  const themeOptions = useWindowThemeOptions(projectGroups.groupsForKeys(profile.projectScopeKeys));
   const deleteProfile = async () => {
     const confirmed = await requestConfirmDialog(
       `Delete the saved window "${profile.name}"?\nIf it is open, it stays open as an unsaved window.`,
@@ -204,26 +255,36 @@ function WindowProfileRow({
 
   return (
     <SettingsRow
-      title={profile.isDefault ? `${profile.name} (main window)` : profile.name}
+      title={
+        <>
+          <ProfileNameInput bridge={bridge} profile={profile} />
+          {profile.isDefault ? (
+            <span className="font-normal text-muted-foreground"> (main window)</span>
+          ) : null}
+        </>
+      }
       description={
         profile.isDefault
           ? "Holds the connections and drafts every window shares."
           : projectFilterSummary(projectGroups, profile.projectScopeKeys)
       }
+      style={profile.isDefault ? undefined : themeWashStyle(themeOptions, profile.theme)}
       control={
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
-          <ProfileNameInput bridge={bridge} profile={profile} />
           {profile.isDefault ? null : (
-            <WindowThemeSelect
-              value={profile.theme}
-              hasProjectFilter={profile.projectScopeKeys.length > 0}
-              ariaLabel={`Theme of ${profile.name}`}
-              onChange={(theme) => {
-                bridge.updateProfile({ profileId: profile.id, theme }).catch((cause: unknown) => {
-                  notifyWindowActionFailure("Couldn't change the window theme", cause);
-                });
-              }}
-            />
+            <Label>
+              Theme
+              <WindowThemeSelect
+                options={themeOptions}
+                value={profile.theme}
+                ariaLabel={`Theme of ${profile.name}`}
+                onChange={(theme) => {
+                  bridge.updateProfile({ profileId: profile.id, theme }).catch((cause: unknown) => {
+                    notifyWindowActionFailure("Couldn't change the window theme", cause);
+                  });
+                }}
+              />
+            </Label>
           )}
           {isCurrentWindow || !canOpen ? null : (
             <Button
@@ -274,6 +335,7 @@ function NewWindowProfileRow({
   const [projectScopeKeys, setProjectScopeKeys] = useState<readonly string[]>([]);
   const [theme, setTheme] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const themeOptions = useWindowThemeOptions(projectGroups.groupsForKeys(projectScopeKeys));
   const normalized = normalizeWindowProfileName(name);
   const create = () => {
     if (normalized === null || saving) return;
@@ -288,8 +350,22 @@ function NewWindowProfileRow({
   };
   return (
     <SettingsRow
-      title="New saved window"
+      title={
+        <WindowNameInput
+          aria-label="Name of the new window"
+          placeholder="New saved window"
+          autoFocus
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            create();
+          }}
+        />
+      }
       description="Open it later from here, the command palette or the Window menu."
+      style={themeWashStyle(themeOptions, theme)}
       control={
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={onDone}>
@@ -301,23 +377,7 @@ function NewWindowProfileRow({
         </div>
       }
     >
-      <div className="grid gap-3 pt-1 pb-3 sm:grid-cols-3">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <Label htmlFor="new-window-profile-name">Name</Label>
-          <Input
-            id="new-window-profile-name"
-            size="sm"
-            autoFocus
-            maxLength={WINDOW_PROFILE_NAME_MAX_LENGTH}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              create();
-            }}
-          />
-        </div>
+      <div className="grid gap-3 pt-1 pb-3 sm:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1.5">
           <Label render={<span />}>Projects</Label>
           <ProjectFilterSelect
@@ -329,8 +389,8 @@ function NewWindowProfileRow({
         <div className="flex min-w-0 flex-col gap-1.5">
           <Label render={<span />}>Theme</Label>
           <WindowThemeSelect
+            options={themeOptions}
             value={theme}
-            hasProjectFilter={projectScopeKeys.length > 0}
             ariaLabel="Theme of the new window"
             fullWidth
             onChange={setTheme}
@@ -369,6 +429,25 @@ function ProjectFilterSelect({
               <span className="min-w-0 flex-1 truncate">{group.displayName}</span>
               {value.includes(group.projectKey) ? <CheckIcon className="size-3.5" /> : null}
             </span>
+            {/* A group's projects, such as an umbrella's members, sit indented under its name. */}
+            {group.isScratch
+              ? null
+              : group.memberProjects
+                  // Once per name, leaving out the member the group's own row already names.
+                  .filter(
+                    (member, index, members) =>
+                      member.title !== group.displayName &&
+                      members.findIndex((other) => other.title === member.title) === index,
+                  )
+                  .map((member) => (
+                    <span
+                      key={member.physicalProjectKey}
+                      className="flex min-w-0 items-center gap-2 ps-5 pt-1 text-muted-foreground text-xs"
+                    >
+                      <ProjectFavicon project={member} className="size-3.5" />
+                      <span className="min-w-0 truncate">{member.title}</span>
+                    </span>
+                  ))}
           </SelectItem>
         ))}
       </SelectPopup>
@@ -376,31 +455,48 @@ function ProjectFilterSelect({
   );
 }
 
+/** A theme's name with swatches of its light and dark colours, or of its projects' colours. */
+function ThemeOptionLabel({ option }: { readonly option: WindowThemeOption }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+      <span className="flex shrink-0 items-center gap-1" aria-hidden>
+        {option.previews.length > 0
+          ? option.previews.map((preview) => (
+              <ThemePreviewCircle
+                key={preview.mode}
+                colors={preview.colors}
+                mode={preview.mode}
+                className="size-3 border-0"
+              />
+            ))
+          : option.colors.map((color) => (
+              <span
+                key={color}
+                className="size-3 rounded-full"
+                style={{ backgroundColor: color }}
+              />
+            ))}
+      </span>
+    </span>
+  );
+}
+
 function WindowThemeSelect({
+  options,
   value,
-  hasProjectFilter,
   ariaLabel,
   fullWidth = false,
   onChange,
 }: {
+  readonly options: readonly WindowThemeOption[];
   readonly value: string | null;
-  readonly hasProjectFilter: boolean;
   readonly ariaLabel: string;
   readonly fullWidth?: boolean;
   readonly onChange: (theme: string | null) => void;
 }) {
-  const themeCards = useThemeCards();
-  const options = [
-    // Without a project filter there is no project colour to take on.
-    {
-      value: themeSelectValue(null),
-      label: hasProjectFilter ? "Project colour" : "Follow main window",
-    },
-    ...themeCards.map((card) => ({ value: card.id ?? "system", label: card.label })),
-  ];
   const selectValue = themeSelectValue(value);
-  const selectedLabel =
-    options.find((option) => option.value === selectValue)?.label ?? value ?? "";
+  const selected = options.find((option) => option.value === selectValue);
   return (
     <Select
       value={selectValue}
@@ -414,16 +510,27 @@ function WindowThemeSelect({
         className={fullWidth ? "w-full" : "w-full sm:w-44"}
         aria-label={ariaLabel}
       >
-        <SelectValue>{selectedLabel}</SelectValue>
+        <SelectValue>{selected ? <ThemeOptionLabel option={selected} /> : value}</SelectValue>
       </SelectTrigger>
       <SelectPopup align="end" alignItemWithTrigger={false}>
         {options.map((option) => (
           <SelectItem hideIndicator key={option.value} value={option.value}>
-            {option.label}
+            <ThemeOptionLabel option={option} />
           </SelectItem>
         ))}
       </SelectPopup>
     </Select>
+  );
+}
+
+/** A window's name, edited in place where it is shown. */
+function WindowNameInput(props: ComponentProps<"input">) {
+  return (
+    <input
+      maxLength={WINDOW_PROFILE_NAME_MAX_LENGTH}
+      className="-mx-1 field-sizing-content min-w-8 max-w-[60cqi] rounded-sm bg-transparent px-1 font-medium text-foreground outline-none placeholder:text-placeholder hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      {...props}
+    />
   );
 }
 
@@ -448,11 +555,8 @@ function ProfileNameInput({
     });
   };
   return (
-    <Input
-      size="sm"
-      className="w-full sm:w-40"
+    <WindowNameInput
       aria-label={`Name of ${profile.name}`}
-      maxLength={WINDOW_PROFILE_NAME_MAX_LENGTH}
       value={draft.value}
       onChange={(event) => setDraft({ base: profile.name, value: event.target.value })}
       onBlur={commit}

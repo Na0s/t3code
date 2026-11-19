@@ -26,16 +26,21 @@ Reopen a saved window with **Open window: _name_** in the command palette, or fr
 ## Manage saved windows
 
 **Settings → General → Windows** lists the main window with your saved windows below it. From there
-you can rename a window, open or focus it, or delete it. **Add saved window** creates one without
-opening it: give it a name, the projects it shows, and a theme. Deleting a saved window that is open leaves it
-open as an unsaved window. A window you have not saved yet can be saved from the same section.
+you can rename a window by editing its name in place, pick its theme, open or focus it, or delete it.
+Each saved window's row fades in its theme's accent colour from the right edge, or its projects'
+colours when it uses **Project colour**. The theme menu shows each theme's light and dark colours.
+**Add saved window** creates one without opening it: type its name in the new row, then pick the
+projects it shows and a theme. The project list is grouped as the sidebar groups projects, with a
+group's projects indented under it. Deleting a saved window that is open leaves it open as an
+unsaved window. A window you have not saved yet can be saved from the same section.
 
-By default a window takes on its projects' icon colours: one project tints the window's theme with
-that project's colour, and several projects lay a left-to-right blend of their colours over it. A
-window that shows all projects looks like the main window. Pick a theme for a saved window to use
-that theme instead, untinted. Changing the theme from inside a window with its own theme changes
-only that window. Light, dark, and system
-appearance stay shared by every window.
+By default a window shows its projects' icon colours across the top of its sidebar, behind the T3
+Code name and the Search row: one project's colour, or a left-to-right blend of several. The rest
+of the window keeps its theme. Projects whose icon is an image or an emoji add no colour, and a
+window that shows all projects, or only such projects, looks like the main window. Pick a theme for
+a saved window to use that theme instead, without project colours. Changing the theme from inside
+a window with its own theme changes only that window. Light, dark, and system appearance stay
+shared by every window.
 
 ## Mini Mode
 

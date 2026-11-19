@@ -1673,23 +1673,7 @@ export function applyThemeColorPreview(
   setThemePreviewAppearance(appearance);
 }
 
-const WINDOW_TINT_THEME_ID = "__window-tint";
-
-/** A theme rebuilt around one tint colour; its canvas, and so its light or dark, stays. */
-function tintThemeColors(
-  appearance: ThemeAppearance,
-  colors: ThemeColors,
-  tint: string,
-): ThemeColors {
-  return createVividThemeColors(appearance, colors.canvas, tint);
-}
-
-/** `tint` recolours the palette around one colour, as a desktop window's project colour does. */
-export function applyThemePalette(
-  theme: ThemePreference,
-  appearance?: ThemeAppearance,
-  tint: string | null = null,
-): void {
+export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppearance): void {
   if (typeof document === "undefined") return;
 
   const root = document.documentElement;
@@ -1700,26 +1684,14 @@ export function applyThemePalette(
   applyThemeCss(palette?.css);
   applyThemeBackground(palette?.id);
 
-  const setColors = (colors: ThemeColors) => {
-    for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
-      root.style.setProperty(APP_THEME_VARIABLES[role], value);
-    }
-    applyContextChipVariables(root, colors);
-  };
-
   if (palette) {
     root.dataset.themeId = palette.id;
     const mode = appearance ?? legacyThemeMode(theme) ?? palette.appearance;
     const colors = getThemeColorsForMode(palette, mode) ?? palette.colors;
-    setColors(tint === null ? colors : tintThemeColors(mode, colors, tint));
-    return;
-  }
-
-  if (tint !== null) {
-    // The standard theme paints from index.css; a theme id makes it read these variables instead.
-    root.dataset.themeId = WINDOW_TINT_THEME_ID;
-    const mode = appearance ?? "light";
-    setColors(tintThemeColors(mode, getStandardPaintedThemeColors(mode), tint));
+    for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {
+      root.style.setProperty(APP_THEME_VARIABLES[role], value);
+    }
+    applyContextChipVariables(root, colors);
     return;
   }
 

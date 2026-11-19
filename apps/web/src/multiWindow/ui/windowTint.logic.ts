@@ -3,56 +3,50 @@ import type { ProjectIconColor, ProjectIconOverride } from "@t3tools/contracts";
 import { projectIconSwatch } from "../../projectIconColors";
 import { deriveProjectIdentity } from "../../projectIdentity";
 
-export type WindowTint =
-  | { readonly kind: "none" }
-  /** One colour: the window's theme takes it on as its accent and surface hue. */
-  | { readonly kind: "solid"; readonly color: string }
-  /** Several colours: a left-to-right overlay on the theme, in filter order. */
-  | { readonly kind: "gradient"; readonly colors: readonly string[] };
-
-const NO_TINT: WindowTint = { kind: "none" };
-
 export interface WindowTintProject {
   readonly title: string;
   readonly projectIcon?: ProjectIconOverride | null | undefined;
 }
 
-/** The colour the project's icon shows; an emoji icon has none. */
-export function projectIconTintColor(project: WindowTintProject): ProjectIconColor | null {
+/** The colour the project's icon shows; an emoji or an image shows none. */
+export function projectIconTintColor(
+  project: WindowTintProject,
+  showsImage: boolean,
+): ProjectIconColor | null {
   const icon = project.projectIcon;
-  if (icon?.kind === "emoji") return null;
-  if (icon != null) return icon.color;
-  // Without an override the icon is a favicon or the name's monogram, which uses this colour.
-  return deriveProjectIdentity(project.title).color;
+  // Without an override the icon is the project's image, or else the name's monogram in this colour.
+  if (icon == null) return showsImage ? null : deriveProjectIdentity(project.title).color;
+  return icon.kind === "emoji" ? null : icon.color;
+}
+
+/** Each distinct colour the projects' icons show, as a CSS colour, in project order. */
+export function projectTintColors<TProject extends WindowTintProject>(
+  projects: readonly TProject[],
+  showsImage: (project: TProject) => boolean,
+): string[] {
+  return [
+    ...new Set(
+      projects.flatMap((project) => projectIconTintColor(project, showsImage(project)) ?? []),
+    ),
+  ].map(projectIconSwatch);
 }
 
 /**
- * A secondary window without its own saved theme takes on its filtered projects' icon colours.
- * The main window, an unfiltered window and an explicit theme stay untinted.
+ * A faint wash strongest at the right edge, fading to nothing at the left. Several colours keep
+ * their left-to-right order, each fainter than the one to its right.
  */
-export function resolveWindowTint(input: {
-  readonly isSecondaryWindow: boolean;
-  readonly explicitTheme: string | null;
-  readonly projects: readonly WindowTintProject[];
-}): WindowTint {
-  if (!input.isSecondaryWindow || input.explicitTheme !== null) return NO_TINT;
-  const colors = [
-    ...new Set(input.projects.flatMap((project) => projectIconTintColor(project) ?? [])),
-  ].map(projectIconSwatch);
-  const [first] = colors;
-  if (first === undefined) return NO_TINT;
-  return colors.length === 1 ? { kind: "solid", color: first } : { kind: "gradient", colors };
+export function rightFadeBackground(colors: readonly string[], percent: number): string {
+  const stops = colors.toReversed().map((color, index) => {
+    const share = index / colors.length;
+    return `color-mix(in oklab, ${color} ${percent * (1 - share)}%, transparent) ${share * 100}%`;
+  });
+  return `linear-gradient(to left, ${[...stops, "transparent"].join(", ")})`;
 }
 
-const LIGHT_OVERLAY_PERCENT = 12;
-const DARK_OVERLAY_PERCENT = 16;
-
-/** Translucent stops, so the theme's own colours still read through the overlay. */
-export function windowTintGradient(
-  colors: readonly string[],
-  appearance: "light" | "dark",
-): string {
-  const percent = appearance === "dark" ? DARK_OVERLAY_PERCENT : LIGHT_OVERLAY_PERCENT;
-  const stops = colors.map((color) => `color-mix(in oklab, ${color} ${percent}%, transparent)`);
-  return `linear-gradient(to right, ${stops.join(", ")})`;
+/** One colour fills; several blend left to right in order. */
+export function tintBackground(colors: readonly string[]): string {
+  const [only] = colors;
+  return colors.length === 1 && only !== undefined
+    ? only
+    : `linear-gradient(to right, ${colors.join(", ")})`;
 }
