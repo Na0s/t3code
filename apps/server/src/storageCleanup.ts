@@ -1093,6 +1093,8 @@ const make = Effect.gen(function* () {
     });
     const worktreePathReason = Effect.fn("StorageCleanup.worktreePathReason")(function* (
       worktreePath: string,
+      // An umbrella worktree's folder can be a plain folder holding the linked worktrees.
+      requireLinked = true,
     ) {
       // Allow symlinked parents, never a symlinked worktree directory.
       const realPath = yield* fs.realPath(worktreePath);
@@ -1101,6 +1103,7 @@ const make = Effect.gen(function* () {
         return "worktree is a symbolic link";
       if (!roots.some((root) => inside(root, realPath)))
         return "outside the managed worktree folder";
+      if (!requireLinked) return null;
       const linked = yield* isLinkedWorktree(worktreePath).pipe(
         Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
       );
@@ -1467,12 +1470,8 @@ const make = Effect.gen(function* () {
             }
             return null;
           });
-          const realFolder = yield* fs.realPath(worktreePath);
-          const realParent = yield* fs.realPath(path.dirname(worktreePath));
-          if (realFolder !== path.join(realParent, path.basename(worktreePath)))
-            return keep("worktree is a symbolic link");
-          if (!roots.some((root) => inside(root, realFolder)))
-            return keep("outside the managed worktree folder");
+          const folderReason = yield* worktreePathReason(worktreePath, false);
+          if (folderReason !== null) return keep(folderReason);
           const changes = yield* umbrellaChanges();
           if (changes !== null) return keep(changes);
           const blocked = yield* blockedSinceCheck();
