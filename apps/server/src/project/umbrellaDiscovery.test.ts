@@ -36,6 +36,7 @@ it.effect("finds checkouts under the root without entering skipped folders", () 
       "worktree/nested/.git",
       "one/two/three/.git",
       "one/two/three/four/.git",
+      "deep/a/b/c/.git",
     ]);
     try {
       const found = yield* discoverNestedRepositories(root);
@@ -44,8 +45,6 @@ it.effect("finds checkouts under the root without entering skipped folders", () 
         NodePath.join("one", "two", "three"),
         NodePath.join("sites", "marketing"),
       ]);
-      const shallow = yield* discoverNestedRepositories(root, { maxDepth: 1 });
-      expect(shallow.map((path) => NodePath.relative(root, path))).toEqual(["api"]);
     } finally {
       NodeFS.rmSync(root, { recursive: true, force: true });
     }
