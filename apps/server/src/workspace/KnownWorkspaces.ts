@@ -12,7 +12,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
+import { makeReadUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
@@ -53,6 +53,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const readUmbrellaWorktree = yield* makeReadUmbrellaWorktree;
   const settings = yield* ServerSettings.ServerSettingsService;
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const sql = yield* SqlClient.SqlClient;
@@ -142,10 +143,7 @@ export const make = Effect.gen(function* () {
       ) {
         const project = projects.find((candidate) => candidate.id === projectId);
         if (project === undefined) return false;
-        const layout = yield* readUmbrellaWorktree(worktreePath).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        );
+        const layout = yield* readUmbrellaWorktree(worktreePath);
         return (
           layout !== null &&
           (yield* resolveRoot(layout.umbrellaRoot)) === (yield* resolveRoot(project.workspaceRoot))

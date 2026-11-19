@@ -30,7 +30,7 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
-import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
+import { makeReadUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
@@ -129,6 +129,7 @@ export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const readUmbrellaWorktree = yield* makeReadUmbrellaWorktree;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
   const pendingBackfill = new Map<ThreadId, number>();
@@ -444,12 +445,7 @@ export const make = Effect.gen(function* () {
       const members = (yield* umbrellaMembership.value.stateOf(project.value))?.members ?? [];
       // A worktree-mode thread works in member worktrees inside its own folder, on its branch.
       const layout =
-        thread.worktreePath === null
-          ? null
-          : yield* readUmbrellaWorktree(thread.worktreePath).pipe(
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-              Effect.provideService(Path.Path, path),
-            );
+        thread.worktreePath === null ? null : yield* readUmbrellaWorktree(thread.worktreePath);
       const checkouts =
         layout === null
           ? members.map((member) => ({ ...member, cwd: member.path, prefix: member.relativePath }))

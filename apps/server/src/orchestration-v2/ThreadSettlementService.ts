@@ -36,7 +36,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
-import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
+import { makeReadUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { QUIET_AFTER_MS, QUIET_SYNC_INTERVAL_MS } from "./PullRequestSyncReactor.ts";
@@ -319,6 +319,7 @@ export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const readUmbrellaWorktree = yield* makeReadUmbrellaWorktree;
   // A shell merge or close sends no event, and the branch lookup caches an open pull request for
   // a minute, so these threads' next lookup reads the host fresh.
   const shellClosedThreads = new Set<ThreadId>();
@@ -466,10 +467,7 @@ export const make = Effect.gen(function* () {
           if (
             worktreePath !== null &&
             !hasCheckout &&
-            (yield* readUmbrellaWorktree(worktreePath).pipe(
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-              Effect.provideService(Path.Path, path),
-            )) !== null
+            (yield* readUmbrellaWorktree(worktreePath)) !== null
           ) {
             plainUmbrellaThreads.add(thread.id);
             return;

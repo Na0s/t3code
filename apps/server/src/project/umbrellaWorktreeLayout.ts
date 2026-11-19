@@ -87,6 +87,13 @@ export const readUmbrellaWorktree = Effect.fn("UmbrellaWorktree.read")(
   Effect.orElseSucceed(() => null),
 );
 
+/** `readUmbrellaWorktree` bound to the caller's file system and paths, for services built with them. */
+export const makeReadUmbrellaWorktree = Effect.map(
+  Effect.context<FileSystem.FileSystem | Path.Path>(),
+  (context) => (worktreePath: string) =>
+    readUmbrellaWorktree(worktreePath).pipe(Effect.provideContext(context)),
+);
+
 /** Lets checkpoints and Git status of the folder treat its members as the umbrella's do. */
 export const registerUmbrellaWorktree = Effect.fn("UmbrellaWorktree.register")(function* (
   layout: UmbrellaWorktreeLayout,
