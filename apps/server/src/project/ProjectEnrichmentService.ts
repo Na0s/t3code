@@ -163,21 +163,8 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       }),
     },
   );
-  // Outlive the cache entry, like identities; only the worker's list decides whether to publish.
-  const knownNestedRepositories = new Map<string, ReadonlyArray<string>>();
+  // What subscribers last heard per root; direct reads fill the cache without publishing.
   const publishedNestedRepositories = new Map<string, ReadonlyArray<string>>();
-  const rememberNested = (
-    map: Map<string, ReadonlyArray<string>>,
-    workspaceRoot: string,
-    nested: ReadonlyArray<string>,
-  ) => {
-    map.delete(workspaceRoot);
-    if (map.size >= cacheCapacity) {
-      const oldestRoot = map.keys().next().value;
-      if (oldestRoot !== undefined) map.delete(oldestRoot);
-    }
-    map.set(workspaceRoot, nested);
-  };
   const nestedScannedAt = new Map<string, number>();
   const nestedRepositoriesCache = yield* Cache.makeWith(
     (workspaceRoot: string) =>
@@ -285,9 +272,8 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       const nested = (yield* Cache.has(nestedRepositoriesCache, workspaceRoot))
         ? yield* Cache.refresh(nestedRepositoriesCache, workspaceRoot)
         : yield* Cache.get(nestedRepositoriesCache, workspaceRoot);
-      rememberNested(knownNestedRepositories, workspaceRoot, nested);
       const published = publishedNestedRepositories.get(workspaceRoot);
-      rememberNested(publishedNestedRepositories, workspaceRoot, nested);
+      publishedNestedRepositories.set(workspaceRoot, nested);
       // Rescans of an unchanged folder, or a folder without checkouts, would otherwise push a
       // shell frame to every subscriber.
       if (sameList(published, nested) || (nested.length === 0 && !published?.length)) return;
@@ -403,15 +389,13 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       ) {
         yield* requestLane(nestedRepositoriesLane, workspaceRoot, "nestedRepositories");
       }
-      return Option.getOrUndefined(cached) ?? knownNestedRepositories.get(workspaceRoot) ?? null;
+      return Option.getOrNull(cached);
     });
 
   const readNestedRepositories: ProjectEnrichmentService["Service"]["readNestedRepositories"] =
-    Effect.fn("ProjectEnrichmentService.readNestedRepositories")(function* (workspaceRoot) {
-      const nested = yield* Cache.get(nestedRepositoriesCache, workspaceRoot);
-      rememberNested(knownNestedRepositories, workspaceRoot, nested);
-      return nested;
-    });
+    Effect.fn("ProjectEnrichmentService.readNestedRepositories")((workspaceRoot) =>
+      Cache.get(nestedRepositoriesCache, workspaceRoot),
+    );
 
   const invalidate: ProjectEnrichmentService["Service"]["invalidate"] = Effect.fn(
     "ProjectEnrichmentService.invalidate",
@@ -425,7 +409,6 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
             Effect.sync(() => {
               lookupsInFlight.delete(workspaceRoot);
               lastRepositoryIdentities.delete(workspaceRoot);
-              knownNestedRepositories.delete(workspaceRoot);
               publishedNestedRepositories.delete(workspaceRoot);
               nestedScannedAt.delete(workspaceRoot);
             }),
