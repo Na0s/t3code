@@ -89,7 +89,7 @@ export const SLOW_SUBSCRIBER_TIMEOUT = Duration.seconds(10);
 /** How long a cursor ahead of the stream may wait for in-flight events before everyone resyncs. */
 export const AHEAD_CURSOR_GRACE = Duration.seconds(5);
 
-function canonicalJson(value: unknown, omit: ReadonlyArray<string> = []): string {
+export function canonicalJson(value: unknown, omit: ReadonlyArray<string> = []): string {
   if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
   if (typeof value !== "object" || value === null) return JSON.stringify(value) ?? "null";
   const entries = Object.entries(value)
