@@ -1,10 +1,12 @@
 import "../../index.css";
 
+import type { DesktopOpenWindow, DesktopUpdateState } from "@t3tools/contracts";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
-import { MiniPanel } from "./MiniMainWindow";
+import { APP_DISPLAY_NAME } from "../../branding";
 import {
   CLAUDE,
   CLAUDE_UNREADABLE,
@@ -12,140 +14,253 @@ import {
   FIXTURE_NOW,
   openWindow,
   presentations,
-  provider,
-  usageWindow,
-} from "./miniUsage.fixtures";
+  projectsFor,
+  PULL_REQUESTS,
+  UPDATE_AVAILABLE,
+} from "./mini.fixtures";
+import { MiniPanel, type MiniTab } from "./MiniMainWindow";
+import { MiniPullRequestList } from "./MiniPullRequests";
+import { MiniSettings } from "./MiniSettings";
+import { MiniUpdate } from "./MiniUpdate";
+import { MiniUsageSection } from "./MiniUsage";
 import { deriveMiniUsage, type MiniUsagePresentations } from "./miniUsage.logic";
+import { MiniWindows } from "./MiniWindows";
 
-const LONG_TITLE =
-  "Investigate why the dungeon lighting pass flickers on integrated GPUs after the shader refactor";
+const mocks = vi.hoisted(() => ({ update: null as DesktopUpdateState | null }));
+vi.mock("../../state/desktopUpdate", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/desktopUpdate")>()),
+  useDesktopUpdateState: () => mocks.update,
+}));
 
-async function renderPanel(
-  usage: MiniUsagePresentations,
-  windows: Parameters<typeof MiniPanel>[0]["windows"],
-  { multiWindowEnabled = true }: { readonly multiWindowEnabled?: boolean } = {},
-) {
-  await page.viewport(320, 460);
-  const onFocusWindow = vi.fn();
-  const screen = await render(
-    <MiniPanel
-      usage={deriveMiniUsage(usage, FIXTURE_NOW)}
-      now={FIXTURE_NOW}
-      refreshing={false}
-      windows={windows}
-      onRefresh={() => {}}
-      onOpenExternal={() => {}}
-      onExpand={() => {}}
-      onNewWindow={multiWindowEnabled ? () => {} : undefined}
-      onFocusWindow={onFocusWindow}
-    />,
-  );
-  return { screen, onFocusWindow };
+const WINDOWS = [
+  openWindow(2, "Client work", "Rate limit review - Client work", {
+    projectScopeKeys: ["Northwind"],
+  }),
+  openWindow(3, "Window 3", "Filter envelope - Window 3", { profileId: null, focused: true }),
+  openWindow(4, "Idle", `${APP_DISPLAY_NAME} - Idle`),
+];
+
+const makeActions = () => ({
+  search: vi.fn(),
+  expand: vi.fn(),
+  newWindow: vi.fn(),
+  focusWindow: vi.fn(),
+  multiWindowEnabledChange: vi.fn(),
+  openSettings: vi.fn(),
+  openPullRequest: vi.fn(),
+});
+
+interface PanelOptions {
+  readonly usage?: MiniUsagePresentations;
+  readonly windows?: readonly DesktopOpenWindow[] | null;
+  readonly multiWindowEnabled?: boolean;
+  readonly pullRequestsSupported?: boolean;
 }
 
-const top = (element: Element) => element.getBoundingClientRect().top;
+function Panel({
+  usage = presentations([CLAUDE, CODEX]),
+  windows = WINDOWS,
+  multiWindowEnabled = true,
+  pullRequestsSupported = true,
+  actions,
+}: PanelOptions & { readonly actions: ReturnType<typeof makeActions> }) {
+  const [tab, setTab] = useState<MiniTab>("usage");
+  return (
+    <MiniPanel
+      tab={tab}
+      onTabChange={setTab}
+      pullRequestsSupported={pullRequestsSupported}
+      updateAvailable={mocks.update !== null}
+      onSearch={actions.search}
+      onExpand={actions.expand}
+      onNewWindow={multiWindowEnabled ? actions.newWindow : undefined}
+    >
+      {tab === "windows" ? (
+        <MiniWindows
+          windows={windows}
+          projectsFor={projectsFor}
+          onFocusWindow={actions.focusWindow}
+        />
+      ) : tab === "settings" ? (
+        <MiniSettings
+          multiWindowEnabled={multiWindowEnabled}
+          onMultiWindowEnabledChange={actions.multiWindowEnabledChange}
+          onOpenSettings={actions.openSettings}
+        />
+      ) : tab === "pullRequests" ? (
+        <MiniPullRequestList
+          entries={PULL_REQUESTS}
+          error={null}
+          onOpen={actions.openPullRequest}
+        />
+      ) : tab === "update" ? (
+        <MiniUpdate />
+      ) : (
+        <MiniUsageSection
+          usage={deriveMiniUsage(usage, FIXTURE_NOW)}
+          now={FIXTURE_NOW}
+          refreshing={false}
+          onRefresh={() => {}}
+          onOpenExternal={() => {}}
+        />
+      )}
+    </MiniPanel>
+  );
+}
+
+async function renderPanel(options: PanelOptions = {}) {
+  await page.viewport(320, 460);
+  const actions = makeActions();
+  const screen = await render(<Panel {...options} actions={actions} />);
+  const openTab = (name: string) => screen.getByRole("button", { name, exact: true }).click();
+  return { screen, actions, openTab };
+}
+
+const TAB_REGIONS = ["Windows", "Settings", "Pull requests", "Usage", "Update"];
 
 describe("MiniPanel", () => {
-  it("leads with usage and lists the other windows below it", async () => {
-    const { screen, onFocusWindow } = await renderPanel(presentations([CLAUDE, CODEX]), [
-      openWindow(2, "Northwind", "Rate limit review"),
-      openWindow(3, "Window 2", "Filter envelope", { profileId: null }),
-    ]);
+  it("opens on Usage and shows one tab's content at a time", async () => {
+    mocks.update = UPDATE_AVAILABLE;
+    const { screen, openTab } = await renderPanel();
     await using _screen = screen;
 
-    const usage = screen.getByRole("region", { name: "Usage" });
-    const windows = screen.getByRole("region", { name: "Windows" });
-    await expect.element(usage.getByText("62% left")).toBeVisible();
-    await expect.element(usage.getByText("resets in 42m")).toBeVisible();
-    await expect.element(usage.getByText("Updated 4m ago")).toBeVisible();
-    expect(top(usage.element())).toBeLessThan(top(windows.element()));
-
-    await expect.element(windows.getByText("Unsaved")).toBeVisible();
-    await windows.getByRole("button", { name: /Northwind/ }).click();
-    expect(onFocusWindow).toHaveBeenCalledWith(2);
+    await expect.element(screen.getByText("62% left")).toBeVisible();
+    for (const tab of ["Windows", "Settings", "Pull requests", "Update", "Usage"]) {
+      await openTab(tab);
+      await expect
+        .element(screen.getByRole("button", { name: tab, exact: true }))
+        .toHaveAttribute("aria-current", "page");
+      await expect.element(screen.getByRole("region", { name: tab })).toBeVisible();
+      for (const other of TAB_REGIONS) {
+        if (other !== tab) expect(screen.getByRole("region", { name: other }).query()).toBeNull();
+      }
+    }
   });
 
-  it("offers no New Window while multiple windows are turned off", async () => {
-    const { screen } = await renderPanel(
-      presentations([CLAUDE]),
-      [openWindow(2, "Northwind", "Rate limit review")],
-      { multiWindowEnabled: false },
-    );
+  it("offers Search, New Window and Expand in the top bar, with only Search labelled", async () => {
+    const { screen, actions } = await renderPanel();
+    await using _screen = screen;
+
+    const search = screen.getByRole("button", { name: "Search" });
+    await expect.element(search).toHaveTextContent("Search");
+    await search.click();
+    expect(actions.search).toHaveBeenCalledOnce();
+    for (const [name, action] of [
+      ["New Window", actions.newWindow],
+      ["Expand", actions.expand],
+    ] as const) {
+      const button = screen.getByRole("button", { name });
+      await expect.element(button).toHaveTextContent("");
+      await button.click();
+      expect(action).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("hides New Window while multiple windows are off, and PRs where no server supports them", async () => {
+    const { screen } = await renderPanel({
+      multiWindowEnabled: false,
+      pullRequestsSupported: false,
+    });
     await using _screen = screen;
     await expect.element(screen.getByRole("button", { name: "Expand" })).toBeVisible();
     expect(screen.getByRole("button", { name: "New Window" }).query()).toBeNull();
+    expect(screen.getByRole("button", { name: "Pull requests" }).query()).toBeNull();
   });
 
-  it("keeps usage, the window list and both actions on screen when every list is long", async () => {
-    const { screen } = await renderPanel(
-      presentations([
-        CLAUDE,
-        CODEX,
-        provider("cursor", {
-          windows: [usageWindow("apiPercentUsed", "monthly", "API", 41, 300, 720)],
-        }),
-        provider("antigravity", {
-          windows: [
-            usageWindow("gemini-3-pro-5h", "session", "Gemini 3 Pro (High) · 5h", 12, 4, 5),
-          ],
-        }),
-      ]),
-      [
-        openWindow(2, "Northwind storefront and checkout redesign (Q4 holiday freeze)", LONG_TITLE),
-        ...Array.from({ length: 14 }, (_, index) =>
-          openWindow(10 + index, `Client ${index + 1}`, LONG_TITLE),
-        ),
-      ],
-    );
+  it("lists windows as cards: project filter and state, then name, then what the window shows", async () => {
+    const { screen, actions, openTab } = await renderPanel();
     await using _screen = screen;
+    await openTab("Windows");
 
-    for (const name of ["Expand", "New Window", "Refresh limits"]) {
-      await expect.element(screen.getByRole("button", { name })).toBeInViewport();
-    }
-    await expect.element(screen.getByText("62% left")).toBeInViewport();
+    const saved = screen.getByRole("button", { name: /Client work/ });
+    await expect.element(saved).toHaveTextContent("NWNorthwindSavedClient workRate limit review");
+    const focused = screen.getByRole("button", { name: /Window 3/ });
+    await expect.element(focused).toHaveTextContent("All projectsFocusedWindow 3Filter envelope");
+    await expect.element(focused).toHaveAttribute("aria-current", "true");
+    // A window with no thread open is titled with the app's name, which says nothing.
     await expect
-      .element(screen.getByRole("button", { name: /Northwind storefront/ }))
-      .toBeInViewport();
-    await expect.element(screen.getByRole("button", { name: /Client 14/ })).not.toBeInViewport();
+      .element(screen.getByRole("button", { name: /Idle/ }))
+      .toHaveTextContent("All projectsSavedIdle");
+    await saved.click();
+    expect(actions.focusWindow).toHaveBeenCalledWith(2);
+  });
+
+  it("keeps both bars on screen and scrolls only the tab when its list is long", async () => {
+    const { screen, openTab } = await renderPanel({
+      windows: Array.from({ length: 14 }, (_, index) =>
+        openWindow(
+          10 + index,
+          `Northwind storefront and checkout redesign ${index + 1} (Q4 holiday freeze)`,
+          "Investigate why the dungeon lighting pass flickers on integrated GPUs",
+          { projectScopeKeys: ["Northwind", "Dungeon", "Synth"] },
+        ),
+      ),
+    });
+    await using _screen = screen;
+    await openTab("Windows");
+
+    for (const name of ["Search", "Expand", "New Window", "Windows", "Update"]) {
+      await expect.element(screen.getByRole("button", { name, exact: true })).toBeInViewport();
+    }
+    await expect.element(screen.getByRole("button", { name: /redesign 1 / })).toBeInViewport();
+    await expect.element(screen.getByRole("button", { name: /redesign 14 / })).not.toBeInViewport();
     expect(document.documentElement.scrollWidth).toBe(320);
     expect(document.documentElement.scrollHeight).toBe(460);
-    const viewports = screen.container.querySelectorAll("[data-slot=scroll-area-viewport]");
-    expect(viewports).toHaveLength(2);
-    for (const viewport of viewports) {
-      expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
-      expect(viewport.scrollWidth).toBe(viewport.clientWidth);
-    }
+    const viewport = screen.container.querySelector("[data-slot=scroll-area-viewport]")!;
+    expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
+    expect(viewport.scrollWidth).toBe(viewport.clientWidth);
   });
 
-  it("says why there are no limits: still loading, none reported, or unavailable", async () => {
-    const { screen } = await renderPanel(presentations(null, "connecting"), null);
+  it("says why Usage has no limits: still loading, none reported, or unavailable", async () => {
+    const { screen, actions } = await renderPanel({ usage: presentations(null, "connecting") });
     await using _screen = screen;
     await expect
       .element(screen.getByRole("status", { name: "Loading usage limits" }))
       .toBeVisible();
 
     const rerender = (usage: MiniUsagePresentations) =>
-      screen.rerender(
-        <MiniPanel
-          usage={deriveMiniUsage(usage, FIXTURE_NOW)}
-          now={FIXTURE_NOW}
-          refreshing={false}
-          windows={[]}
-          onRefresh={() => {}}
-          onOpenExternal={() => {}}
-          onExpand={() => {}}
-          onNewWindow={() => {}}
-          onFocusWindow={() => {}}
-        />,
-      );
+      screen.rerender(<Panel usage={usage} actions={actions} />);
     await rerender(presentations([]));
     await expect.element(screen.getByText(/No provider reports plan limits yet/)).toBeVisible();
-    await expect.element(screen.getByText("No other windows are open.")).toBeVisible();
 
     await rerender(presentations([CLAUDE_UNREADABLE]));
     await expect.element(screen.getByText("Limits unavailable")).toBeVisible();
     await expect
       .element(screen.getByText("Claude: Could not read limits. Sign in again."))
       .toBeVisible();
+  });
+
+  it("Settings toggles multiple windows and leads to the full settings", async () => {
+    const { screen, actions, openTab } = await renderPanel();
+    await using _screen = screen;
+    await openTab("Settings");
+
+    await screen.getByRole("switch", { name: "Multiple windows" }).click();
+    expect(actions.multiWindowEnabledChange.mock.calls[0]?.[0]).toBe(false);
+    await screen.getByRole("button", { name: "All settings" }).click();
+    expect(actions.openSettings).toHaveBeenCalledOnce();
+  });
+
+  it("PRs opens a pull request on its host", async () => {
+    const { screen, actions, openTab } = await renderPanel();
+    await using _screen = screen;
+    await openTab("Pull requests");
+
+    await expect.element(screen.getByLabelText("Some checks were not successful")).toBeVisible();
+    await screen.getByRole("button", { name: /Rate limit the checkout webhook/ }).click();
+    expect(actions.openPullRequest).toHaveBeenCalledWith(PULL_REQUESTS[0]!.url);
+  });
+
+  it("Update names the running version and where its update stands", async () => {
+    mocks.update = UPDATE_AVAILABLE;
+    const { screen, openTab } = await renderPanel();
+    await using _screen = screen;
+    await openTab("Update");
+
+    const update = screen.getByRole("region", { name: "Update" });
+    await expect.element(update.getByText(/0\.0\.50$/)).toBeVisible();
+    await expect
+      .element(update.getByRole("status"))
+      .toHaveTextContent("Update 0.0.51 ready to download");
   });
 });

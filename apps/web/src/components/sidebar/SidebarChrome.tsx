@@ -195,13 +195,16 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function SidebarUtilityItem({
+export function SidebarUtilityItem({
   icon,
   label,
+  isActive = false,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
+  /** Mini Mode's tabs mark the one that is showing. */
+  isActive?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -209,7 +212,13 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton
+              aria-current={isActive ? "page" : undefined}
+              aria-label={label}
+              isActive={isActive}
+              onClick={onClick}
+              size="icon"
+            >
               {icon}
             </SidebarMenuButton>
           }

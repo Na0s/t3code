@@ -42,6 +42,8 @@ export const DesktopOpenWindowSchema = Schema.Struct({
   name: Schema.String,
   title: Schema.String,
   focused: Schema.Boolean,
+  /** The window's current project filter; empty shows every project. */
+  projectScopeKeys: DesktopWindowProjectScopeKeysSchema,
 });
 export type DesktopOpenWindow = typeof DesktopOpenWindowSchema.Type;
 

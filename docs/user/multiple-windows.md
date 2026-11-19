@@ -45,7 +45,18 @@ shared by every window.
 ## Mini Mode
 
 Choose **Enter Mini Mode** in the main window's command palette to turn the main window into a
-compact panel. It leads with your usage limits: how much of each provider's plan is left and when it
-resets. The limits are reread when the panel opens or regains focus, and on **Refresh limits**. Below
-them it lists your other open windows, so you can bring one to the front or open a new one. Choose
-**Expand** to return to the full app.
+compact panel. Its top bar offers **Search**, **New Window** (while multiple windows are on) and
+**Expand**, which returns to the full app. Opening a search result or the full settings also
+returns to the full app. On macOS the panel has no close, minimise or zoom buttons.
+
+The tabs along the bottom each show one thing:
+
+- **Windows**: your other open windows, each with its project filter, name, and what it is showing.
+  Choose one to bring it to the front.
+- **Settings**: the multiple windows switch, and a link to all settings.
+- **Pull requests**: the list your Pull requests page opens with. Choosing one opens it in your
+  browser.
+- **Usage**: how much of each provider's plan is left and when it resets. The panel opens on this
+  tab. The limits are reread when the tab opens or the window regains focus, and on **Refresh
+  limits**.
+- **Update**: the version you are running and whether an update is ready.

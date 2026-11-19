@@ -41,8 +41,24 @@ function windowsState(overrides: Partial<DesktopWindowsState> = {}): DesktopWind
   return {
     profiles: [mainProfile, workProfile],
     windows: [
-      { windowId: 1, isMain: true, profileId: "main", name: "Main", title: "", focused: false },
-      { windowId: 2, isMain: false, profileId: "work", name: "Work", title: "", focused: true },
+      {
+        windowId: 1,
+        isMain: true,
+        profileId: "main",
+        name: "Main",
+        title: "",
+        focused: false,
+        projectScopeKeys: [],
+      },
+      {
+        windowId: 2,
+        isMain: false,
+        profileId: "work",
+        name: "Work",
+        title: "",
+        focused: true,
+        projectScopeKeys: [],
+      },
     ],
     miniMode: false,
     multiWindowEnabled: true,
@@ -58,7 +74,15 @@ describe("selectCurrentWindowProfile", () => {
     );
     const deleted = windowsState({
       windows: [
-        { windowId: 2, isMain: false, profileId: null, name: "Window 2", title: "", focused: true },
+        {
+          windowId: 2,
+          isMain: false,
+          profileId: null,
+          name: "Window 2",
+          title: "",
+          focused: true,
+          projectScopeKeys: [],
+        },
       ],
     });
     expect(selectCurrentWindowProfile(deleted, context({ profileId: "work" }))).toBeNull();
@@ -88,7 +112,15 @@ describe("resolveWindowThemeOverride", () => {
       context({ theme: "nord" }),
       windowsState({
         windows: [
-          { windowId: 2, isMain: false, profileId: null, name: "W", title: "", focused: true },
+          {
+            windowId: 2,
+            isMain: false,
+            profileId: null,
+            name: "W",
+            title: "",
+            focused: true,
+            projectScopeKeys: [],
+          },
         ],
       }),
       null,

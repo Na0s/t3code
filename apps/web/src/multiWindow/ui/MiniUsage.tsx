@@ -1,5 +1,8 @@
+import { useAtomValue } from "@effect/atom-react";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
+import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { ExternalLinkIcon, TriangleAlertIcon } from "lucide-react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { ProviderInstanceIcon } from "../../components/chat/ProviderInstanceIcon";
 import { providerClients } from "../../components/settings/providerDriverMeta";
@@ -7,13 +10,23 @@ import { Button } from "../../components/ui/button";
 import { RefreshIcon } from "../../components/ui/refresh-icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import { barColor, PaceIcon, usePaceMark } from "../../components/usage/UsageLimits";
+import { readUsagePagePreferences } from "../../components/usage/usagePagePreferences";
+import { PROVIDER_PRESENTATION } from "../../components/usage/usageProviders";
 import { cn } from "../../lib/utils";
+import { ensureLocalApi } from "../../localApi";
+import { environmentPresentations } from "../../state/presentation";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
+  deriveMiniUsage,
   formatCheckedAgo,
-  type MiniUsage,
+  type MiniUsage as MiniUsageData,
   type MiniUsageProvider,
   type MiniUsageWindow,
+  withoutHiddenProviders,
 } from "./miniUsage.logic";
+
+const CLOCK_TICK_MS = 60_000;
 
 const TONE_CLASS: Record<MiniUsageWindow["tone"], string> = {
   normal: "text-foreground",
@@ -130,7 +143,81 @@ function MiniUsageSkeleton() {
   );
 }
 
-/** Mini Mode's primary view: what is left of each provider's plan, and when it comes back. */
+/** The Usage tab: rereads the limits while it is showing and keeps their clock current. */
+export function MiniUsage() {
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
+    reportFailure: false,
+  });
+  const [now, setNow] = useState(() => Date.now());
+  const [refreshing, setRefreshing] = useState(false);
+  const [hiddenDrivers] = useState(
+    () =>
+      new Set(
+        (readUsagePagePreferences().hiddenProviders ?? []).map(
+          (provider) => PROVIDER_PRESENTATION[provider].driverKind,
+        ),
+      ),
+  );
+
+  const refreshLimits = (automatic: boolean) =>
+    Promise.allSettled(
+      Array.from(presentations, ([environmentId, presentation]) =>
+        presentation.connection.phase === "connected" && presentation.serverConfig !== null
+          ? refreshUsageLimits(
+              environmentId,
+              () => refreshProviders({ environmentId, input: {} }),
+              automatic,
+            )
+          : undefined,
+      ),
+    ).then(() => setNow(Date.now()));
+  const autoRefresh = useEffectEvent(() => {
+    void refreshLimits(true);
+  });
+  const wake = useEffectEvent(() => {
+    setNow(Date.now());
+    autoRefresh();
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the wall clock once a minute while visible, and when the window regains focus
+  useEffect(() => {
+    const tick = setInterval(() => {
+      if (document.visibilityState === "visible") setNow(Date.now());
+    }, CLOCK_TICK_MS);
+    globalThis.window.addEventListener("focus", wake);
+    return () => {
+      clearInterval(tick);
+      globalThis.window.removeEventListener("focus", wake);
+    };
+  }, []);
+  const connectedEnvironments = [...presentations]
+    .filter(
+      ([, presentation]) =>
+        presentation.connection.phase === "connected" && presentation.serverConfig !== null,
+    )
+    .map(([environmentId]) => environmentId)
+    .sort()
+    .join(",");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- rereads provider limits from the server when the tab opens or the connected environment set changes
+  useEffect(() => {
+    if (connectedEnvironments) autoRefresh();
+  }, [connectedEnvironments]);
+
+  return (
+    <MiniUsageSection
+      usage={deriveMiniUsage(withoutHiddenProviders(presentations, hiddenDrivers), now)}
+      now={now}
+      refreshing={refreshing}
+      onRefresh={() => {
+        setRefreshing(true);
+        void refreshLimits(false).then(() => setRefreshing(false));
+      }}
+      onOpenExternal={(url) => void ensureLocalApi().shell.openExternal(url)}
+    />
+  );
+}
+
+/** What is left of each provider's plan, and when it comes back. */
 export function MiniUsageSection({
   usage,
   now,
@@ -138,7 +225,7 @@ export function MiniUsageSection({
   onRefresh,
   onOpenExternal,
 }: {
-  readonly usage: MiniUsage;
+  readonly usage: MiniUsageData;
   readonly now: number;
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
@@ -146,7 +233,7 @@ export function MiniUsageSection({
 }) {
   const checkedAt = usage.status === "ready" ? usage.checkedAt : null;
   return (
-    <section aria-labelledby="mini-mode-usage" className="flex flex-col gap-2 px-3 pb-3">
+    <section aria-labelledby="mini-mode-usage" className="flex flex-col gap-2 px-4.5 pb-3">
       <div className="flex h-6 items-center gap-2">
         <h2 id="mini-mode-usage" className="font-medium text-muted-foreground text-xs">
           Usage

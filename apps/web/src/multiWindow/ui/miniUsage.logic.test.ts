@@ -9,7 +9,7 @@ import {
   presentations,
   provider,
   usageWindow,
-} from "./miniUsage.fixtures";
+} from "./mini.fixtures";
 import { deriveMiniUsage, formatCheckedAgo, withoutHiddenProviders } from "./miniUsage.logic";
 
 const derive = (...args: Parameters<typeof presentations>) =>

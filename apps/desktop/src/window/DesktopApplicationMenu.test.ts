@@ -393,6 +393,7 @@ describe("DesktopApplicationMenu", () => {
               name: "Main",
               title: "",
               focused: true,
+              projectScopeKeys: [],
             },
             {
               windowId: 2,
@@ -401,6 +402,7 @@ describe("DesktopApplicationMenu", () => {
               name: "Work",
               title: "",
               focused: false,
+              projectScopeKeys: [],
             },
           ],
           miniMode: true,

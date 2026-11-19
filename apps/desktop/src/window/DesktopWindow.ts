@@ -647,6 +647,7 @@ export const make = Effect.gen(function* () {
         name: entry.name,
         title: entry.appliedTitle,
         focused: entry.focused,
+        projectScopeKeys: entry.projectScopeKeys,
       })),
       miniMode: miniPlacement !== null,
       multiWindowEnabled: settings.multiWindowEnabled,
@@ -1639,6 +1640,9 @@ export const make = Effect.gen(function* () {
         if (previous.isMaximized) window.maximize();
       }
     }
+    // The panel's top bar stands in for the traffic lights. Windows and Linux keep their
+    // controls: Electron cannot take a title bar overlay off a window once it is created.
+    if (environment.platform === "darwin") window.setWindowButtonVisibility(!enabled);
     yield* electronWindow.reveal(window);
     yield* syncWindows();
   });
@@ -2031,7 +2035,7 @@ export const make = Effect.gen(function* () {
         const keys = DesktopAppSettings.normalizeProjectScopeKeys(projectScopeKeys);
         entry.projectScopeKeys = keys;
         const profileId = entry.profileId;
-        if (profileId === null) return;
+        if (profileId === null) return yield* syncWindows();
         yield* updateProfiles((profiles) =>
           profiles.map((profile) =>
             profile.id === profileId ? { ...profile, projectScopeKeys: keys } : profile,
