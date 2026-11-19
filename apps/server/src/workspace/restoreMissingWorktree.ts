@@ -11,7 +11,6 @@ import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { scratchFolderRoot } from "../project/ManagedProjectFolders.ts";
 import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
-import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
@@ -100,10 +99,7 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     if (branch === null) return yield* recreateScratchFolder(thread, worktreePath);
     // An umbrella worktree recreates each missing repository on its own.
     if (
-      (yield* readUmbrellaWorktree(worktreePath).pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-      )) !== null &&
+      (yield* umbrellaWorktrees.read(worktreePath)) !== null &&
       (yield* isManagedWorktreePath(worktreePath))
     ) {
       yield* umbrellaWorktrees

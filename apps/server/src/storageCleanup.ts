@@ -53,10 +53,7 @@ import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementSer
 import { MAX_OVERDUE_ARM_MS } from "./orchestration-v2/UsageLimitRecoveryWorker.ts";
 import * as WorktreeBranchSync from "./orchestration-v2/WorktreeBranchSync.ts";
 import { makeUmbrellaWorktrees } from "./project/UmbrellaWorktree.ts";
-import {
-  readUmbrellaWorktree,
-  umbrellaWorktreeRepositories,
-} from "./project/umbrellaWorktreeLayout.ts";
+import { umbrellaWorktreeRepositories } from "./project/umbrellaWorktreeLayout.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -1444,10 +1441,7 @@ const make = Effect.gen(function* () {
             }),
           );
         }
-        const umbrella = yield* readUmbrellaWorktree(worktreePath).pipe(
-          Effect.provideService(FileSystem.FileSystem, fs),
-          Effect.provideService(Path.Path, path),
-        );
+        const umbrella = yield* umbrellaWorktrees.read(worktreePath);
         if (umbrella !== null) {
           // Only the time and deletion rules apply: merge and unchanged rules read one branch.
           if (!eligible)
@@ -1782,12 +1776,7 @@ const make = Effect.gen(function* () {
       }
       // An umbrella worktree's members keep their refs in each member's own repository.
       const umbrella =
-        row.worktreePath === null
-          ? null
-          : yield* readUmbrellaWorktree(row.worktreePath).pipe(
-              Effect.provideService(FileSystem.FileSystem, fs),
-              Effect.provideService(Path.Path, path),
-            );
+        row.worktreePath === null ? null : yield* umbrellaWorktrees.read(row.worktreePath);
       const memberSources = umbrella?.members.map((member) => member.source) ?? [];
       // A worktree may already be gone; its refs live in the shared repository.
       for (const cwd of [row.cwd, row.worktreePath, row.workspaceRoot, ...memberSources]) {
