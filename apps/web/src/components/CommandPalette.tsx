@@ -1761,15 +1761,13 @@ function OpenCommandPaletteDialog(props: {
     });
   }
   const contextualProject = contextualProjectRef
-    ? projects.find(
-        (project) =>
-          project.environmentId === contextualProjectRef.environmentId &&
-          project.id === contextualProjectRef.projectId,
-      )
+    ? projectByKey.get(`${contextualProjectRef.environmentId}:${contextualProjectRef.projectId}`)
     : undefined;
-  const umbrellaActions = contextualProject
-    ? umbrellaMembershipActions([contextualProject], projects, clientSettings)
-    : { adoptions: [], removals: [] };
+  const umbrellaActions = umbrellaMembershipActions(
+    contextualProject ? [contextualProject] : [],
+    projects,
+    clientSettings,
+  );
   for (const { umbrella, path } of umbrellaActions.adoptions) {
     actionItems.push({
       kind: "action",
