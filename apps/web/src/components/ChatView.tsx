@@ -233,6 +233,7 @@ import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { draftModelSelectionApplies, threadHasStarted } from "../lib/chatThreadActions";
 import {
   deriveLogicalProjectKeyFromSettings,
+  isUmbrellaProject,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
@@ -1764,12 +1765,12 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
-  const isUmbrellaProject = (activeProject?.umbrellaMembers?.length ?? 0) > 0;
+  const isUmbrella = activeProject != null && isUmbrellaProject(activeProject);
   // An umbrella checks out every member in worktree mode, even when its root is a plain folder.
-  const worktreeCapable = isGitRepo || isUmbrellaProject;
+  const worktreeCapable = isGitRepo || isUmbrella;
   // A plain folder holding git checkouts still has member diffs, or the umbrella prompt, to show.
   const hasUmbrellaCheckouts =
-    isUmbrellaProject ||
+    isUmbrella ||
     (activeThreadWorktreePath === null && (activeProject?.umbrellaSuggestions?.length ?? 0) > 0);
   const diffAvailable = isServerThread && (isGitRepo || hasUmbrellaCheckouts);
   // Provider-native subagents cannot take messages; approvals and questions go to the top-level parent.
@@ -2951,7 +2952,7 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     isLocalDraftThread,
     isGitRepo,
-    worktreeBaseFallback: !isGitRepo && isUmbrellaProject ? "HEAD" : null,
+    worktreeBaseFallback: !isGitRepo && isUmbrella ? "HEAD" : null,
     phase,
     runtimeMode,
     sendEnvMode,

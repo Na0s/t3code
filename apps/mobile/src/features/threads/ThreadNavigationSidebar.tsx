@@ -209,10 +209,7 @@ function ThreadNavigationSidebarPane(props: ThreadNavigationSidebarProps) {
       ),
     [projectScopes],
   );
-  const umbrellaMemberLabelByProjectKey = useMemo(
-    () => umbrellaMemberLabelsByProjectKey(projectScopes),
-    [projectScopes],
-  );
+  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(projectScopes);
   const selectedProjectScope = resolveHomeProjectFilterScope(projectScopes, projects, options);
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,

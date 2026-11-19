@@ -328,10 +328,7 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [projects, selectedEnvironmentId, projectGroupingMode],
   );
-  const umbrellaMemberLabelByProjectKey = useMemo(
-    () => umbrellaMemberLabelsByProjectKey(projectScopes),
-    [projectScopes],
-  );
+  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(projectScopes);
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
