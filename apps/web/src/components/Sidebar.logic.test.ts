@@ -15,6 +15,7 @@ import {
   pinOrderKeyBetween,
   resolveSidebarSweepKeys,
   resolveSidebarRowStatus,
+  sidebarRowShowsStatus,
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
   resolveWindowTitleThreadStatus,
@@ -330,6 +331,29 @@ describe("resolveSidebarRowStatus", () => {
       expect(hasUnseenCompletion(stopped)).toBe(false);
       expect(resolveThreadStatusPill({ thread: stopped })).toBeNull();
     }
+  });
+
+  it("says whether a row shows a status, Done and Woke included", () => {
+    const visited = {
+      ...failed,
+      runtime: null,
+      latestRun: makeLatestRun(),
+      settledOverride: null,
+      lastVisitedAt: "2026-03-09T10:06:00.000Z",
+    };
+    expect(sidebarRowShowsStatus(visited, null)).toBe(false);
+    // Done: the run completed after the last visit.
+    expect(
+      sidebarRowShowsStatus({ ...visited, lastVisitedAt: "2026-03-09T10:01:00.000Z" }, null),
+    ).toBe(true);
+    expect(
+      sidebarRowShowsStatus({ ...visited, runtime: failedRuntime, latestRun: null }, null),
+    ).toBe(true);
+    expect(sidebarRowShowsStatus(visited, "2026-03-09T10:07:00.000Z")).toBe(true);
+    expect(sidebarRowShowsStatus(visited, "2026-03-09T10:05:00.000Z")).toBe(false);
+    expect(
+      sidebarRowShowsStatus({ ...visited, settledOverride: "settled" }, "2026-03-09T10:07:00.000Z"),
+    ).toBe(false);
   });
 });
 
@@ -1638,34 +1662,37 @@ describe("groupSidebarThreadsByProject", () => {
 });
 
 describe("gatherUmbrellaThreads", () => {
-  it("gathers each umbrella's own and member threads where its first thread is", () => {
-    const northwind = ProjectId.make("northwind");
-    const api = ProjectId.make("api");
-    const acme = ProjectId.make("acme");
-    const umbrellas = [
-      {
-        projectKey: "northwind",
-        memberProjectRefs: [
-          { environmentId: localEnvironmentId, projectId: northwind },
-          { environmentId: localEnvironmentId, projectId: api },
-        ],
-      },
-      {
-        projectKey: "acme",
-        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: acme }],
-      },
-    ];
-    const thread = (id: string, projectId: ProjectId) => ({
-      id,
-      environmentId: localEnvironmentId,
-      projectId,
-    });
-    const summarize = (threads: ReadonlyArray<ReturnType<typeof thread>>) =>
-      gatherUmbrellaThreads(umbrellas, threads).map((run) => ({
-        umbrella: run.umbrella?.projectKey ?? null,
-        threads: run.threads.map((entry) => entry.id),
-      }));
+  const northwind = ProjectId.make("northwind");
+  const api = ProjectId.make("api");
+  const acme = ProjectId.make("acme");
+  const umbrellas = [
+    {
+      projectKey: "northwind",
+      memberProjectRefs: [
+        { environmentId: localEnvironmentId, projectId: northwind },
+        { environmentId: localEnvironmentId, projectId: api },
+      ],
+    },
+    {
+      projectKey: "acme",
+      memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: acme }],
+    },
+  ];
+  const thread = (id: string, projectId: ProjectId) => ({
+    id,
+    environmentId: localEnvironmentId,
+    projectId,
+  });
+  const summarize = (
+    threads: ReadonlyArray<ReturnType<typeof thread>>,
+    flagged: ReadonlySet<string> = new Set(),
+  ) =>
+    gatherUmbrellaThreads(umbrellas, threads, (entry) => !flagged.has(entry.id)).map((run) => ({
+      umbrella: run.umbrella?.projectKey ?? null,
+      threads: run.threads.map((entry) => entry.id),
+    }));
 
+  it("gathers each umbrella's own and member threads where its first thread is", () => {
     expect(
       summarize([
         thread("other-1", ProjectId.make("fleet")),
@@ -1682,6 +1709,26 @@ describe("gatherUmbrellaThreads", () => {
       { umbrella: null, threads: ["other-2"] },
       { umbrella: "acme", threads: ["acme-1"] },
       { umbrella: null, threads: ["other-3"] },
+    ]);
+  });
+
+  it("leaves a thread showing a status in its own place", () => {
+    expect(
+      summarize(
+        [
+          thread("api-done", api),
+          thread("other-1", ProjectId.make("fleet")),
+          thread("api-1", api),
+          thread("northwind-working", northwind),
+          thread("northwind-1", northwind),
+        ],
+        new Set(["api-done", "northwind-working"]),
+      ),
+    ).toEqual([
+      { umbrella: null, threads: ["api-done"] },
+      { umbrella: null, threads: ["other-1"] },
+      { umbrella: "northwind", threads: ["api-1", "northwind-1"] },
+      { umbrella: null, threads: ["northwind-working"] },
     ]);
   });
 });

@@ -183,6 +183,8 @@ import {
   filterSidebarV2VisibleThreads,
   gatherUmbrellaThreads,
   groupSidebarThreadsByProject,
+  resolveThreadLastVisitedAt,
+  sidebarRowShowsStatus,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -440,7 +442,7 @@ function useSidebarThreads(input: {
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
-  // Outside boring mode, each of these gathers its Active threads under its name.
+  // Outside boring mode, each gathers its Active threads that show no status in one place.
   readonly umbrellaGroups: readonly SidebarProjectSnapshot[];
 }) {
   const {
@@ -483,6 +485,7 @@ function useSidebarThreads(input: {
   );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
+  const localLastVisitedAtById = useUiStateStore((store) => store.threadLastVisitedAtById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
   const [settledTail, setSettledTail] = useState({
     scopeKey: projectScopeKey,
@@ -507,16 +510,31 @@ function useSidebarThreads(input: {
   });
 
   const { pinnedThreads, workingThreads, snoozedThreads, settledThreads } = partition;
+  // A row showing a status keeps its place, as it would with no umbrella.
   const umbrellaRuns =
     folderGroups === null && umbrellaGroups.length > 0
-      ? gatherUmbrellaThreads(umbrellaGroups, partition.activeThreads)
+      ? gatherUmbrellaThreads(
+          umbrellaGroups,
+          partition.activeThreads,
+          (thread) =>
+            !sidebarRowShowsStatus(
+              {
+                ...thread,
+                lastVisitedAt: resolveThreadLastVisitedAt(
+                  thread.lastVisitedAt,
+                  localLastVisitedAtById[threadShellKey(thread)],
+                ),
+              },
+              threadWokeAt(thread, { now: partition.snoozeNow }),
+            ),
+        )
       : null;
   const activeThreads = umbrellaRuns
     ? umbrellaRuns.flatMap((run) => run.threads)
     : partition.activeThreads;
   const activeUmbrellaByThreadKey = new Map<
     string,
-    { readonly group: SidebarProjectSnapshot; readonly first: boolean }
+    { readonly group: SidebarProjectSnapshot; readonly first: boolean; readonly last: boolean }
   >();
   for (const run of umbrellaRuns ?? []) {
     if (run.umbrella === null) continue;
