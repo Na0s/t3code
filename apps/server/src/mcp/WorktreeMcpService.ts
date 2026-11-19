@@ -30,6 +30,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
+import type { UmbrellaWorktreeError } from "../project/umbrellaWorktreeLayout.ts";
 import type * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
@@ -160,10 +161,7 @@ const make = Effect.gen(function* () {
       Effect.orDie,
     );
 
-  const bindWorktree = Effect.fn("WorktreeMcpService.bindWorktree")(function* <
-    CreateError,
-    RemoveError,
-  >(
+  const bindWorktree = Effect.fn("WorktreeMcpService.bindWorktree")(function* (
     scope: McpThreadInvocationScope,
     input: WorktreeMcpHandoffInput,
     project: {
@@ -176,12 +174,12 @@ const make = Effect.gen(function* () {
       readonly startedFromOrigin: boolean;
       readonly create: Effect.Effect<
         { readonly path: string; readonly branch: string },
-        CreateError
+        WorktreeMcpFailure
       >;
       readonly remove: (created: {
         readonly path: string;
         readonly branch: string;
-      }) => Effect.Effect<unknown, RemoveError>;
+      }) => Effect.Effect<unknown, GitCommandError | UmbrellaWorktreeError>;
     },
   ) {
     const { baseRef, startedFromOrigin } = worktreeSource;
