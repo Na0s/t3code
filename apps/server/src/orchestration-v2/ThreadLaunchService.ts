@@ -753,18 +753,31 @@ const make = Effect.gen(function* () {
           : null;
       const umbrellaMembers =
         input.workspaceStrategy.type === "worktree" ? yield* umbrellaMembersOf(project) : [];
+      // A retried or replayed launch skips checkWorktreeBase; refuse a plain folder the same way
+      // rather than with Git's driver error, and say which checkouts it holds.
+      if (
+        input.workspaceStrategy.type === "worktree" &&
+        umbrellaMembers.length === 0 &&
+        (yield* git
+          .repositoryRoot(project.workspaceRoot)
+          .pipe(Effect.orElseSucceed(() => undefined))) === null
+      ) {
+        return yield* notRepository(project, input.workspaceStrategy.baseRef).pipe(
+          Effect.mapError(mapError(input, "provision-worktree", threadId)),
+        );
+      }
+      if (input.workspaceStrategy.type === "worktree" && runId !== null) {
+        yield* threads
+          .dispatch({
+            type: "prepared-run.progress",
+            commandId: CommandId.make(`${input.commandId}:progress:worktree`),
+            threadId,
+            runId,
+            phase: "worktree",
+          })
+          .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      }
       if (input.workspaceStrategy.type === "worktree" && umbrellaMembers.length > 0) {
-        if (runId !== null) {
-          yield* threads
-            .dispatch({
-              type: "prepared-run.progress",
-              commandId: CommandId.make(`${input.commandId}:progress:worktree`),
-              threadId,
-              runId,
-              phase: "worktree",
-            })
-            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-        }
         const startFromOrigin = input.workspaceStrategy.startFromOrigin === true;
         yield* setupTracker.stageStatus(threadId, "fetch", startFromOrigin ? "running" : "skipped");
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
@@ -803,28 +816,6 @@ const make = Effect.gen(function* () {
         }));
         yield* setupTracker.stageStatus(threadId, "checkout", "done");
       } else if (input.workspaceStrategy.type === "worktree") {
-        // A retried or replayed launch skips checkWorktreeBase; refuse a plain folder the same way
-        // rather than with Git's driver error, and say which checkouts it holds.
-        if (
-          (yield* git
-            .repositoryRoot(project.workspaceRoot)
-            .pipe(Effect.orElseSucceed(() => undefined))) === null
-        ) {
-          return yield* notRepository(project, input.workspaceStrategy.baseRef).pipe(
-            Effect.mapError(mapError(input, "provision-worktree", threadId)),
-          );
-        }
-        if (runId !== null) {
-          yield* threads
-            .dispatch({
-              type: "prepared-run.progress",
-              commandId: CommandId.make(`${input.commandId}:progress:worktree`),
-              threadId,
-              runId,
-              phase: "worktree",
-            })
-            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-        }
         const requestedBaseRef = input.workspaceStrategy.baseRef;
         let startRef = requestedBaseRef;
         let baseRefName = requestedBaseRef;
