@@ -47,7 +47,7 @@ import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observabil
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { removeEmptyDirectory, type RemoveEmptyDirectoryError } from "./removeEmptyDirectory.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
-import { UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
+import { excludePathspecs, UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
 import {
   explicitBareRepositoryEnv,
   gitConfigEnv,
@@ -1028,11 +1028,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const umbrellaMembers = yield* UmbrellaMemberIndex;
   // Umbrella members checked out inside a work tree are separate projects' files, not this repository's.
   const memberExclusions = (worktreeRoot: string | null | undefined): ReadonlyArray<string> =>
-    worktreeRoot && umbrellaMembers.hasMembers()
-      ? umbrellaMembers
-          .memberPathsWithin(worktreeRoot)
-          .map((member) => `:(top,exclude,literal)${member}`)
-      : [];
+    worktreeRoot ? excludePathspecs(umbrellaMembers.memberPathsWithin(worktreeRoot)) : [];
   type StatusFetchState = {
     phase: "queued" | "running" | "claimed";
     claimed: Deferred.Deferred<void>;

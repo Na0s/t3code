@@ -42,6 +42,10 @@ export interface UmbrellaMemberIndexShape {
 
 const EMPTY: ReadonlyArray<never> = [];
 
+/** Pathspecs that leave these paths, relative to the work tree's top, out of a Git command. */
+export const excludePathspecs = (paths: ReadonlyArray<string>) =>
+  paths.map((path) => `:(top,exclude,literal)${path}`);
+
 const isStrictlyWithin = (root: string, candidate: string) => {
   const relative = NodePath.relative(root, candidate);
   return (

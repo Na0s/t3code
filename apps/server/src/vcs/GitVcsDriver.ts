@@ -47,7 +47,7 @@ import {
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
 import * as CheckoutCloner from "./CheckoutCloner.ts";
-import { UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
+import { excludePathspecs, UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
 import * as CheckpointUntrackedBlobs from "./checkpointUntrackedBlobs.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -650,11 +650,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const memberExclusionsUnder = (cwd: string) =>
     umbrellaMembers.hasMembers()
       ? fileSystem.realPath(cwd).pipe(
-          Effect.map((resolved) =>
-            umbrellaMembers
-              .memberPathsWithin(resolved)
-              .map((member) => `:(exclude,literal)${member}`),
-          ),
+          Effect.map((resolved) => excludePathspecs(umbrellaMembers.memberPathsWithin(resolved))),
           Effect.orElseSucceed((): ReadonlyArray<string> => []),
         )
       : Effect.succeed<ReadonlyArray<string>>([]);

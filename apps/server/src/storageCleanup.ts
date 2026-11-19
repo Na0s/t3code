@@ -60,6 +60,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
+import { excludePathspecs } from "./vcs/UmbrellaMemberIndex.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -847,9 +848,7 @@ const make = Effect.gen(function* () {
     excludedPaths: ReadonlyArray<string> = [],
   ) {
     const pathspec =
-      excludedPaths.length === 0
-        ? []
-        : ["--", ".", ...excludedPaths.map((excluded) => `:(exclude,literal)${excluded}`)];
+      excludedPaths.length === 0 ? [] : ["--", ".", ...excludePathspecs(excludedPaths)];
     const status = yield* git.execute({
       operation: "StorageCleanup.localChanges",
       cwd,
