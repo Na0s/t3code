@@ -3,6 +3,7 @@ import {
   DesktopOpenWindowInputSchema,
   DesktopResolveWindowCloseInputSchema,
   DesktopUpdateWindowProfileInputSchema,
+  DesktopWindowContextSchema,
   DesktopWindowProfileIdSchema,
   DesktopWindowProfileNameSchema,
   DesktopWindowProfileSchema,
@@ -16,14 +17,6 @@ import * as Schema from "effect/Schema";
 import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
-
-const DesktopWindowContextSchema = Schema.Struct({
-  windowId: Schema.Int,
-  isMain: Schema.Boolean,
-  profileId: Schema.NullOr(Schema.String),
-  projectScopeKeys: Schema.Array(Schema.String),
-  theme: Schema.NullOr(Schema.String),
-});
 
 export const getContext = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.WINDOWS_GET_CONTEXT_CHANNEL,

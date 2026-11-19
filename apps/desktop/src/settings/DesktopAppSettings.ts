@@ -317,13 +317,6 @@ export function normalizeWindowProfiles(
   return [defaultProfile, ...others];
 }
 
-function windowProfilesEqual(
-  left: ReadonlyArray<DesktopWindowProfileSettings>,
-  right: ReadonlyArray<DesktopWindowProfileSettings>,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function readWindowProfiles(parsed: DesktopSettingsDocument) {
   const documents: DesktopWindowProfileDocument[] = [];
   for (const entry of parsed.windowProfiles ?? []) {
@@ -492,7 +485,7 @@ function updateWindowProfiles(
       ? updated
       : [defaultWindowProfile(settings), ...updated],
   );
-  return windowProfilesEqual(windowProfiles, settings.windowProfiles)
+  return JSON.stringify(windowProfiles) === JSON.stringify(settings.windowProfiles)
     ? settings
     : { ...settings, windowProfiles };
 }

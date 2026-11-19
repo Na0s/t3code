@@ -57,16 +57,17 @@ export const DesktopWindowsStateSchema = Schema.Struct({
 export type DesktopWindowsState = typeof DesktopWindowsStateSchema.Type;
 
 /** Read synchronously at preload time; a window keeps its id and role for its lifetime. */
-export interface DesktopWindowContext {
-  readonly windowId: number;
-  readonly isMain: boolean;
+export const DesktopWindowContextSchema = Schema.Struct({
+  windowId: Schema.Int,
+  isMain: Schema.Boolean,
   /** The profile the window opened with; null for an unsaved secondary window. */
-  readonly profileId: string | null;
+  profileId: Schema.NullOr(Schema.String),
   /** The profile's project filter at open time (secondary windows only). */
-  readonly projectScopeKeys: readonly string[];
+  projectScopeKeys: Schema.Array(Schema.String),
   /** The profile's theme override at open time; null follows the default profile. */
-  readonly theme: string | null;
-}
+  theme: Schema.NullOr(Schema.String),
+});
+export type DesktopWindowContext = typeof DesktopWindowContextSchema.Type;
 
 export const DesktopOpenWindowInputSchema = Schema.Struct({
   /** Seeds an unsaved window's project filter, such as the opener's current filter. */
