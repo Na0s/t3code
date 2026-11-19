@@ -17,7 +17,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Result from "effect/Result";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -871,11 +870,6 @@ function readClientOwners(
   );
 }
 
-interface UmbrellaRefreshTrigger {
-  readonly rescannedRoot: string | null;
-  readonly projectIds: ReadonlyArray<string>;
-}
-
 const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
   (projects: ReadonlyArray<OrchestrationProjectShell>) =>
     Effect.flatMap(ProjectEnrichmentService.ProjectEnrichmentService, (projectEnrichment) =>
@@ -1161,14 +1155,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       shouldPublishShellApplicationEvent(stored, subagentThreadIds);
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
-    const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
-    const umbrellaTriggers = Option.isNone(umbrellaMembership)
-      ? null
-      : {
-          membership: umbrellaMembership.value,
-          enrichment: yield* projectEnrichment.subscribeChanges,
-          settings: yield* umbrellaMembership.value.subscribeChanges,
-        };
+    const umbrellaChanges = yield* UmbrellaMembership.subscribeUmbrellaChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
       function* (snapshotSequence: number) {
         const enriched = yield* enrichProjectShells(yield* projects.listShells());
@@ -1326,74 +1313,39 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     );
 
     // Members are refreshed as metadata: roots stay out of the identity list, so identities are
-    // not overwritten. Only rescans with checkouts, member identities, and settings edits count.
-    const umbrellaRefreshes =
-      umbrellaTriggers === null
-        ? Stream.empty
-        : Stream.merge(
-            Stream.fromSubscription(umbrellaTriggers.enrichment).pipe(
-              Stream.filterMap((change): Result.Result<UmbrellaRefreshTrigger, void> => {
-                if (change.nestedRepositoriesResolved === true) {
-                  return Result.succeed({ rescannedRoot: change.workspaceRoot, projectIds: [] });
-                }
-                const projectIds = change.repositoryIdentityResolved
-                  ? umbrellaTriggers.membership.umbrellasWithMember(change.workspaceRoot)
-                  : [];
-                return projectIds.length === 0
-                  ? Result.failVoid
-                  : Result.succeed({ rescannedRoot: null, projectIds });
-              }),
-            ),
-            Stream.fromSubscription(umbrellaTriggers.settings).pipe(
-              Stream.map((projectIds): UmbrellaRefreshTrigger => ({
-                rescannedRoot: null,
-                projectIds,
-              })),
-            ),
-          ).pipe(
-            Stream.groupedWithin(64, Duration.millis(50)),
-            Stream.mapEffect((triggers) =>
-              Effect.gen(function* () {
-                const projectIds = new Set<string>(
-                  triggers.flatMap((trigger) => trigger.projectIds),
-                );
-                const rescannedRoots = new Set(
-                  triggers.flatMap((trigger) =>
-                    trigger.rescannedRoot === null ? [] : [trigger.rescannedRoot],
-                  ),
-                );
-                const affected = (yield* projects.listShells()).filter(
-                  (project) =>
-                    projectIds.has(project.id) || rescannedRoots.has(project.workspaceRoot),
-                );
-                if (affected.length === 0) return [];
-                const changedProjects = yield* Effect.forEach(
-                  yield* UmbrellaMembership.attachUmbrellaMembers(affected),
-                  (project) =>
-                    projectEnrichment.peek(project.workspaceRoot).pipe(
-                      Effect.map(({ repositoryIdentity }) => ({
-                        ...project,
-                        repositoryIdentity,
-                      })),
-                    ),
-                );
-                return [
-                  {
-                    kind: "snapshot" as const,
-                    snapshot: {
-                      schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
-                      snapshotSequence: yield* applicationEvents.latestApplicationSequence,
-                      projects: changedProjects,
-                      threads: [],
-                      archivedThreads: [],
-                    } as OrchestrationV2ShellSnapshot,
-                    resolvedRepositoryIdentityRoots: [] as ReadonlyArray<string>,
-                  },
-                ];
-              }),
-            ),
-            Stream.flatMap(Stream.fromIterable),
+    // not overwritten.
+    const umbrellaRefreshes = umbrellaChanges.pipe(
+      Stream.mapEffect((projectIds) =>
+        Effect.gen(function* () {
+          const changed = new Set<string>(projectIds);
+          const affected = (yield* projects.listShells()).filter((project) =>
+            changed.has(project.id),
           );
+          if (affected.length === 0) return [];
+          const changedProjects = yield* Effect.forEach(
+            yield* UmbrellaMembership.attachUmbrellaMembers(affected),
+            (project) =>
+              projectEnrichment
+                .peek(project.workspaceRoot)
+                .pipe(Effect.map(({ repositoryIdentity }) => ({ ...project, repositoryIdentity }))),
+          );
+          return [
+            {
+              kind: "snapshot" as const,
+              snapshot: {
+                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+                projects: changedProjects,
+                threads: [],
+                archivedThreads: [],
+              } as OrchestrationV2ShellSnapshot,
+              resolvedRepositoryIdentityRoots: [] as ReadonlyArray<string>,
+            },
+          ];
+        }),
+      ),
+      Stream.flatMap(Stream.fromIterable),
+    );
     const metadataRefreshes = Stream.merge(enrichmentRefreshes, umbrellaRefreshes);
 
     // Subscribe before loading for racing enrichments; initial refresh covers pre-subscription completions and cold HTTP snapshots.

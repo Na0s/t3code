@@ -294,7 +294,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 suggestions: [],
                 enclosingRepository: null,
               }),
-            umbrellasWithMember: () => [],
           }),
           Layer.succeed(
             SecureRandom.SecureRandom,

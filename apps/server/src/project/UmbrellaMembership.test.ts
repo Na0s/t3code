@@ -1,10 +1,12 @@
 import { it } from "@effect/vitest";
 import { ProjectId, type ServerSettings } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -142,6 +144,80 @@ describe("UmbrellaMembership index", () => {
       yield* Fiber.join(fresh);
 
       expect(index.membersOf(root).map((member) => member.relativePath)).toEqual(["api"]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("UmbrellaMembership changes", () => {
+  it.live("names the umbrellas a root rescan or a member identity changes", () =>
+    Effect.gen(function* () {
+      const root = "/clients/acme";
+      const shell = (id: string, workspaceRoot: string) => ({
+        id: ProjectId.make(id),
+        title: id,
+        workspaceRoot,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      const enrichmentChanges =
+        yield* PubSub.unbounded<ProjectEnrichmentService.ProjectEnrichmentChange>();
+      const change = (
+        workspaceRoot: string,
+        kind: "identity" | "rescan",
+      ): ProjectEnrichmentService.ProjectEnrichmentChange => ({
+        workspaceRoot,
+        enrichment: {
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: true,
+        },
+        repositoryIdentityResolved: kind === "identity",
+        ...(kind === "rescan" ? { nestedRepositoriesResolved: true } : {}),
+      });
+
+      const membership = yield* UmbrellaMembership.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            FileSystem.layerNoop({
+              exists: () => Effect.succeed(false),
+              realPath: (value) => Effect.succeed(value),
+            }),
+            Path.layer,
+            Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+              readNestedRepositories: () => Effect.succeed([`${root}/api`]),
+              peekNestedRepositories: () => Effect.succeed([`${root}/api`]),
+              subscribeChanges: PubSub.subscribe(enrichmentChanges),
+            }),
+            Layer.mock(ServerSettingsService.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                projectSettingsOverrides: { acme: { umbrellaEnabled: true } },
+              } as unknown as ServerSettings),
+              subscribeChanges: Effect.succeed(Stream.never),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([shell("acme", root), shell("other", "/other")]),
+            }),
+          ),
+        ),
+        Effect.provideService(
+          UmbrellaMemberIndex.UmbrellaMemberIndex,
+          UmbrellaMemberIndex.makeIndex(),
+        ),
+      );
+      const changes = yield* membership.subscribeChanges;
+      const next = Stream.fromSubscription(changes).pipe(
+        Stream.runHead,
+        Effect.timeout(Duration.seconds(2)),
+      );
+
+      yield* PubSub.publish(enrichmentChanges, change("/other", "identity"));
+      yield* PubSub.publish(enrichmentChanges, change(`${root}/api`, "identity"));
+      expect(yield* next).toEqual(Option.some(["acme"]));
+
+      yield* PubSub.publish(enrichmentChanges, change(root, "rescan"));
+      expect(yield* next).toEqual(Option.some(["acme"]));
     }).pipe(Effect.scoped),
   );
 });

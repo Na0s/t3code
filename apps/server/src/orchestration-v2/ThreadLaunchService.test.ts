@@ -275,7 +275,6 @@ function makeHarness(options: HarnessOptions = {}) {
                   suggestions: options.umbrellaSuggestions ?? [],
                   enclosingRepository: null,
                 }),
-              umbrellasWithMember: () => [],
             }),
         options.getLaunchSettings === undefined
           ? Layer.empty

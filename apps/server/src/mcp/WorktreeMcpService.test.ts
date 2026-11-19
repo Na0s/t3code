@@ -331,7 +331,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
                   suggestions: [],
                   enclosingRepository: null,
                 }),
-              umbrellasWithMember: () => [],
             }),
         options.existsFails
           ? FileSystem.layerNoop({

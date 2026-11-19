@@ -107,11 +107,9 @@ export class UmbrellaMembership extends Context.Service<
   {
     /** From cached scans and identities, never scanning inline; undefined before the root's first scan. */
     readonly stateOf: (project: UmbrellaProject) => Effect.Effect<UmbrellaState | undefined>;
-    /** Umbrella projects with a member checked out at this path. */
-    readonly umbrellasWithMember: (memberPath: string) => ReadonlyArray<ProjectId>;
     /** Recomputes which checkouts git leaves out, after projects move or go away. */
     readonly refreshIndex: Effect.Effect<void>;
-    /** Projects whose umbrella settings changed. */
+    /** Projects whose members may have changed: settings edits, root rescans, member identities. */
     readonly subscribeChanges: Effect.Effect<
       PubSub.Subscription<ReadonlyArray<ProjectId>>,
       never,
@@ -261,6 +259,31 @@ export const make = Effect.gen(function* () {
     yield* PubSub.publish(changes, changed);
   });
 
+  // A rescan changes its root's members; a resolved identity changes the umbrellas holding it.
+  const onEnrichment = Effect.fn("UmbrellaMembership.onEnrichment")(function* (
+    batch: ReadonlyArray<ProjectEnrichmentService.ProjectEnrichmentChange>,
+  ) {
+    const rescanned = new Set(
+      batch.flatMap((change) =>
+        change.nestedRepositoriesResolved === true ? [change.workspaceRoot] : [],
+      ),
+    );
+    if (rescanned.size > 0) yield* rebuildIndex({ scan: false });
+    const changed = new Set(
+      batch.flatMap((change) =>
+        change.repositoryIdentityResolved
+          ? (umbrellasByMemberPath.get(change.workspaceRoot) ?? [])
+          : [],
+      ),
+    );
+    if (rescanned.size > 0) {
+      for (const project of yield* projectStore.listShells().pipe(Effect.orElseSucceed(() => []))) {
+        if (rescanned.has(project.workspaceRoot)) changed.add(project.id);
+      }
+    }
+    if (changed.size > 0) yield* PubSub.publish(changes, [...changed]);
+  });
+
   const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
   // Worktree-mode threads' folders, so their status and checkpoints leave members out after a restart.
   const registerWorktrees = Effect.gen(function* () {
@@ -290,9 +313,8 @@ export const make = Effect.gen(function* () {
         [
           Stream.runForEach(settingsChanges, onSettings),
           Stream.fromSubscription(enrichmentChanges).pipe(
-            Stream.filter((change) => change.nestedRepositoriesResolved === true),
             Stream.groupedWithin(64, Duration.millis(250)),
-            Stream.runForEach(() => rebuildIndex({ scan: false })),
+            Stream.runForEach(onEnrichment),
           ),
           // Rescans enabled umbrellas and drops projects removed or moved since.
           rebuildIndex({ scan: false }).pipe(
@@ -311,7 +333,6 @@ export const make = Effect.gen(function* () {
 
   return UmbrellaMembership.of({
     stateOf,
-    umbrellasWithMember: (memberPath) => umbrellasByMemberPath.get(memberPath) ?? [],
     refreshIndex: rebuildIndex({ scan: false }),
     subscribeChanges: PubSub.subscribe(changes),
   });
@@ -345,6 +366,16 @@ export const attachUmbrellaMembers = Effect.fnUntraced(function* <P extends Umbr
     { concurrency: 16 },
   );
 });
+
+/** Projects whose members may have changed; nothing without the umbrella layer. */
+export const subscribeUmbrellaChanges = Effect.serviceOption(UmbrellaMembership).pipe(
+  Effect.flatMap(
+    Option.match({
+      onNone: () => Effect.succeed(Stream.empty),
+      onSome: (membership) => Effect.map(membership.subscribeChanges, Stream.fromSubscription),
+    }),
+  ),
+);
 
 /** A moved or deleted project stops git leaving out its members right away. */
 export const refreshUmbrellaIndex = Effect.serviceOption(UmbrellaMembership).pipe(
