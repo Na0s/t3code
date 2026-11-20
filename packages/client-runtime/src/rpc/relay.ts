@@ -1,6 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -57,31 +58,12 @@ export interface SharedRelayStream {
   readonly encode: (values: ReadonlyArray<unknown>) => Effect.Effect<unknown>;
 }
 
-/** Runs port messages one at a time and in arrival order, like a socket's frames. */
-const makeSerialRunner = <A>(
-  runFork: (effect: Effect.Effect<void>) => unknown,
-  handle: (message: A) => Effect.Effect<void>,
-) => {
-  const queue: Array<A> = [];
-  let draining = false;
-  const drain = Effect.gen(function* () {
-    while (queue.length > 0) {
-      yield* handle(queue.shift()!);
-    }
-  }).pipe(
-    Effect.ensuring(
-      Effect.sync(() => {
-        draining = false;
-      }),
-    ),
-  );
-  return (message: A) => {
-    queue.push(message);
-    if (draining) return;
-    draining = true;
-    runFork(drain);
-  };
-};
+/** Handles port messages one at a time and in arrival order, like a socket's frames. */
+const makeInbox = Effect.fnUntraced(function* <A>(handle: (message: A) => Effect.Effect<void>) {
+  const inbox = yield* Queue.unbounded<A>();
+  yield* Queue.take(inbox).pipe(Effect.flatMap(handle), Effect.forever, Effect.forkScoped);
+  return (message: A) => Queue.offerUnsafe(inbox, message);
+});
 
 // RpcClient numbers its clients from 0 within one JavaScript realm, so relay
 // clients sharing the hub's protocol start far above any realistic count.
@@ -225,7 +207,7 @@ export const serveRelay = Effect.fnUntraced(function* (options: {
     }
   };
 
-  const enqueue = makeSerialRunner(runFork, handle);
+  const enqueue = yield* makeInbox(handle);
   const stopListening = port.onMessage((message) => {
     if (!closed) enqueue(message as FromClientEncoded);
   });
@@ -264,7 +246,6 @@ export const makePortProtocol = (options: {
   RpcClient.Protocol.make(
     Effect.fnUntraced(function* (writeResponse, clientIds) {
       const { port } = options;
-      const runFork = Effect.runForkWith(yield* Effect.context<never>());
       const requestClients = new Map<string | number, number>();
       let closedError: RpcClientError.RpcClientError | undefined;
 
@@ -321,7 +302,7 @@ export const makePortProtocol = (options: {
         return broadcast(response);
       };
 
-      const enqueue = makeSerialRunner(runFork, receive);
+      const enqueue = yield* makeInbox(receive);
       const stopListening = port.onMessage((message) => {
         options.onMessage?.();
         enqueue(message);
