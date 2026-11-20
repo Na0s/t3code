@@ -2901,12 +2901,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           });
         }
       }
-      const exclusions = umbrellaMembers.hasMembers()
-        ? memberExclusions(
-            (yield* resolveRepositoryPaths(cwd).pipe(Effect.orElseSucceed(() => null)))
-              ?.worktreeRoot,
-          )
-        : [];
+      const worktreeRoot = umbrellaMembers.hasMembers()
+        ? (yield* resolveRepositoryPaths(cwd).pipe(Effect.orElseSucceed(() => null)))?.worktreeRoot
+        : undefined;
+      const members = worktreeRoot ? umbrellaMembers.memberPathsWithin(worktreeRoot) : [];
+      // git add fails on a pathspec naming an ignored member, excluding or not; it skips those anyway.
+      const ignored =
+        worktreeRoot && members.length > 0
+          ? splitNullSeparatedGitStdoutPaths(
+              yield* executeGit(
+                "GitVcsDriver.commit.ignoredMembers",
+                worktreeRoot,
+                ["check-ignore", "--no-index", "-z", "--stdin"],
+                { allowNonZeroExit: true, stdin: `${members.join("\0")}\0` },
+              ),
+            )
+          : [];
+      const exclusions = excludePathspecs(members.filter((member) => !ignored.includes(member)));
       yield* runGit(
         "GitVcsDriver.commit.addAll",
         cwd,

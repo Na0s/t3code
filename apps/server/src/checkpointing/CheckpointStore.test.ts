@@ -800,6 +800,56 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       }),
     );
 
+    it.effect("checkpoints a repository umbrella whose members it ignores", () =>
+      Effect.gen(function* () {
+        const root = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(root);
+        yield* writeTextFile(NodePath.join(root, ".gitignore"), "/api/\n");
+        const fileSystem = yield* FileSystem.FileSystem;
+        const member = NodePath.join(root, "api");
+        yield* fileSystem.makeDirectory(member);
+        yield* initRepoWithCommit(member);
+        const checkpointStore = yield* umbrellaStore(root, ["api"]);
+        const threadId = ThreadId.make("thread-umbrella-ignored-member");
+        const refs = {
+          cwd: root,
+          fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+          toCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
+        };
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: root,
+          checkpointRef: refs.fromCheckpointRef,
+        });
+        yield* writeTextFile(NodePath.join(root, "README.md"), "# outer\n");
+        yield* writeTextFile(NodePath.join(member, "README.md"), "# member\n");
+        yield* checkpointStore.captureCheckpoint({
+          cwd: root,
+          checkpointRef: refs.toCheckpointRef,
+        });
+
+        const numstat = yield* checkpointStore.diffCheckpoints({
+          ...refs,
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+          "api/README.md",
+          "README.md",
+        ]);
+        expect(
+          yield* checkpointStore.restoreCheckpoint({
+            cwd: root,
+            checkpointRef: refs.fromCheckpointRef,
+          }),
+        ).toBe(true);
+        expect(yield* fileSystem.readFileString(NodePath.join(root, "README.md"))).toBe("# test\n");
+        expect(yield* fileSystem.readFileString(NodePath.join(member, "README.md"))).toBe(
+          "# test\n",
+        );
+      }),
+    );
+
     it.effect("restores only members that changed and reports one that fails", () =>
       Effect.gen(function* () {
         const root = NodeFS.realpathSync.native(yield* makeTmpDir());

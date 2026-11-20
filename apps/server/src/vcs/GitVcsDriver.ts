@@ -647,10 +647,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const hostPlatform = yield* HostProcess.Platform;
   const umbrellaMembers = yield* UmbrellaMemberIndex;
   // Umbrella members keep their own checkpoints; the enclosing repository's must not stage or restore them.
+  // Git skips ignored members by itself, and git add fails on a pathspec naming one, excluding or not.
   const memberExclusionsUnder = (cwd: string) =>
     umbrellaMembers.hasMembers()
       ? fileSystem.realPath(cwd).pipe(
-          Effect.map((resolved) => excludePathspecs(umbrellaMembers.memberPathsWithin(resolved))),
+          Effect.map((resolved) => umbrellaMembers.memberPathsWithin(resolved)),
+          Effect.flatMap((paths) =>
+            filterIgnoredPaths(cwd, paths).pipe(Effect.orElseSucceed(() => paths)),
+          ),
+          Effect.map(excludePathspecs),
           Effect.orElseSucceed((): ReadonlyArray<string> => []),
         )
       : Effect.succeed<ReadonlyArray<string>>([]);

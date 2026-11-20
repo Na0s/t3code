@@ -3484,6 +3484,26 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("commits an umbrella repository that ignores its members", () =>
+      Effect.gen(function* () {
+        const cwd = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, ".gitignore", "/api/\n");
+        const member = `${cwd}/api`;
+        yield* (yield* FileSystem.FileSystem).makeDirectory(member);
+        yield* initRepoWithCommit(member);
+        const index = UmbrellaMemberIndex.makeIndex();
+        yield* index.replace(new Map([[cwd, [{ path: member, relativePath: "api" }]]]));
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(UmbrellaMemberIndex.UmbrellaMemberIndex, index),
+          Effect.provide(layerServerConfig),
+        );
+
+        yield* driver.commit(cwd, "ignore members", "", { stage: {} });
+        assert.equal(yield* git(cwd, ["ls-files"]), ".gitignore\nREADME.md");
+      }),
+    );
+
     it.effect("keeps untracked filenames with pathspec magic in the review", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
