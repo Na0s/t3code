@@ -1,3 +1,4 @@
+import { collectFleetBotMentions } from "@t3tools/shared/fleetBotMentions";
 import { collectComposerModelMentions } from "@t3tools/client-runtime/composer-model-mentions";
 import type { AssistantCitation } from "@t3tools/contracts";
 import { collectAssistantCitations } from "@t3tools/shared/assistantCitations";
@@ -10,6 +11,7 @@ import {
 import { markdownMathRanges } from "~/markdown/wordsHast";
 
 export type ComposerPromptSegment =
+  | { type: "bot"; botId: string; source: string }
   | {
       type: "text";
       text: string;
@@ -100,7 +102,15 @@ function collectModelTokens(text: string, inlineTokens: ReadonlyArray<ComposerIn
 
 export function collectComposerPromptInlineTokens(text: string) {
   const inlineTokens = collectComposerInlineTokens(text, { findMath: markdownMathRanges });
-  const models = collectModelTokens(text, inlineTokens);
+  const taken = [...inlineTokens, ...composerMathRanges(text, markdownMathRanges)];
+  const bots = collectFleetBotMentions(text)
+    .filter(
+      (mention) =>
+        /\s/.test(text[mention.end] ?? "") &&
+        !taken.some((range) => mention.start < range.end && mention.end > range.start),
+    )
+    .map((mention) => ({ ...mention, type: "bot" as const }));
+  const models = [...collectModelTokens(text, inlineTokens), ...bots];
   const tokens =
     models.length === 0
       ? inlineTokens
@@ -155,6 +165,8 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
         path: match.value,
         source: match.source,
       });
+    } else if (match.type === "bot") {
+      segments.push({ type: "bot", botId: match.botId, source: match.source });
     } else if (match.type === "model") {
       segments.push({
         type: "model",

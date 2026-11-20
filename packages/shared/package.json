@@ -670,6 +670,10 @@
     "./assistantInsights": {
       "types": "./src/assistantInsights.ts",
       "import": "./src/assistantInsights.ts"
+    },
+    "./fleetBotMentions": {
+      "types": "./src/fleetBotMentions.ts",
+      "import": "./src/fleetBotMentions.ts"
     }
   },
   "scripts": {

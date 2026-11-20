@@ -155,9 +155,20 @@ export function applyServerConfigProjection(
         const settings = reuseUnchanged(projection.config.settings, event.payload.settings);
         return {
           config:
-            settings === projection.config.settings
+            settings === projection.config.settings && event.payload.fleetBots === undefined
               ? projection.config
-              : { ...projection.config, settings },
+              : {
+                  ...projection.config,
+                  settings,
+                  ...(event.payload.fleetBots === undefined
+                    ? {}
+                    : {
+                        fleetBots: reuseUnchanged(
+                          projection.config.fleetBots ?? [],
+                          event.payload.fleetBots,
+                        ),
+                      }),
+                },
           latestEvent: event,
           source: "live",
         };

@@ -707,7 +707,16 @@ export const ServerFeatureFlags = Schema.Struct({
 });
 export type ServerFeatureFlags = typeof ServerFeatureFlags.Type;
 
+export const FleetBot = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_-]{1,128}$/u)),
+  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(120)),
+  icon: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32)),
+  color: Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/u)),
+});
+export type FleetBot = typeof FleetBot.Type;
+
 export const ServerConfig = Schema.Struct({
+  fleetBots: Schema.optionalKey(Schema.Array(FleetBot)),
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
   cwd: TrimmedNonEmptyString,
@@ -839,6 +848,7 @@ export type ServerConfigProviderStatusDeltasPayload =
 
 export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettings,
+  fleetBots: Schema.optionalKey(Schema.Array(FleetBot)),
 });
 export type ServerConfigSettingsUpdatedPayload = typeof ServerConfigSettingsUpdatedPayload.Type;
 

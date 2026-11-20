@@ -1,3 +1,5 @@
+import { collectFleetBotMentions } from "@t3tools/shared/fleetBotMentions";
+import { FleetBotMentionChip } from "./FleetBotMentionChip";
 import { collectComposerModelMentions } from "@t3tools/client-runtime/composer-model-mentions";
 import type { EnvironmentId, ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
@@ -49,6 +51,19 @@ function SkillInlineText(props: {
       ),
     });
   }
+  for (const mention of collectFleetBotMentions(props.text))
+    chips.push({
+      start: mention.start,
+      end: mention.end,
+      node: (
+        <FleetBotMentionChip
+          key={`${mention.start}:bot`}
+          environmentId={props.environmentId}
+          botId={mention.botId}
+          source={mention.source}
+        />
+      ),
+    });
   if (chips.length === 0) {
     return <>{props.text}</>;
   }

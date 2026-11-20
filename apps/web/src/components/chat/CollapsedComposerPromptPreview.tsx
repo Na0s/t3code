@@ -1,5 +1,6 @@
+import { FleetBotMentionChip } from "./FleetBotMentionChip";
 import { isProviderSkillUserInvocable } from "@t3tools/client-runtime/providerSkills";
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { EnvironmentId, ServerProviderSkill } from "@t3tools/contracts";
 import { assistantCitationLabel } from "@t3tools/shared/assistantCitations";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import { fileDisplayName } from "@t3tools/shared/path";
@@ -60,6 +61,7 @@ function resolvedContextRecord(
  */
 export function CollapsedComposerPromptPreview(props: {
   prompt: string;
+  environmentId?: EnvironmentId;
   skills: ReadonlyArray<ServerProviderSkill>;
   contextRecords: ComposerDraftContextRecords;
   theme: Theme;
@@ -72,6 +74,16 @@ export function CollapsedComposerPromptPreview(props: {
       case "text":
         return segment.text;
       // The editor's model chip is a popover trigger, which cannot nest in the row's button.
+      case "bot":
+        return (
+          <FleetBotMentionChip
+            key={key}
+            environmentId={props.environmentId ?? null}
+            botId={segment.botId}
+            source={segment.source}
+            inert
+          />
+        );
       case "model":
         return segment.source;
       case "citation":

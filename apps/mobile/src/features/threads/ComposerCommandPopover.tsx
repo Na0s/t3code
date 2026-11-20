@@ -1,3 +1,4 @@
+import type { FleetBotPresentation } from "@t3tools/shared/fleetBotMentions";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -79,6 +80,13 @@ export type ComposerCommandItem =
     }
   | {
       readonly id: string;
+      readonly type: "bot";
+      readonly bot: FleetBotPresentation;
+      readonly label: string;
+      readonly description: string;
+    }
+  | {
+      readonly id: string;
       readonly type: "model";
       readonly option: ModelOption;
       readonly label: string;
@@ -130,6 +138,7 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
     case "skill":
       return SKILL_SOURCE_SYMBOL_BY_KIND[resolveProviderSkillSourceKind(item.skill)];
     case "path":
+    case "bot":
     case "model":
       return null;
     case "thread":
@@ -199,6 +208,8 @@ const CommandRow = memo(function CommandRow(props: {
     >
       {props.item.type === "path" ? (
         <PierreEntryIcon path={props.item.path} kind={props.item.kind} size={16} />
+      ) : props.item.type === "bot" ? (
+        <Text style={{ color: props.item.bot.color }}>{props.item.bot.icon}</Text>
       ) : props.item.type === "model" ? (
         <ProviderIcon
           iconUrl={props.item.option.providerIconUrl}
@@ -223,6 +234,7 @@ const CommandRow = memo(function CommandRow(props: {
           props.item.type === "thread" && "max-w-[45%]",
         )}
         numberOfLines={1}
+        style={props.item.type === "bot" ? { color: props.item.bot.color } : undefined}
       >
         {props.isSlashSkill && props.item.type === "skill" ? (
           <>
