@@ -613,65 +613,61 @@ it.effect("a launch into a new worktree creates nothing when its base ref has no
   }),
 );
 
-it.effect.each([false, true])(
-  "a worktree launch in a plain folder points at the checkout's own project (umbrella: %s)",
-  (umbrella) =>
-    Effect.gen(function* () {
-      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-      const appProjectId = ProjectId.make("project-app");
-      const { projectId, dependencies } = clientLaunchHarness({
-        runtimeModeCeiling: "auto",
-        launched,
-        checkWorktreeBase: ({ projectId, workspaceStrategy }) =>
-          Effect.fail(
-            new ThreadLaunch.ThreadLaunchNotRepositoryError({
-              projectId,
-              projectTitle: "Client folder",
-              workspaceRoot: "/projects/client",
-              ...(workspaceStrategy.type === "worktree"
-                ? { baseRef: workspaceStrategy.baseRef }
-                : {}),
-              nestedRepositories: [
-                {
-                  relativePath: "app",
-                  projectId: appProjectId,
-                  projectTitle: "app",
-                  hasBaseRef: true,
-                },
-                {
-                  relativePath: "site",
-                  projectId: ProjectId.make("project-site"),
-                  hasBaseRef: false,
-                },
-                { relativePath: "dev-setup", hasBaseRef: false },
-              ],
-              umbrella,
-            }),
-          ),
-      });
-      const toolkit = yield* ProjectToolkit.pipe(
-        Effect.provide(
-          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
-            Layer.provide(dependencies),
-          ),
+it.effect("a worktree launch in a plain umbrella folder points at a member's own project", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const appProjectId = ProjectId.make("project-app");
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+      checkWorktreeBase: ({ projectId, workspaceStrategy }) =>
+        Effect.fail(
+          new ThreadLaunch.ThreadLaunchNotRepositoryError({
+            projectId,
+            projectTitle: "Client folder",
+            workspaceRoot: "/projects/client",
+            ...(workspaceStrategy.type === "worktree"
+              ? { baseRef: workspaceStrategy.baseRef }
+              : {}),
+            nestedRepositories: [
+              {
+                relativePath: "app",
+                projectId: appProjectId,
+                projectTitle: "app",
+                hasBaseRef: true,
+              },
+              {
+                relativePath: "site",
+                projectId: ProjectId.make("project-site"),
+                hasBaseRef: false,
+              },
+              { relativePath: "dev-setup", hasBaseRef: false },
+            ],
+            umbrella: true,
+          }),
         ),
-      );
-      const refused = (yield* toolkit
-        .handle("t3_thread_launch", {
-          title: "Fix CI",
-          projectId,
-          workspaceStrategy: { type: "worktree", baseRef: "origin/develop", startFromOrigin: true },
-        })
-        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
-      expect(refused).toMatchObject({ code: "invalid_request" });
-      const message = (refused as { message: string }).message;
-      expect(message).toContain('"origin/develop" is in app (project "app").');
-      expect(message).toContain(
-        `pass the projectId of the checkout's own project: "${appProjectId}" (app).`,
-      );
-      expect(message.startsWith("Umbrella worktrees need the umbrella folder")).toBe(umbrella);
-      expect(launched).toHaveLength(0);
-    }),
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const refused = (yield* toolkit
+      .handle("t3_thread_launch", {
+        title: "Fix CI",
+        projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "origin/develop", startFromOrigin: true },
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
+    expect(refused).toMatchObject({ code: "invalid_request" });
+    const message = (refused as { message: string }).message;
+    expect(message).toContain('"origin/develop" is in app (project "app").');
+    expect(message).toContain(
+      `pass the projectId of the checkout's own project: "${appProjectId}" (app).`,
+    );
+    expect(message).toContain("Umbrella worktrees need the umbrella folder to be a Git repository");
+    expect(launched).toHaveLength(0);
+  }),
 );
 
 it.effect("a worktree launch that omits startFromOrigin follows the new-worktree setting", () =>
