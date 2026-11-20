@@ -1139,8 +1139,9 @@ function makePortPair(): readonly [RpcPort, RpcPort] {
 
 const connectHubAndWindows = Effect.fn("TestRpcSessionFactory.connectHubAndWindows")(function* (
   count: number,
+  options: RpcSession.RpcSessionOptions = { shareStreams: true },
 ) {
-  const { factory, sockets } = yield* makeFactory({ shareStreams: true });
+  const { factory, sockets } = yield* makeFactory(options);
   const hub = yield* factory.connect(PREPARED);
   const hubReady = yield* Effect.forkChild(hub.ready);
   const socket = yield* awaitSocket(sockets);
@@ -1155,7 +1156,7 @@ const connectHubAndWindows = Effect.fn("TestRpcSessionFactory.connectHubAndWindo
     yield* secondary.ready;
     windows.push(secondary);
   }
-  return { hub, windows, socket, sockets };
+  return { factory, hub, windows, socket, sockets };
 });
 
 const connectHubAndWindow = Effect.fn("TestRpcSessionFactory.connectHubAndWindow")(function* () {
@@ -1252,13 +1253,7 @@ describe("hub relay", () => {
 
   it.effect("interrupts a window's open streams on the server when the relay ends", () =>
     Effect.gen(function* () {
-      const { factory, sockets } = yield* makeFactory();
-      const hub = yield* factory.connect(PREPARED);
-      const hubReady = yield* Effect.forkChild(hub.ready);
-      const socket = yield* awaitSocket(sockets);
-      socket.open();
-      yield* completeInitialConfig(socket);
-      yield* Fiber.join(hubReady);
+      const { factory, hub, socket } = yield* connectHubAndWindows(0, {});
       const [hubPort, windowPort] = makePortPair();
       const relayScope = yield* Scope.make();
       yield* hub.relay!(hubPort).pipe(Scope.provide(relayScope));
@@ -1596,13 +1591,7 @@ describe("shared hub subscriptions", () => {
 
   it.effect("ends a window's relay and its config stream when the hub closes it", () =>
     Effect.gen(function* () {
-      const { factory, sockets } = yield* makeFactory({ shareStreams: true });
-      const hub = yield* factory.connect(PREPARED);
-      const hubReady = yield* Effect.forkChild(hub.ready);
-      const socket = yield* awaitSocket(sockets);
-      socket.open();
-      yield* completeInitialConfig(socket);
-      yield* Fiber.join(hubReady);
+      const { factory, hub } = yield* connectHubAndWindows(0);
       const [hubPort, windowPort] = makePortPair();
       const relay = yield* hub.relay!(hubPort);
       const secondary = yield* factory.connectOverPort(PREPARED, windowPort);

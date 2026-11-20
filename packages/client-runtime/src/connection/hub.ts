@@ -92,12 +92,12 @@ const makeHubDriver = Effect.gen(function* () {
       return { prepared, session } satisfies ConnectionDriver.EnvironmentConnectionLease;
     }),
     // Route choice belongs to the hub, which owns the socket.
-    preflight: Effect.fn("HubConnectionDriver.preflight")(function* () {
-      return yield* Effect.succeed("unchecked" as const);
-    }),
-    checkHost: Effect.fn("HubConnectionDriver.checkHost")(function* () {
-      return yield* Effect.succeed("answered" as const);
-    }),
+    preflight: Effect.fn("HubConnectionDriver.preflight")(() =>
+      Effect.succeed("unchecked" as const),
+    ),
+    checkHost: Effect.fn("HubConnectionDriver.checkHost")(() =>
+      Effect.succeed("answered" as const),
+    ),
   });
 });
 
@@ -108,6 +108,7 @@ type HubSessionState =
       readonly _tag: "Ready";
       readonly prepared: PreparedConnection;
       readonly session: RpcSession.RpcSession;
+      readonly supervisor: EnvironmentSupervisor.EnvironmentSupervisor["Service"];
     }
   | { readonly _tag: "Blocked"; readonly error: ConnectionAttemptError };
 
@@ -127,7 +128,12 @@ const hubSessionStates = Stream.unwrap(
       ),
       Stream.map(([session, prepared, state]): Option.Option<HubSessionState> => {
         if (Option.isSome(session) && Option.isSome(prepared)) {
-          return Option.some({ _tag: "Ready", prepared: prepared.value, session: session.value });
+          return Option.some({
+            _tag: "Ready",
+            prepared: prepared.value,
+            session: session.value,
+            supervisor,
+          });
         }
         if (state.phase === "blocked" && state.lastFailure !== null) {
           return Option.some({ _tag: "Blocked", error: state.lastFailure });
@@ -159,7 +165,7 @@ export const serveHubLease = Effect.fn("HubConnection.serveLease")(function* (
   }
   const state = head.value;
   if (state._tag === "Blocked") return yield* state.error;
-  const { prepared, session } = state;
+  const { prepared, session, supervisor } = state;
   if (session.relay === undefined) {
     return yield* new ConnectionTransientError({
       reason: "transport",
@@ -168,17 +174,6 @@ export const serveHubLease = Effect.fn("HubConnection.serveLease")(function* (
   }
   const relay = yield* session.relay(port);
   // A session that ends or is replaced takes its relays with it, so the window reconnects at once.
-  const supervisor = yield* registry
-    .run(environmentId, EnvironmentSupervisor.EnvironmentSupervisor)
-    .pipe(
-      Effect.mapError(
-        () =>
-          new ConnectionTransientError({
-            reason: "endpoint-unavailable",
-            detail: "The main window no longer has this environment.",
-          }),
-      ),
-    );
   yield* Effect.raceFirst(
     session.closed.pipe(Effect.ignore),
     SubscriptionRef.changes(supervisor.session).pipe(

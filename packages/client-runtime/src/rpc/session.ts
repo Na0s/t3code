@@ -311,15 +311,32 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Effect.ignore,
       Effect.forkScoped,
     );
-    return yield* finishSession({
+    const session = yield* finishSession({
       connection,
       protocolContext,
       connected,
       disconnected,
       inboundFrames: Effect.sync(() => inboundFrames),
       mapRpcError,
-      relayable: true,
     });
+    return {
+      ...session,
+      relay: (port: RpcPort) =>
+        serveRelay({
+          protocol: Context.get(protocolContext, RpcClient.Protocol),
+          port,
+          // Every window subscribes with the same options, so the hub's
+          // replaying config stream answers them all.
+          shared: [
+            {
+              tag: WS_METHODS.subscribeServerConfig,
+              matches: (payload) => canonicalJson(payload) === sharedConfigInputKey,
+              items: session.subscribeServerConfig().pipe(Stream.orDie),
+              encode: (events) => encodeServerConfigEvents(events).pipe(Effect.orDie),
+            },
+          ],
+        }),
+    } satisfies RpcSession;
   });
 
   const finishSession = Effect.fnUntraced(function* (input: {
@@ -331,7 +348,6 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     readonly mapRpcError: (
       error: Parameters<typeof mapSessionRpcError>[0],
     ) => ConnectionAttemptError;
-    readonly relayable: boolean;
   }) {
     const { connection, protocolContext, connected, disconnected, mapRpcError } = input;
     const protocolClient = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
@@ -516,25 +532,6 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Deferred.await(disconnected),
         Deferred.await(configSubscriptionClosed),
       ),
-      ...(input.relayable
-        ? {
-            relay: (port: RpcPort) =>
-              serveRelay({
-                protocol: Context.get(protocolContext, RpcClient.Protocol),
-                port,
-                // Every window subscribes with the same options, so the hub's
-                // replaying config stream answers them all.
-                shared: [
-                  {
-                    tag: WS_METHODS.subscribeServerConfig,
-                    matches: (payload) => canonicalJson(payload) === sharedConfigInputKey,
-                    items: subscribeServerConfig().pipe(Stream.orDie),
-                    encode: (events) => encodeServerConfigEvents(events).pipe(Effect.orDie),
-                  },
-                ],
-              }),
-          }
-        : {}),
     } satisfies RpcSession;
   });
 
@@ -570,7 +567,6 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       disconnected,
       inboundFrames: Effect.sync(() => inboundMessages),
       mapRpcError: (error) => mapSessionRpcError(error, "", "direct"),
-      relayable: false,
     });
   });
 
