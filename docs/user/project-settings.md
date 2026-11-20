@@ -96,16 +96,19 @@ removing it only stops grouping it there; its grouping rule in **Settings → Pr
 brings it back. To add a checkout stored elsewhere on the same machine, or to remove or restore a
 member, use **Umbrella checkouts**.
 
-In worktree mode, a thread works in its own copy of the umbrella, so its edits stay out of your
-checkouts. T3 Code makes one folder in your worktree location with a worktree of every member at
-the same path, all on the thread's branch, plus the folder's own worktree when it is a repository.
-Members added from outside the umbrella sit under `_external/` in that folder. When the umbrella
-folder is not a repository, its other files and folders, such as `copy/` or `marketing/`, are
-linked into the thread's folder rather than copied: edits to them change the originals and are
-not part of checkpoints, so **Revert files too** restores only the members. Each member starts from
-the base branch you pick when it has one, and otherwise from the branch it has checked out. The
-**Start from remote** and submodule settings apply to every member. Deleting the thread's worktree, and storage
-cleanup by age, settlement or deletion, removes every member's worktree and keeps the branches.
+Worktree mode needs the umbrella folder to be a Git repository itself. A thread then works in its
+own copy of the umbrella, so its edits stay out of your checkouts: the folder's own worktree, in
+your worktree location, with a worktree of every member at the same path, all on the thread's
+branch. Members added from outside the umbrella sit under `_external/` in that folder. Each
+member starts from the base branch you pick when it has one, and otherwise from the branch it has
+checked out. The **Start from remote** and submodule settings apply to every member. Deleting the
+thread's worktree, and storage cleanup by age, settlement or deletion, removes every member's
+worktree and keeps the branches.
+
+When the umbrella folder is not a repository, the composer offers only local mode, and a worktree
+launch is refused with the member checkouts and their projects named. To work in one member in a
+worktree, start the thread in that member's project. To give the whole umbrella worktrees, make
+the umbrella folder a Git repository with at least one commit.
 
 ## Worktree branch names
 

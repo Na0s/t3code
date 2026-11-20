@@ -164,16 +164,10 @@ export function resolveNewTaskDraftWorkspace(input: {
   readonly defaultMode: WorkspaceMode;
   readonly defaultModeSettled: boolean;
   readonly isGitRepo: boolean;
-  /** A plain folder holding umbrella members: worktree mode starts each member from its checkout. */
-  readonly plainUmbrella?: boolean;
   readonly branches: Parameters<typeof fillNewTaskWorkspaceBranch>[0]["branches"];
   readonly projectCwd: string | null;
 }): ComposerDraftWorkspaceSelection {
   const selection = input.canChooseWorkspace ? input.selection : undefined;
-  if (input.plainUmbrella === true) {
-    const mode = selection?.mode ?? input.defaultMode;
-    return { mode, branch: mode === "worktree" ? "HEAD" : null, worktreePath: null };
-  }
   return fillNewTaskWorkspaceBranch({
     selection: resolveNewTaskWorkspaceSelection({
       selection,

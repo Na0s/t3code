@@ -233,7 +233,6 @@ import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { draftModelSelectionApplies, threadHasStarted } from "../lib/chatThreadActions";
 import {
   deriveLogicalProjectKeyFromSettings,
-  isUmbrellaProject,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import {
@@ -1765,13 +1764,11 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
-  const isUmbrella = activeProject != null && isUmbrellaProject(activeProject);
-  // An umbrella checks out every member in worktree mode, even when its root is a plain folder.
-  const worktreeCapable = isGitRepo || isUmbrella;
   // A plain folder holding git checkouts still has member diffs, or the umbrella prompt, to show.
   const hasUmbrellaCheckouts =
-    isUmbrella ||
-    (activeThreadWorktreePath === null && (activeProject?.umbrellaSuggestions?.length ?? 0) > 0);
+    activeThreadWorktreePath === null &&
+    ((activeProject?.umbrellaMembers?.length ?? 0) > 0 ||
+      (activeProject?.umbrellaSuggestions?.length ?? 0) > 0);
   const diffAvailable = isServerThread && (isGitRepo || hasUmbrellaCheckouts);
   // Provider-native subagents cannot take messages; approvals and questions go to the top-level parent.
   const showProviderSubagentBar = isProviderSubagent;
@@ -1805,7 +1802,7 @@ export default function ChatView(props: ChatViewProps) {
       isDraftHeroState,
       persistInActiveThreads: settings.persistComposerContextStrip,
       hasActiveProject: activeProject !== null && !showProviderSubagentBar,
-      isGitRepo: worktreeCapable,
+      isGitRepo,
       showEnvironmentIndicator: showComposerEnvironmentIndicator,
     });
   const terminalShortcutLabelOptions = {
@@ -2277,7 +2274,7 @@ export default function ChatView(props: ChatViewProps) {
       : false;
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
-    isGitRepo: worktreeCapable,
+    isGitRepo,
   });
   const localCheckoutBranchMismatch = isServerThread
     ? resolveLocalCheckoutBranchMismatch({
@@ -2952,7 +2949,6 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     isLocalDraftThread,
     isGitRepo,
-    worktreeBaseFallback: !isGitRepo && isUmbrella ? "HEAD" : null,
     phase,
     runtimeMode,
     sendEnvMode,
@@ -3810,7 +3806,6 @@ export default function ChatView(props: ChatViewProps) {
                                   worktreePath={activeThread.worktreePath}
                                   isServerThread={isServerThread}
                                   showGitControls={isGitRepo}
-                                  showWorkspaceModes={worktreeCapable}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                   onEnvModeChange={onEnvModeChangeStable}
                                   startFromOrigin={startFromOrigin}

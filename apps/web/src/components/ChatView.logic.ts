@@ -1343,8 +1343,6 @@ export function planComposerTurn(input: {
   readonly sendEnvMode: DraftThreadEnvMode;
   readonly worktreePath: string | null;
   readonly activeThreadBranch: string | null;
-  /** Used when no branch is picked, as a plain umbrella folder has none to pick. */
-  readonly worktreeBaseFallback?: string | null;
   /** The server launches a No project worktree request at its root, so it needs no base. */
   readonly isScratchProject: boolean;
   readonly resumeCompactionTokens: number | null;
@@ -1374,13 +1372,8 @@ export function planComposerTurn(input: {
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
     missingWorktreeBaseBranch:
-      shouldCreateWorktree &&
-      !input.activeThreadBranch &&
-      !input.worktreeBaseFallback &&
-      !input.isScratchProject,
-    baseBranchForWorktree: shouldCreateWorktree
-      ? (input.activeThreadBranch ?? input.worktreeBaseFallback ?? null)
-      : null,
+      shouldCreateWorktree && !input.activeThreadBranch && !input.isScratchProject,
+    baseBranchForWorktree: shouldCreateWorktree ? input.activeThreadBranch : null,
     compactBeforeSend,
     turnDispatchMode:
       compactBeforeSend || (input.sendQueuesBehindSetup && dispatchMode !== "steer")
