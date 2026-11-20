@@ -387,22 +387,17 @@ function toDesktopSettingsDocument(
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
     document.linuxPasswordStore = settings.linuxPasswordStore;
   }
-  const [defaultProfile, ...otherProfiles] = settings.windowProfiles;
-  if (defaultProfile !== undefined && defaultProfile.bounds !== null) {
+  const [defaultProfile = DEFAULT_WINDOW_PROFILE, ...otherProfiles] = settings.windowProfiles;
+  if (defaultProfile.bounds !== null) {
     document.mainWindowBounds = defaultProfile.bounds;
   }
-  if (defaultProfile?.maximized === true) {
+  if (defaultProfile.maximized) {
     document.mainWindowMaximized = true;
   }
-  if (
-    otherProfiles.length > 0 ||
-    (defaultProfile !== undefined && defaultProfile.name !== DEFAULT_WINDOW_PROFILE_NAME)
-  ) {
+  if (otherProfiles.length > 0 || defaultProfile.name !== DEFAULT_WINDOW_PROFILE_NAME) {
     document.windowProfiles = [
       // The legacy keys carry the default profile's placement.
-      ...(defaultProfile === undefined
-        ? []
-        : [{ id: defaultProfile.id, name: defaultProfile.name }]),
+      { id: defaultProfile.id, name: defaultProfile.name },
       ...otherProfiles,
     ];
   }
