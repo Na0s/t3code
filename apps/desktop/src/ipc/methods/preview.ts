@@ -55,19 +55,10 @@ import * as DesktopIpc from "../DesktopIpc.ts";
  * A secondary window's tab ids are scoped to that window, so two windows can each show the
  * same thread's preview. The main window keeps its ids as they are.
  */
-function scopePreviewTabId(tabId: string, secondaryWindowId: number | null): string {
-  return secondaryWindowId === null ? tabId : `w${secondaryWindowId}:${tabId}`;
-}
-
 const senderTabId = (tabId: string) =>
   Effect.map(DesktopIpc.DesktopIpcSender, ({ window, isMain }) =>
-    scopePreviewTabId(tabId, isMain ? null : window.id),
+    isMain ? tabId : `w${window.id}:${tabId}`,
   );
-
-const withRendererTabId = <A>(value: A, rendererTabId: string): A =>
-  typeof value === "object" && value !== null && "tabId" in value
-    ? { ...value, tabId: rendererTabId }
-    : value;
 
 /** Per-tab events go only to the window that shows the tab, under the id it knows. */
 export const installPreviewEventForwarding = Effect.fn(
@@ -84,38 +75,22 @@ export const installPreviewEventForwarding = Effect.fn(
     if (Option.isNone(window) || window.value.isDestroyed()) return;
     send(window.value.webContents, rendererTabId);
   });
+  const forward =
+    (channel: string) =>
+    <E extends { readonly tabId: string }>(event: E) =>
+      sendToOwner(event.tabId, (contents, tabId) => contents.send(channel, { ...event, tabId }));
   yield* manager.subscribeStateChanges((tabId, state) =>
     sendToOwner(tabId, (contents, rendererTabId) =>
-      contents.send(
-        IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL,
-        rendererTabId,
-        withRendererTabId(state, rendererTabId),
-      ),
-    ),
-  );
-  yield* manager.subscribeRecordingInputs((event) =>
-    sendToOwner(event.tabId, (contents, rendererTabId) =>
-      contents.send(IpcChannels.PREVIEW_RECORDING_INPUT_CHANNEL, {
-        ...event,
+      contents.send(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, rendererTabId, {
+        ...state,
         tabId: rendererTabId,
       }),
     ),
   );
-  yield* manager.subscribePointerEvents((event) =>
-    sendToOwner(event.tabId, (contents, rendererTabId) =>
-      contents.send(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, { ...event, tabId: rendererTabId }),
-    ),
-  );
-  yield* manager.subscribeOpenLinks((event) =>
-    sendToOwner(event.tabId, (contents, rendererTabId) =>
-      contents.send(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL, { ...event, tabId: rendererTabId }),
-    ),
-  );
-  yield* manager.subscribeFindResults((event) =>
-    sendToOwner(event.tabId, (contents, rendererTabId) =>
-      contents.send(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, { ...event, tabId: rendererTabId }),
-    ),
-  );
+  yield* manager.subscribeRecordingInputs(forward(IpcChannels.PREVIEW_RECORDING_INPUT_CHANNEL));
+  yield* manager.subscribePointerEvents(forward(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL));
+  yield* manager.subscribeOpenLinks(forward(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL));
+  yield* manager.subscribeFindResults(forward(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL));
   const tunnel = yield* LoopbackTunnel.LoopbackTunnel;
   yield* tunnel.subscribeForwards((forwards) =>
     electronWindow.sendAll(IpcChannels.PORT_FORWARD_CHANGE_CHANNEL, forwards),
@@ -560,7 +535,7 @@ export const captureScreenshot = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.captureScreenshot")(function* ({ tabId }) {
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.captureScreenshot(yield* senderTabId(tabId)).pipe(
-      Effect.map((artifact) => withRendererTabId(artifact, tabId)),
+      Effect.map((artifact) => ({ ...artifact, tabId })),
       Effect.catch((error) => Effect.succeed(normalizeCaptureFailure(error, "screenshot"))),
     );
   }),
@@ -593,7 +568,7 @@ const saveRecording = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.saveRecording")(function* ({ tabId, mimeType, data }) {
     const manager = yield* PreviewManager.PreviewManager;
     const artifact = yield* manager.saveRecording(yield* senderTabId(tabId), mimeType, data);
-    return withRendererTabId(artifact, tabId);
+    return { ...artifact, tabId };
   }),
 });
 
