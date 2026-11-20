@@ -23,13 +23,20 @@ import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
+import { pullRequestKeyOf } from "../git/linkCreatedPullRequest.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { makeReadUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import {
+  threadPullRequestKeysEqual,
+  threadPullRequestsOf,
+} from "../sourceControl/threadPullRequests.ts";
 import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
@@ -122,7 +129,9 @@ export const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const readUmbrellaWorktree = yield* makeReadUmbrellaWorktree;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+  const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
   const pendingBackfill = new Map<ThreadId, number>();
   const noPullRequestRechecks = makeNoPullRequestRechecks();
 
@@ -423,6 +432,105 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  // A checkpoint lists the umbrella members a turn edited; each one's branch pull request joins
+  // the thread. A pull request already on the thread, linked or unlinked by the user, is left as
+  // it is, and a member whose branch already has one is not looked up again.
+  const linkMemberPullRequests = Effect.fn("ThreadPullRequestServiceV2.linkMemberPullRequests")(
+    function* (threadId: ThreadId, files: ReadonlyArray<{ readonly path: string }>) {
+      if (Option.isNone(umbrellaMembership) || files.length === 0) return;
+      const thread = yield* orchestrator.getThreadShell(threadId);
+      if (thread === null) return;
+      const project = yield* projectStore.getShell(thread.projectId);
+      if (Option.isNone(project)) return;
+      const members = (yield* umbrellaMembership.value.stateOf(project.value))?.members ?? [];
+      // A worktree-mode thread works in member worktrees inside its own folder, on its branch.
+      const layout =
+        thread.worktreePath === null ? null : yield* readUmbrellaWorktree(thread.worktreePath);
+      const checkouts =
+        layout === null
+          ? members.map((member) => ({ ...member, cwd: member.path, prefix: member.relativePath }))
+          : layout.members.flatMap((checkout) => {
+              const member = members.find(
+                (candidate) => path.resolve(candidate.path) === checkout.source,
+              );
+              return member === undefined
+                ? []
+                : [
+                    {
+                      ...member,
+                      cwd: path.join(layout.path, checkout.path),
+                      prefix: checkout.path,
+                    },
+                  ];
+            });
+      const touched = checkouts.filter((member) =>
+        files.some((file) => file.path.startsWith(`${member.prefix}/`)),
+      );
+      const links = threadPullRequestsOf(thread);
+      yield* Effect.forEach(
+        touched,
+        (member) =>
+          Effect.gen(function* () {
+            const status = yield* git.localStatus({ cwd: member.cwd });
+            if (status.refName === null || status.isDefaultRef) return;
+            const repository = sourceControlDefinitions
+              .repositorySelector(member.repositoryIdentity)
+              ?.toLowerCase();
+            if (
+              repository !== undefined &&
+              links.some(
+                (link) =>
+                  link.repository.toLowerCase() === repository &&
+                  (link.snapshot === null || link.snapshot.headBranch === status.refName),
+              )
+            ) {
+              return;
+            }
+            const detected = yield* git.branchPullRequest(
+              { cwd: member.cwd, branch: status.refName },
+              { refresh: true, confirmTerminal: false },
+            );
+            if (detected === null || pullRequestPredatesThread(detected, thread.createdAt)) return;
+            const key = pullRequestKeyOf(detected, member.repositoryIdentity);
+            if (key === null || links.some((link) => threadPullRequestKeysEqual(link, key))) return;
+            const uuid = yield* random.uuidV4();
+            yield* orchestrator.dispatch({
+              type: "thread.pull-request.link",
+              commandId: CommandId.make(`server:umbrella-pull-request:${thread.id}:${uuid}`),
+              threadId: thread.id,
+              ...key,
+              source: "agent",
+            });
+          }).pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) =>
+                Effect.logWarning("umbrella member pull request discovery failed", {
+                  threadId,
+                  member: member.relativePath,
+                  cause: Cause.pretty(cause),
+                }),
+            ),
+          ),
+        { concurrency: 4, discard: true },
+      );
+    },
+  );
+
+  const memberWorker = yield* makeDrainableWorker(
+    (request: { readonly threadId: ThreadId; readonly files: ReadonlyArray<{ path: string }> }) =>
+      linkMemberPullRequests(request.threadId, request.files).pipe(
+        Effect.provideService(GitVcsDriver.BackgroundGitWork, true),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("umbrella member pull request refresh failed", {
+              cause: Cause.pretty(cause),
+            }),
+        ),
+      ),
+  );
+
   const enqueueThread = (threadId: ThreadId, refresh: boolean) =>
     Effect.suspend(() => {
       const queued = queuedThreadRequests.get(threadId);
@@ -452,7 +560,15 @@ export const make = Effect.gen(function* () {
   };
 
   const processEvent = (event: OrchestrationV2DomainEvent) =>
-    Effect.andThen(notifyLinkedThreads(event), refreshForEvent(event));
+    Effect.andThen(
+      notifyLinkedThreads(event),
+      Effect.andThen(
+        refreshForEvent(event),
+        event.type === "checkpoint.captured" && Option.isSome(umbrellaMembership)
+          ? memberWorker.enqueue({ threadId: event.threadId, files: event.payload.files })
+          : Effect.void,
+      ),
+    );
 
   const refreshForEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
@@ -503,5 +619,8 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  return { start, drain: worker.drain } satisfies ThreadPullRequestServiceV2["Service"];
+  return {
+    start,
+    drain: Effect.andThen(worker.drain, memberWorker.drain),
+  } satisfies ThreadPullRequestServiceV2["Service"];
 });

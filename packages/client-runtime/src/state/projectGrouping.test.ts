@@ -184,6 +184,62 @@ describe("buildProjectGroups", () => {
     },
   );
 
+  it("folds member projects into their umbrella by folder or by repository", () => {
+    const remote = EnvironmentId.make("laptop");
+    const apiIdentity = { ...repositoryIdentity, canonicalKey: "github.com/acme/api" };
+    const siteIdentity = { ...repositoryIdentity, canonicalKey: "github.com/acme/site" };
+    const umbrella = makeProject("acme", "/clients/acme", {
+      repositoryIdentity: null,
+      umbrellaMembers: [
+        {
+          path: "/clients/acme/api",
+          relativePath: "api",
+          repositoryIdentity: apiIdentity,
+          source: "nested",
+        },
+        {
+          path: "/work/acme-site",
+          relativePath: "../../work/acme-site",
+          repositoryIdentity: siteIdentity,
+          source: "adopted",
+        },
+      ],
+    });
+    const sameFolder = makeProject("api-here", "/clients/acme/api", { repositoryIdentity: null });
+    const sameRepository = makeProject("api-laptop", "/home/me/api", {
+      environmentId: remote,
+      repositoryIdentity: apiIdentity,
+    });
+    const separate = makeProject("site-laptop", "/home/me/site", {
+      environmentId: remote,
+      repositoryIdentity: siteIdentity,
+    });
+    const unrelated = makeProject("other", "/clients/other", { repositoryIdentity: null });
+    const groupingSettings = settings("repository", {
+      [derivePhysicalProjectKey(separate)]: "separate",
+    });
+
+    const groups = buildProjectGroups({
+      projects: [sameFolder, umbrella, sameRepository, separate, unrelated],
+      settings: groupingSettings,
+    });
+
+    expect(groups.map((group) => group.label)).toEqual(["acme", "site-laptop", "other"]);
+    const [umbrellaGroup] = groups;
+    expect(umbrellaGroup!.representative.id).toBe(umbrella.id);
+    expect(umbrellaGroup!.memberProjectRefs.map((ref) => ref.projectId)).toEqual([
+      sameFolder.id,
+      umbrella.id,
+      sameRepository.id,
+    ]);
+    expect(
+      [...umbrellaGroup!.umbrellaMembers].map(([key, member]) => [key, member.relativePath]),
+    ).toEqual([
+      [`${environmentId}:${sameFolder.id}`, "api"],
+      [`${remote}:${sameRepository.id}`, "api"],
+    ]);
+  });
+
   it("retains a repository filter that still belongs to an ordinary project", () => {
     const scratch = makeProject("scratch", "/scratch", { isScratch: true });
     const ordinary = makeProject("ordinary", "/ordinary");

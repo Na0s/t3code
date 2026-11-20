@@ -3,6 +3,7 @@ import {
   createVcsEnvironmentAtoms,
   createVcsStatusRevalidationAtomFamily,
 } from "@t3tools/client-runtime/state/vcs";
+import type { EnvironmentId, VcsStatusResult } from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -22,6 +23,29 @@ export const chatGitStatusAtom = Atom.family((status: ReturnType<typeof vcsEnvir
   }).pipe(Atom.withEquality(Equal.equals)),
 );
 export const NO_CHAT_GIT_STATUS_ATOM: ReturnType<typeof chatGitStatusAtom> = Atom.make(null);
+
+/** Live status of each umbrella member checkout, keyed by `umbrellaMemberStatusesKey`. */
+export const umbrellaMemberStatusesAtom = Atom.family((key: string) => {
+  const { environmentId, paths } = JSON.parse(key) as {
+    environmentId: EnvironmentId;
+    paths: string[];
+  };
+  return Atom.make((get): ReadonlyArray<VcsStatusResult | null> =>
+    paths.map((cwd) =>
+      AsyncResult.getOrElse(
+        get(vcsEnvironment.status({ environmentId, input: { cwd } })),
+        () => null,
+      ),
+    ),
+  );
+});
+export const umbrellaMemberStatusesKey = (
+  environmentId: EnvironmentId,
+  paths: ReadonlyArray<string>,
+) => JSON.stringify({ environmentId, paths });
+export const NO_UMBRELLA_MEMBER_STATUSES_ATOM = Atom.make(
+  (): ReadonlyArray<VcsStatusResult | null> => [],
+);
 
 /**
  * Refreshes a checkout's status when the user comes back to the window, where

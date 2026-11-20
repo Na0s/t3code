@@ -460,6 +460,8 @@ const cleanupFixture = (
           command(cwd, ["branch", "--show-current"]).pipe(
             Effect.map((result) => result.stdout.trim() || null),
           ),
+        removeWorktree: git.removeWorktree,
+        pruneWorktrees: git.pruneWorktrees,
       } as unknown as GitWorkflowService.GitWorkflowService["Service"]),
       Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, {
         isLive: () =>
@@ -3009,6 +3011,70 @@ describe("storage cleanup reports and local file policies", () => {
         expect(yield* fs.exists(worktree)).toBe(true);
       }),
     ),
+  );
+  it.effect(
+    "removes every member worktree of an umbrella thread's folder and keeps its layout",
+    () =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(NOW_MS);
+          const fixture = yield* cleanupFixture();
+          const { fs, command, config } = fixture;
+          // An umbrella repository holding one member repository.
+          const umbrella = yield* fs.realPath(
+            yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-umbrella-" }),
+          );
+          const member = `${umbrella}/api`;
+          yield* fs.makeDirectory(member);
+          yield* fs.writeFileString(`${umbrella}/.gitignore`, "api/\n");
+          yield* fs.writeFileString(`${member}/tracked.txt`, "original\n");
+          for (const repository of [umbrella, member]) {
+            yield* command(repository, ["init", "-b", "main"]);
+            yield* command(repository, ["config", "user.email", "cleanup@example.test"]);
+            yield* command(repository, ["config", "user.name", "Cleanup test"]);
+            yield* command(repository, ["add", "."]);
+            yield* command(repository, ["commit", "-m", "initial"]);
+          }
+          const folder = `${config.worktreesDir}/umbrella/feature`;
+          yield* command(umbrella, ["worktree", "add", "-b", "feature", folder]);
+          yield* command(member, ["worktree", "add", "-b", "feature", `${folder}/api`]);
+          const manifest = `${folder}.t3-umbrella.json`;
+          yield* fs.writeFileString(
+            manifest,
+            JSON.stringify({
+              version: 1,
+              umbrellaRoot: umbrella,
+              members: [{ source: member, path: "api" }],
+            }),
+          );
+          fixture.setThreads([shell({ branch: "feature", worktreePath: folder })]);
+
+          // An uncommitted edit in a member keeps the whole folder.
+          yield* fs.writeFileString(`${folder}/api/tracked.txt`, "edited\n");
+          let report = yield* fixture.service.runNow;
+          expect(report.entries.find((entry) => entry.path === folder)).toMatchObject({
+            outcome: "kept",
+            reason: "Has uncommitted changes (1 file) in api",
+          });
+          yield* command(`${folder}/api`, ["checkout", "--", "tracked.txt"]);
+
+          report = yield* fixture.service.runNow;
+          expect(report.entries.find((entry) => entry.path === folder)).toMatchObject({
+            outcome: "removed",
+          });
+          expect(yield* fs.exists(folder)).toBe(false);
+          for (const repository of [umbrella, member]) {
+            expect(
+              (yield* command(repository, ["worktree", "list", "--porcelain"])).stdout,
+            ).not.toContain(folder);
+            expect(
+              (yield* command(repository, ["branch", "--list", "feature"])).stdout.trim(),
+            ).toBe("feature");
+          }
+          // The next turn rebuilds the same layout from the manifest.
+          expect(yield* fs.exists(manifest)).toBe(true);
+        }),
+      ),
   );
   it.effect("removes a worktree owned by a repository other than the project root", () =>
     runCleanupTest(

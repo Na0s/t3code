@@ -21,6 +21,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
 import {
   withCheckpointRestoreReservation,
   withWorkspaceLease,
@@ -139,6 +140,7 @@ export const layer: Layer.Layer<
     const path = yield* Path.Path;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+    const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -238,7 +240,15 @@ export const layer: Layer.Layer<
 
       const { worktreePath, branch } = context.thread;
       // Recreated only where the server would have made it, as turn start does.
-      if (worktreePath != null && branch != null) {
+      if (
+        worktreePath != null &&
+        branch != null &&
+        (yield* umbrellaWorktrees.read(worktreePath)) !== null &&
+        (yield* isManagedWorktreePath(worktreePath))
+      ) {
+        // Each missing repository comes back on its own; a folder with files in it is left alone.
+        yield* umbrellaWorktrees.restoreMissing({ worktreePath, branch });
+      } else if (worktreePath != null && branch != null) {
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
         const leftover =
           restoreFiles &&

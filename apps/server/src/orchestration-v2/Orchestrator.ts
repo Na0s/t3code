@@ -4917,9 +4917,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               command.source !== "stack" &&
               command.source !== "stack-dismissed";
             if (existing && !undismisses) return thread;
-            const link = existing
+            // A relinked pull request starts fresh: notices owed to the unlinked one's watch lapse.
+            const relinked = existing
+              ? (({ endedWatch: _endedWatch, ...kept }) => kept)(existing)
+              : undefined;
+            const link = relinked
               ? {
-                  ...existing,
+                  ...relinked,
                   source: command.source,
                   url: canonicalizeGitCafePullRequestUrl(command.url),
                   ...(command.repositoryWebUrl !== undefined && {
@@ -4962,7 +4966,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ];
           } else if (command.type === "thread.pull-request.unlink") {
             if (!existing) return thread;
-            const belongsToStack =
+            // Agent links can come back on their own (umbrella member discovery), so an unlinked
+            // one is kept dismissed rather than dropped.
+            const keepDismissed =
+              existing.source === "agent" ||
               existing.source === "stack" ||
               existing.stack !== null ||
               links.some(
@@ -4971,7 +4978,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   link.repository.toLowerCase() === key.repository &&
                   link.stack?.layers.some((layer) => layer.number === key.number),
               );
-            pullRequests = belongsToStack
+            pullRequests = keepDismissed
               ? links.map((link) =>
                   link === existing
                     ? {

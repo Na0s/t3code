@@ -471,6 +471,39 @@ describe("buildThreadActionItems", () => {
     expect(labels("lake")).toEqual(["Threads", "Projects"]);
   });
 
+  it("lists an umbrella above its matching members, and keeps it only while one matches", () => {
+    const row = (value: string, title: string, parentValue?: string) => ({
+      kind: "action" as const,
+      value,
+      searchTerms: [title],
+      title,
+      icon: null,
+      run: async () => undefined,
+      ...(parentValue ? { parentValue } : {}),
+    });
+    const projectSearchItems = [
+      row("project:fleet", "fleet"),
+      row("project:northwind", "northwind"),
+      row("member:api", "api", "project:northwind"),
+      row("member:dev-setup", "dev-setup", "project:northwind"),
+      row("member:storefront", "storefront", "project:northwind"),
+    ];
+    const rows = (query: string) =>
+      filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems,
+        threadSearchItems: [],
+      }).flatMap((group) => group.items.map((item) => item.title));
+    expect(rows("s")).toEqual(["northwind", "dev-setup", "storefront"]);
+    expect(rows("st")).toEqual(["northwind", "storefront"]);
+    expect(rows("stq")).toEqual([]);
+    expect(rows("f")).toEqual(["fleet"]);
+    // The umbrella's own name keeps it with no member matching.
+    expect(rows("north")).toEqual(["northwind"]);
+  });
+
   it("keeps a command first over a thread in daily use that matches as well", () => {
     const now = Date.parse("2026-10-23T00:00:00.000Z");
     const threadSearchItems = buildThreadActionItems({

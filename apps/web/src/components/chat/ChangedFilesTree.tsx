@@ -30,6 +30,13 @@ interface ChangedFileRow {
 
 type ChangedFileContextMenuHandler = (filePath: string, event: MouseEvent) => void;
 
+/** An umbrella project the files are in, named on the row of its folder ("" for its own files). */
+interface ChangedFilesProject {
+  readonly folder: string;
+  readonly label: string;
+  readonly icon: ReactNode;
+}
+
 export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   runId: RunId;
   /** May be a prefix of the changed files; `totals` covers all of them. */
@@ -40,6 +47,8 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   onToggleAllDirectories: () => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
+  /** The umbrella's projects the files are in, counted beside the totals. */
+  projects?: ReadonlyArray<ChangedFilesProject> | undefined;
 }) {
   const {
     runId,
@@ -76,6 +85,11 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
               className="text-xs leading-4"
             />
           )}
+          {props.projects && props.projects.length > 0 ? (
+            <span data-changed-files-projects="" className="font-normal text-muted-foreground">
+              in {props.projects.length === 1 ? "1 project" : `${props.projects.length} projects`}
+            </span>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {hasDirectories && (
@@ -135,6 +149,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
         resolvedTheme={resolvedTheme}
         onOpenTurnDiff={onOpenTurnDiff}
         onFileContextMenu={onFileContextMenu}
+        projects={props.projects}
       />
       {hiddenFileCount > 0 && (
         <div className="px-3 pb-2">
@@ -160,6 +175,7 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onFileContextMenu?: ChangedFileContextMenuHandler | undefined;
+  projects?: ReadonlyArray<ChangedFilesProject> | undefined;
 }) {
   const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, runId, onFileContextMenu } =
     props;
@@ -200,6 +216,12 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
     const leftPadding = 8 + depth * 14;
     if (node.kind === "directory") {
       const isExpanded = expandedDirectories[node.path] ?? allDirectoriesExpanded;
+      // A compacted row such as "api/src" still names the project folder it passes through.
+      const rowStart = node.path.slice(0, node.path.length - node.name.length);
+      const project = props.projects?.find(
+        ({ folder }) =>
+          folder !== "" && folder.startsWith(rowStart) && `${node.path}/`.startsWith(`${folder}/`),
+      );
       return (
         <button
           key={`dir:${node.path}`}
@@ -225,6 +247,12 @@ const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           <span className="truncate font-mono text-2xs text-muted-foreground/90 group-hover:text-foreground/90">
             {node.name}
           </span>
+          {project ? (
+            <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              {project.icon}
+              <span className="truncate">{project.label}</span>
+            </span>
+          ) : null}
           {hasNonZeroStat(node.stat) && (
             <span className="ml-auto shrink-0 font-mono text-3xs tabular-nums">
               <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />

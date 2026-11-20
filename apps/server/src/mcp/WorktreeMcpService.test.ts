@@ -9,6 +9,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type UmbrellaMember,
   WorktreeMcpHandoffInput,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -32,6 +33,7 @@ import {
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -116,6 +118,8 @@ interface HarnessOptions {
   readonly deleteLocalBranchFails?: boolean;
   readonly createWorktreeGate?: Effect.Effect<void>;
   readonly existsFails?: boolean;
+  readonly umbrellaMembers?: ReadonlyArray<UmbrellaMember>;
+  readonly worktreesDir?: string;
 }
 
 const makeHarness = (options: HarnessOptions = {}) => {
@@ -212,7 +216,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
             Effect.andThen(
               Effect.succeed({
                 worktree: {
-                  path: input.path ?? `/worktrees/project/${input.newRefName}`,
+                  path:
+                    input.path ??
+                    `${options.worktreesDir ?? "/worktrees"}/project/${input.newRefName}`,
                   refName: input.newRefName ?? "detached",
                 },
               }),
@@ -315,6 +321,16 @@ const makeHarness = (options: HarnessOptions = {}) => {
         } satisfies Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>),
         NodeServices.layer,
         NodeCrypto.layer,
+        options.umbrellaMembers === undefined
+          ? Layer.empty
+          : Layer.mock(UmbrellaMembership.UmbrellaMembership)({
+              stateOf: () =>
+                Effect.succeed({
+                  members: options.umbrellaMembers!,
+                  suggestions: [],
+                  enclosingRepository: null,
+                }),
+            }),
         options.existsFails
           ? FileSystem.layerNoop({
               exists: (path) =>
@@ -398,6 +414,44 @@ describe("t3_worktree_handoff", () => {
       );
     });
   });
+
+  it.effect("hands an umbrella thread off to one folder holding every member", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const worktreesDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "handoff-umbrella-",
+      });
+      yield* fileSystem.makeDirectory(`${worktreesDir}/project/feature`, { recursive: true });
+      const harness = makeHarness({
+        worktreesDir,
+        umbrellaMembers: [
+          { path: "/project/api", relativePath: "api", repositoryIdentity: null, source: "nested" },
+        ],
+        git: {
+          repositoryRoot: (cwd) => Effect.succeed(cwd),
+          currentBranch: () => Effect.succeed("main"),
+        },
+      });
+      const result = yield* runHandoff(harness, { branch: "feature/umbrella" });
+      expect(result.baseRef).toBe("HEAD");
+      expect(harness.localStatus).not.toHaveBeenCalled();
+      expect(harness.createWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/project/api",
+          newRefName: "feature/umbrella",
+          path: `${result.worktreePath}/api`,
+        }),
+        expect.anything(),
+      );
+      expect(harness.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.metadata.update",
+          worktreePath: result.worktreePath,
+          branch: "feature/umbrella",
+        }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("uses the fetched commit and remote PR base for an explicit local alias", () =>
     Effect.gen(function* () {

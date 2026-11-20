@@ -64,6 +64,52 @@ back. On mobile, both are in **Settings → Projects → Organize**.
 
 A project on several machines must have every machine connected to pin or archive it.
 
+## Umbrella projects
+
+Keep one project for a folder that holds several repositories, such as a client folder with an
+API, a website, and copy or design files beside them. Add the folder as a project. T3 Code looks
+for repositories up to three folders below it, skipping hidden folders, dependency and vendored
+folders such as `node_modules`, `vendor`, and `venv`, linked worktrees, and submodules.
+
+Nothing changes until you confirm. When repositories are found, the diff panel and the top of
+your project's page in **Settings → Projects** offer **Use as umbrella**, and **Umbrella
+checkouts** on that page lists them with a **Use as umbrella** switch. Each shows every repository
+that will join before you turn it on.
+Adding a checkout by path in that section also turns the umbrella on. Turn the switch off to stop.
+A folder inside another repository cannot be an umbrella; use that repository's root instead.
+
+Threads in an umbrella start in the folder and can work in any member. The diff panel has a tab
+for each member with changes, turn diffs and checkpoints include edits inside members, and a
+pull request open on the branch of a member a turn edited is linked to the thread; unlinking it
+keeps it off. Reverting a turn restores only the members whose files differ from that turn. When
+the folder is a repository itself, its status, diffs, commits, and checkpoints leave the members
+out.
+
+Projects you already have for a member fold into the umbrella: the same folder on the umbrella's
+machine, or the same repository on any connected machine. The sidebar gathers the umbrella's
+active threads and its members' in one place, indented, with the umbrella's icon beside the first
+and a line down to the last, and a member's thread names its member first. A thread showing a
+status such as Working, Input or Done keeps its own place until it no longer shows one. A command
+palette search lists the umbrella with its matching members indented under it. Use **Add to umbrella** and **Remove _member_ from umbrella** from a project
+folder's menu in the sidebar or from the command palette. For a clone on another machine,
+removing it only stops grouping it there; its grouping rule in **Settings → Projects**
+brings it back. To add a checkout stored elsewhere on the same machine, or to remove or restore a
+member, use **Umbrella checkouts**.
+
+Worktree mode needs the umbrella folder to be a Git repository itself. A thread then works in its
+own copy of the umbrella, so its edits stay out of your checkouts: the folder's own worktree, in
+your worktree location, with a worktree of every member at the same path, all on the thread's
+branch. Members added from outside the umbrella sit under `_external/` in that folder. Each
+member starts from the base branch you pick when it has one, and otherwise from the branch it has
+checked out. The **Start from remote** and submodule settings apply to every member. Deleting the
+thread's worktree, and storage cleanup by age, settlement or deletion, removes every member's
+worktree and keeps the branches.
+
+When the umbrella folder is not a repository, the composer offers only local mode, and a worktree
+launch is refused with the member checkouts and their projects named. To work in one member in a
+worktree, start the thread in that member's project. To give the whole umbrella worktrees, make
+the umbrella folder a Git repository with at least one commit.
+
 ## Worktree branch names
 
 In **Settings → Worktrees → Worktree branch naming**, choose a static prefix,

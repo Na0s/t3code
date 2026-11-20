@@ -143,6 +143,8 @@ const layerTest = Layer.mergeAll(
         }),
       request: () => Effect.void,
       readRepositoryIdentity: () => Effect.succeed(null),
+      peekNestedRepositories: () => Effect.succeed([]),
+      readNestedRepositories: () => Effect.succeed([]),
       getAvailable: () =>
         Effect.succeed({
           repositoryIdentity: null,

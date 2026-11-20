@@ -77,7 +77,7 @@ import { useNowSecond } from "../../hooks/useNowSecond";
 import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampFormat";
+import { formatRelativeTimeLabel } from "../../timestampFormat";
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
@@ -86,6 +86,7 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
+  isSidebarThreadWoke,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
   resolveSidebarRowStatus,
@@ -552,6 +553,11 @@ type SidebarThreadRowProps = {
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
+  // Indents the row among its umbrella's threads, with the umbrella's icon in the gutter of the
+  // first and a line down to the last.
+  umbrella?: ProjectFaviconProject | undefined;
+  umbrellaFirst?: boolean | undefined;
+  umbrellaLast?: boolean | undefined;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -579,6 +585,8 @@ type SidebarThreadRowProps = {
   scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
+  // The umbrella member a folded project's thread works in.
+  umbrellaMemberLabel: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -739,12 +747,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
-  const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
-  const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
-  const isWoke =
-    wokeAtDate !== null &&
-    (lastVisitedDate === null || lastVisitedDate < wokeAtDate) &&
-    thread.settledOverride !== "settled";
+  const isWoke = isSidebarThreadWoke({ ...thread, lastVisitedAt }, props.wokeAt);
   const shouldRecede = shouldRecedeSidebarThread({
     status,
     isUnread,
@@ -1079,6 +1082,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   );
 
+  const umbrellaMemberTag = props.umbrellaMemberLabel ? (
+    <span className="max-w-[40%] shrink-0 truncate text-secondary-label/70 text-xs">
+      {props.umbrellaMemberLabel}
+    </span>
+  ) : null;
+
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
     : null;
@@ -1282,6 +1291,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               )}
               {draftIndicator}
               {title}
+              {umbrellaMemberTag}
               {multiline ? titleLineIcons : null}
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
@@ -1431,9 +1441,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
+        props.umbrella && "relative ps-5",
         sortable?.isDragging && "relative z-20",
       )}
     >
+      {props.umbrella && props.umbrellaFirst ? (
+        <ProjectFavicon
+          project={props.umbrella}
+          className="pointer-events-none absolute start-[3px] top-[11px] size-3.5"
+        />
+      ) : null}
+      {props.umbrella ? (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute start-2.5 w-px bg-sidebar-border",
+            props.umbrellaFirst ? "top-[29px]" : "top-0",
+            props.umbrellaLast ? "bottom-2" : "-bottom-px",
+          )}
+        />
+      ) : null}
       <Tooltip disabled={isRenaming || snoozeMenuOpen || sortable?.isDragging}>
         <TooltipTrigger
           render={
@@ -1473,7 +1500,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 <span
                   className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
                 >
-                  {props.projectDisplayName}
+                  {props.umbrellaMemberLabel ? (
+                    <>
+                      {props.umbrellaMemberLabel}
+                      <span className="text-secondary-label/70"> · {props.projectDisplayName}</span>
+                    </>
+                  ) : (
+                    props.projectDisplayName
+                  )}
                 </span>
               ) : (
                 <span className="flex-1" />

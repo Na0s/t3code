@@ -79,6 +79,8 @@ import {
   PlugIcon,
   SquarePenIcon,
   TextSearchIcon,
+  UmbrellaIcon,
+  UmbrellaOffIcon,
   UserPlusIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
@@ -276,6 +278,9 @@ import { ComposerHandleContext, useComposerHandleContext } from "../composerHand
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
+import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
+import { umbrellaMembershipActions } from "../umbrellaMembership.logic";
+import { useUmbrellaMembershipEdits } from "../hooks/useUmbrellaMembershipEdits";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
@@ -576,6 +581,7 @@ function OpenCommandPaletteDialog(props: {
     ]),
   );
   const { canPinProjectGroup, toggleProjectGroupPin } = useProjectPin();
+  const umbrellaEdits = useUmbrellaMembershipEdits();
   // A row's target record can change when another machine's copy loads, so the kept
   // order follows the project group instead.
   const rowOrderKey = (prefix: string) => (item: CommandPaletteActionItem) =>
@@ -803,8 +809,15 @@ function OpenCommandPaletteDialog(props: {
     [browseNavigation],
   );
 
-  const openProjectFromSearch = async (project: (typeof projects)[number]) => {
-    const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+  // A member row opens its own project, not the umbrella group it folds into.
+  const openProjectFromSearch = async (
+    project: (typeof projects)[number],
+    options?: { readonly wholeGroup: boolean },
+  ) => {
+    const group =
+      options?.wholeGroup === false
+        ? undefined
+        : projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
     const groupedProjectKeys = group
       ? new Set(
           group.memberProjectRefs.map(
@@ -849,6 +862,7 @@ function OpenCommandPaletteDialog(props: {
       projectGroupByTargetKey,
       locationByEnvironmentId: projectEnvironmentLocationById,
       runProject: openProjectFromSearch,
+      openMemberProject: (project) => openProjectFromSearch(project, { wholeGroup: false }),
       pin: projectPin,
     }),
     rowOrderKey("project"),
@@ -1744,6 +1758,37 @@ function OpenCommandPaletteDialog(props: {
         <PinIcon className={ITEM_ICON_CLASS} />
       ),
       run: async () => toggleProjectGroupPin(currentProjectGroup),
+    });
+  }
+  const contextualProject = contextualProjectRef
+    ? projectByKey.get(`${contextualProjectRef.environmentId}:${contextualProjectRef.projectId}`)
+    : undefined;
+  const umbrellaActions = umbrellaMembershipActions(
+    contextualProject ? [contextualProject] : [],
+    projects,
+    clientSettings,
+  );
+  for (const { umbrella, path } of umbrellaActions.adoptions) {
+    actionItems.push({
+      kind: "action",
+      value: `action:umbrella-adopt:${umbrella.environmentId}:${umbrella.id}`,
+      searchTerms: ["umbrella", "add", "join", "member", "project", umbrella.title],
+      title: "Add project to umbrella",
+      description: umbrella.title,
+      icon: <UmbrellaIcon className={ITEM_ICON_CLASS} />,
+      run: async () => umbrellaEdits.adopt(umbrella, path),
+    });
+  }
+  for (const removal of umbrellaActions.removals) {
+    const { umbrella, member } = removal;
+    actionItems.push({
+      kind: "action",
+      value: `action:umbrella-remove:${umbrella.environmentId}:${umbrella.id}`,
+      searchTerms: ["umbrella", "remove", "leave", "member", "project", umbrella.title],
+      title: `Remove ${umbrellaMemberLabel(member)} from umbrella`,
+      description: umbrella.title,
+      icon: <UmbrellaOffIcon className={ITEM_ICON_CLASS} />,
+      run: async () => umbrellaEdits.leave(removal),
     });
   }
   const contextualProjectGroup = currentProjectGroup ?? projectGroups[0] ?? null;

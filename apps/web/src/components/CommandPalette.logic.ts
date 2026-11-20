@@ -206,6 +206,8 @@ export interface CommandPaletteItem {
   readonly titleTrailingContent?: ReactNode;
   readonly shortcutCommand?: KeybindingCommand;
   readonly secondary?: boolean;
+  /** Lists the row indented under the row with this value, which a search keeps while this one matches. */
+  readonly parentValue?: string;
 }
 
 export interface CommandPaletteActionItem extends CommandPaletteItem {
@@ -554,6 +556,40 @@ function scorePaletteItem(
 }
 
 /**
+ * Lists each matching child under its parent, at the place of whichever ranks first. A parent
+ * that does not match stays while any of its children does, so it carries no match.
+ */
+function nestUnderParents<TItem extends Pick<CommandPaletteItem, "value" | "parentValue">, TMatch>(
+  ranked: ReadonlyArray<{ readonly item: TItem; readonly match: TMatch }>,
+  items: ReadonlyArray<TItem>,
+): Array<{ readonly item: TItem; readonly match: TMatch | undefined }> {
+  const itemByValue = new Map(items.map((item) => [item.value, item] as const));
+  const parentOf = (item: TItem) =>
+    item.parentValue !== undefined && itemByValue.has(item.parentValue)
+      ? item.parentValue
+      : undefined;
+  const rankedByValue = new Map(ranked.map((entry) => [entry.item.value, entry] as const));
+  const childrenOf = new Map<string, Array<(typeof ranked)[number]>>();
+  for (const entry of ranked) {
+    const parent = parentOf(entry.item);
+    if (parent === undefined) continue;
+    const children = childrenOf.get(parent);
+    if (children) children.push(entry);
+    else childrenOf.set(parent, [entry]);
+  }
+  const nested: Array<{ readonly item: TItem; readonly match: TMatch | undefined }> = [];
+  const placed = new Set<string>();
+  for (const entry of ranked) {
+    const head = parentOf(entry.item) ?? entry.item.value;
+    if (placed.has(head)) continue;
+    placed.add(head);
+    nested.push(rankedByValue.get(head) ?? { item: itemByValue.get(head)!, match: undefined });
+    nested.push(...(childrenOf.get(head) ?? []));
+  }
+  return nested;
+}
+
+/**
  * Equal match classes put commands before threads, so "new" runs "New thread".
  * Server message matches stay in a final group so late results cannot move earlier rows.
  */
@@ -650,16 +686,18 @@ export function filterCommandPaletteGroups(input: {
         ? PALETTE_THREAD_LIMIT
         : group.value === "nested-search" || (searchesEverything && threadsMatch)
           ? PALETTE_SECONDARY_LIMIT
-          : ranked.length;
+          : Number.POSITIVE_INFINITY;
     // Hints are built only for the rows shown.
-    const items = ranked
-      .toSorted(
+    const items = nestUnderParents(
+      ranked.toSorted(
         (left, right) =>
           Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false),
-      )
+      ),
+      group.items,
+    )
       .slice(0, limit)
       .map(({ item, match }) => {
-        if (match.ranges.length > 0) return item;
+        if (match === undefined || match.ranges.length > 0) return item;
         // Built only for the rows shown.
         const matchHint = match.explain?.();
         return matchHint ? { ...item, matchHint } : item;

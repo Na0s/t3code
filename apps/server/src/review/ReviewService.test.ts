@@ -24,6 +24,7 @@ function layer(input: {
   readonly projectRoots?: ReadonlyArray<string> | "unavailable";
   readonly threadWorktrees?: ReadonlyArray<{ worktreePath: string; deleted?: boolean }>;
   readonly gitWorktrees?: ReadonlyArray<string>;
+  readonly adoptedPaths?: ReadonlyArray<string>;
 }) {
   const projectRoots = input.projectRoots ?? [];
   return ReviewService.layer.pipe(
@@ -88,6 +89,16 @@ function layer(input: {
       ServerSettings.ServerSettingsService.layerTest({
         worktreesDirectory: input.worktreesDirectory ?? "",
         previousWorktreesDirectories: [...(input.previousWorktreesDirectories ?? [])],
+        ...(input.adoptedPaths === undefined
+          ? {}
+          : {
+              projectSettingsOverrides: {
+                [ProjectId.make("project-0")]: {
+                  umbrellaEnabled: true,
+                  umbrellaAdoptedPaths: [...input.adoptedPaths],
+                },
+              },
+            }),
       }),
     ),
     Layer.provide(ServerConfig.layerTest(input.workspaceRoot, input.baseDir)),
@@ -166,17 +177,32 @@ describe("ReviewService", () => {
       yield* fs.makeDirectory(sibling);
       yield* Effect.addFinalizer(() => fs.remove(sibling, { recursive: true }).pipe(Effect.ignore));
 
-      const review = (cwd: string, projectRoots: ReadonlyArray<string> | "unavailable") =>
+      const review = (
+        cwd: string,
+        projectRoots: ReadonlyArray<string> | "unavailable",
+        adoptedPaths?: ReadonlyArray<string>,
+      ) =>
         Effect.gen(function* () {
           const service = yield* ReviewService.ReviewService;
           return yield* service.getDiffPreview({ cwd });
-        }).pipe(Effect.provide(layer({ workspaceRoot, baseDir, projectRoots })));
+        }).pipe(
+          Effect.provide(
+            layer({
+              workspaceRoot,
+              baseDir,
+              projectRoots,
+              ...(adoptedPaths === undefined ? {} : { adoptedPaths }),
+            }),
+          ),
+        );
 
       assert.strictEqual((yield* review(projectRoot, [projectRoot])).cwd, projectRoot);
       assert.strictEqual((yield* review(projectChild, [projectRoot])).cwd, projectChild);
       const dottedChild = `${projectRoot}/..feature`;
       yield* fs.makeDirectory(dottedChild);
       assert.strictEqual((yield* review(dottedChild, [projectRoot])).cwd, dottedChild);
+      // An umbrella project's adopted checkout counts, wherever it lives.
+      assert.strictEqual((yield* review(sibling, [projectRoot], [sibling])).cwd, sibling);
       for (const [cwd, projectRoots] of [
         [sibling, [projectRoot]],
         [projectRoot, []],

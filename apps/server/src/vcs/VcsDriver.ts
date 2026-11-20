@@ -37,6 +37,8 @@ export interface VcsDiffCheckpointsInput {
   readonly maxOutputBytes?: number;
   /** An empty list yields an empty diff. */
   readonly filePaths?: ReadonlyArray<string>;
+  /** Prepended to every reported path, e.g. `apps/api/` for a member diffed inside its umbrella. */
+  readonly pathPrefix?: string;
 }
 
 export interface VcsListAuthoredPathsInput {

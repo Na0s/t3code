@@ -26,6 +26,7 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -179,6 +180,179 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         expect(lookups.slice(lookupsBeforeIdle)).toEqual([]);
       }).pipe(Effect.provide(dependencies));
     }),
+  );
+
+  it.effect.each([
+    { worktreePath: null, checkout: "/clients/acme/apps/api" },
+    // A worktree-mode thread looks its members up in their worktrees inside its folder.
+    { worktreePath: "/worktrees/acme/feature-1", checkout: "/worktrees/acme/feature-1/apps/api" },
+  ])(
+    "links the branch pull request of each umbrella member a turn edited in $checkout",
+    ({ worktreePath, checkout }) =>
+      Effect.gen(function* () {
+        // The user unlinked this member's pull request earlier; it stays unlinked and is not looked up.
+        const thread: OrchestrationV2ThreadShell = {
+          ...threadShell("umbrella-thread"),
+          worktreePath,
+          pullRequests: [
+            {
+              host: "github.com",
+              repository: "acme/linked",
+              number: 3,
+              url: "https://github.com/acme/linked/pull/3",
+              source: "stack-dismissed",
+              linkedAt: "2026-09-01T00:00:00.000Z",
+              snapshot: null,
+              stack: null,
+            },
+          ],
+        };
+        const project: OrchestrationProjectShell = {
+          id: thread.projectId,
+          title: "Client",
+          workspaceRoot: "/clients/acme",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        };
+        const member = (relativePath: string) => ({
+          path: `/clients/acme/${relativePath}`,
+          relativePath,
+          repositoryIdentity:
+            relativePath === "apps/linked"
+              ? {
+                  canonicalKey: "github.com/acme/linked",
+                  locator: { source: "git-remote" as const, remoteName: "origin", remoteUrl: "x" },
+                  owner: "acme",
+                  name: "linked",
+                }
+              : null,
+          source: "nested" as const,
+        });
+        const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+        const lookups: Array<string> = [];
+        const dispatched: Array<OrchestrationV2ServerCommand> = [];
+        const linked = yield* Deferred.make<void>();
+        const dependencies = Layer.mergeAll(
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            streamDomainEvents: Stream.fromQueue(domainEvents),
+            getPullRequestSnapshot: () =>
+              Effect.succeed({
+                schemaVersion: 2,
+                snapshotSequence: 1,
+                threads: [],
+                archivedThreads: [],
+              }),
+            getThreadShell: () => Effect.succeed(thread),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command as OrchestrationV2ServerCommand);
+              }).pipe(Effect.andThen(Deferred.succeed(linked, undefined))) as never,
+          }),
+          Layer.mock(ProjectStore.ProjectStoreV2)({
+            listShells: () => Effect.succeed([project]),
+            getShell: () => Effect.succeedSome(project),
+          }),
+          Layer.mock(GitManager.GitManager)({
+            localStatus: ({ cwd }) =>
+              Effect.succeed({
+                isRepo: true,
+                hasPrimaryRemote: true,
+                isDefaultRef: false,
+                refName: `feature/${cwd.split("/").at(-1)}`,
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+            branchPullRequest: ({ cwd, branch }) =>
+              Effect.sync(() => {
+                lookups.push(`${cwd}@${branch}`);
+                return {
+                  number: 12,
+                  title: "API change",
+                  url: "https://github.com/acme/api/pull/12",
+                  baseRef: "main",
+                  headRef: branch,
+                  state: "open" as const,
+                  repositoryKey: "github.com/acme/api",
+                  updatedAt: null,
+                };
+              }),
+          }),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
+          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+          Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+            shouldRunScopeWork: () => Effect.succeed(false),
+            shouldRunOpportunisticWork: Effect.succeed(false),
+          }),
+          Layer.mock(UmbrellaMembership.UmbrellaMembership)({
+            stateOf: () =>
+              Effect.succeed({
+                members: [member("apps/api"), member("apps/web"), member("apps/linked")],
+                suggestions: [],
+                enclosingRepository: null,
+              }),
+          }),
+          Layer.succeed(
+            SecureRandom.SecureRandom,
+            SecureRandom.make((size) => new Uint8Array(size).fill(1)),
+          ),
+          FileSystem.layerNoop({
+            readFileString: (file) =>
+              file === `${worktreePath}.t3-umbrella.json`
+                ? Effect.succeed(
+                    JSON.stringify({
+                      version: 1,
+                      umbrellaRoot: "/clients/acme",
+                      members: ["apps/api", "apps/web", "apps/linked"].map((relativePath) => ({
+                        source: `/clients/acme/${relativePath}`,
+                        path: relativePath,
+                      })),
+                    }),
+                  )
+                : Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "NotFound",
+                      module: "FileSystem",
+                      method: "readFileString",
+                      pathOrDescriptor: file,
+                    }),
+                  ),
+          }),
+          Path.layer,
+        );
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadPullRequestService.make;
+          yield* service.start();
+          yield* Queue.offer(domainEvents, {
+            type: "checkpoint.captured",
+            threadId: thread.id,
+            payload: {
+              files: [
+                { path: "apps/api/src/server.ts" },
+                { path: "apps/linked/index.ts" },
+                { path: "README.md" },
+              ],
+            },
+          } as unknown as OrchestrationV2DomainEvent);
+          yield* Deferred.await(linked);
+          yield* service.drain;
+
+          expect(lookups).toEqual([`${checkout}@feature/api`]);
+          expect(dispatched).toMatchObject([
+            {
+              type: "thread.pull-request.link",
+              threadId: thread.id,
+              host: "github.com",
+              repository: "acme/api",
+              number: 12,
+              source: "agent",
+            },
+          ]);
+        }).pipe(Effect.provide(dependencies));
+      }),
   );
 
   it.effect("refreshes linked-thread readers at most every 10s while activity reorders them", () =>

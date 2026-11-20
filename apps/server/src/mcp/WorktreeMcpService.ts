@@ -3,6 +3,7 @@ import {
   type GitCommandError,
   MessageId,
   type ProjectId,
+  type ProjectScript,
   WorktreeMcpFailure,
   type WorktreeMcpContinuationStatus,
   type WorktreeMcpHandoffInput,
@@ -20,12 +21,16 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
+import type { UmbrellaWorktreeError } from "../project/umbrellaWorktreeLayout.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import type { McpInvocationScope, McpThreadInvocationScope } from "./McpInvocationContext.ts";
@@ -75,6 +80,8 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
+  const umbrellaMembersOf = yield* UmbrellaMembership.makeUmbrellaMembersOf;
 
   // Serialize handoffs per thread to avoid creating two worktrees and orphaning one.
   const handoffThreadsInFlight = new Set<string>();
@@ -176,6 +183,42 @@ const make = Effect.gen(function* () {
 
     const project = yield* loadProject(scope, projection.thread.projectId);
     const projectCwd = project.workspaceRoot;
+    const umbrellaMembers = yield* umbrellaMembersOf(project);
+    if (umbrellaMembers.length > 0) {
+      const baseRef = input.baseRef ?? "HEAD";
+      return yield* bindWorktree(scope, input, project, {
+        baseRef,
+        startedFromOrigin: false,
+        create: Effect.gen(function* () {
+          const startFromOrigin =
+            input.startFromOrigin ?? (yield* readDefaultStartFromOrigin(project.id));
+          const submodules = yield* serverSettings.getSettings.pipe(
+            Effect.map(
+              (settings) =>
+                resolveProjectSettings(settings, project.id).settings.worktreeSubmodules,
+            ),
+            Effect.orElseSucceed(() => null),
+          );
+          return yield* umbrellaWorktrees
+            .create({
+              umbrellaRoot: projectCwd,
+              members: umbrellaMembers,
+              baseRef,
+              startFromOrigin,
+              branch: input.branch,
+              flattenOnConflict: false,
+              submodules,
+            })
+            .pipe(asOperationFailed("Unable to create the umbrella worktree"));
+        }),
+        remove: (created) =>
+          umbrellaWorktrees.remove({
+            worktreePath: created.path,
+            force: true,
+            deleteBranch: created.branch,
+          }),
+      });
+    }
 
     const localStatus = yield* gitWorkflow
       .localStatus({ cwd: projectCwd })
@@ -238,23 +281,71 @@ const make = Effect.gen(function* () {
       }
     }
 
+    return yield* bindWorktree(scope, input, project, {
+      baseRef,
+      startedFromOrigin,
+      create: gitWorkflow
+        .createWorktree({
+          cwd: projectCwd,
+          refName: worktreeBaseRef,
+          newRefName: input.branch,
+          baseRefName,
+          path: null,
+        })
+        .pipe(
+          Effect.map(({ worktree }) => ({ path: worktree.path, branch: worktree.refName })),
+          asOperationFailed("Unable to create the worktree"),
+        ),
+      remove: (created) =>
+        gitWorkflow.removeWorktree({ cwd: projectCwd, path: created.path, force: true }).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              gitWorkflow.deleteLocalBranch({
+                cwd: projectCwd,
+                refName: created.branch,
+                force: true,
+              }),
+            ),
+          ),
+        ),
+    });
+  });
+
+  const bindWorktree = Effect.fn("WorktreeMcpService.bindWorktree")(function* (
+    scope: McpThreadInvocationScope,
+    input: WorktreeMcpHandoffInput,
+    project: {
+      readonly id: ProjectId;
+      readonly workspaceRoot: string;
+      readonly scripts: ReadonlyArray<ProjectScript>;
+    },
+    worktreeSource: {
+      readonly baseRef: string;
+      readonly startedFromOrigin: boolean;
+      readonly create: Effect.Effect<
+        { readonly path: string; readonly branch: string },
+        WorktreeMcpFailure
+      >;
+      readonly remove: (created: {
+        readonly path: string;
+        readonly branch: string;
+      }) => Effect.Effect<unknown, GitCommandError | UmbrellaWorktreeError>;
+    },
+  ) {
+    const { baseRef, startedFromOrigin } = worktreeSource;
+    const projectCwd = project.workspaceRoot;
+    const alreadyInWorktree = (worktreePath: string) =>
+      failure(
+        "already_in_worktree",
+        `Thread '${scope.thread.threadId}' is already attached to worktree '${worktreePath}'.`,
+      );
     const ids = yield* handoffIds(scope);
 
     // Mask interruption after worktree creation through setup; binding can detach and interrupt the caller.
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const worktree = yield* restore(
-          gitWorkflow
-            .createWorktree({
-              cwd: projectCwd,
-              refName: worktreeBaseRef,
-              newRefName: input.branch,
-              baseRefName,
-              path: null,
-            })
-            .pipe(asOperationFailed("Unable to create the worktree")),
-        );
-        const worktreePath = worktree.worktree.path;
+        const worktree = yield* restore(worktreeSource.create);
+        const worktreePath = worktree.path;
 
         const reportFailed = (logMessage: string) =>
           Effect.catchCause((cause: Cause.Cause<unknown>) => {
@@ -266,19 +357,9 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as({ status: "failed", detail } as const));
           });
 
-        const removeCreatedWorktree = Effect.suspend(() =>
-          gitWorkflow.removeWorktree({ cwd: projectCwd, path: worktreePath, force: true }).pipe(
-            Effect.andThen(
-              Effect.suspend(() =>
-                gitWorkflow.deleteLocalBranch({
-                  cwd: projectCwd,
-                  refName: worktree.worktree.refName,
-                  force: true,
-                }),
-              ),
-            ),
-          ),
-        ).pipe(Effect.ignoreCause({ log: true }));
+        const removeCreatedWorktree = Effect.suspend(() => worktreeSource.remove(worktree)).pipe(
+          Effect.ignoreCause({ log: true }),
+        );
 
         const recheckAndBind = Effect.gen(function* () {
           // A concurrent UI binding may have landed during git work; do not orphan a second worktree.
@@ -297,7 +378,7 @@ const make = Effect.gen(function* () {
               type: "thread.metadata.update",
               commandId: ids.commandId,
               threadId: scope.thread.threadId,
-              branch: worktree.worktree.refName,
+              branch: worktree.branch,
               worktreePath,
               expectedWorktreePath: null,
               // Binding detaches the session and ends the caller; a later send could lose the race.
@@ -351,7 +432,7 @@ const make = Effect.gen(function* () {
           setupScript = yield* setupScriptRunner
             .runForThread({
               threadId: scope.thread.threadId,
-              projectId: projection.thread.projectId,
+              projectId: project.id,
               projectCwd,
               worktreePath,
               project: {
@@ -378,7 +459,7 @@ const make = Effect.gen(function* () {
 
         const result: WorktreeMcpHandoffResult = {
           worktreePath,
-          branch: worktree.worktree.refName,
+          branch: worktree.branch,
           baseRef,
           startedFromOrigin,
           setupScript,
@@ -464,4 +545,5 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
+  | Path.Path
 > = Layer.effect(WorktreeMcpService, make);

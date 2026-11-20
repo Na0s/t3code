@@ -25,6 +25,7 @@ import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeConte
 import {
   createScopedSettingsWriter,
   pendingScopedWritesAtom,
+  planProjectOverrideEdit,
   planProjectOverridesClear,
   planScopedSettingsClear,
   planScopedSettingsPatch,
@@ -161,6 +162,17 @@ export function useClearProjectOverrides() {
   ) => {
     if (context === null) return;
     run(context.environments, (current) => planProjectOverridesClear(current, entries, keys));
+  };
+}
+
+/** Rewrites one project's override entry; works outside a settings page. */
+export function useEditProjectOverrides() {
+  const run = useRunScopedPlan();
+  return (target: ProjectOverrideEntry, edit: Parameters<typeof planProjectOverrideEdit>[2]) => {
+    const environment = readEnvironment(target.environmentId);
+    run(environment ? [environment] : [], (current) =>
+      planProjectOverrideEdit(current, target, edit),
+    );
   };
 }
 

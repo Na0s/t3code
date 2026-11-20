@@ -27,6 +27,7 @@ import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
   AcpRegistryOperationError,
   CommandId,
+  GitCommandError,
   authScopeResponse,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
@@ -194,6 +195,7 @@ import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { makePrepareTerminalLaunch } from "./workspace/restoreMissingWorktree.ts";
+import { makeUmbrellaWorktrees } from "./project/UmbrellaWorktree.ts";
 import { terminalOutputStream, withOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -221,6 +223,7 @@ import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as UmbrellaMembership from "./project/UmbrellaMembership.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
@@ -884,8 +887,13 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
           ),
         { concurrency: 16 },
       ).pipe(
-        Effect.map((enriched) => ({
-          projects: enriched.map((entry) => entry.project),
+        Effect.flatMap((enriched) =>
+          UmbrellaMembership.attachUmbrellaMembers(enriched.map((entry) => entry.project)).pipe(
+            Effect.map((projects) => ({ enriched, projects })),
+          ),
+        ),
+        Effect.map(({ enriched, projects }) => ({
+          projects,
           resolvedRepositoryIdentityRoots: enriched
             .filter((entry) => entry.repositoryIdentityResolved)
             .map((entry) => entry.project.workspaceRoot),
@@ -1147,6 +1155,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       shouldPublishShellApplicationEvent(stored, subagentThreadIds);
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
+    const umbrellaChanges = yield* UmbrellaMembership.subscribeUmbrellaChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
       function* (snapshotSequence: number) {
         const enriched = yield* enrichProjectShells(yield* projects.listShells());
@@ -1303,6 +1312,42 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       ),
     );
 
+    // Members are refreshed as metadata: roots stay out of the identity list, so identities are
+    // not overwritten.
+    const umbrellaRefreshes = umbrellaChanges.pipe(
+      Stream.mapEffect((projectIds) =>
+        Effect.gen(function* () {
+          const changed = new Set<string>(projectIds);
+          const affected = (yield* projects.listShells()).filter((project) =>
+            changed.has(project.id),
+          );
+          if (affected.length === 0) return [];
+          const changedProjects = yield* Effect.forEach(
+            yield* UmbrellaMembership.attachUmbrellaMembers(affected),
+            (project) =>
+              projectEnrichment
+                .peek(project.workspaceRoot)
+                .pipe(Effect.map(({ repositoryIdentity }) => ({ ...project, repositoryIdentity }))),
+          );
+          return [
+            {
+              kind: "snapshot" as const,
+              snapshot: {
+                schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
+                snapshotSequence: yield* applicationEvents.latestApplicationSequence,
+                projects: changedProjects,
+                threads: [],
+                archivedThreads: [],
+              } as OrchestrationV2ShellSnapshot,
+              resolvedRepositoryIdentityRoots: [] as ReadonlyArray<string>,
+            },
+          ];
+        }),
+      ),
+      Stream.flatMap(Stream.fromIterable),
+    );
+    const metadataRefreshes = Stream.merge(enrichmentRefreshes, umbrellaRefreshes);
+
     // Subscribe before loading for racing enrichments; initial refresh covers pre-subscription completions and cold HTTP snapshots.
     const completionMarker =
       input.requestCompletionMarker === true
@@ -1338,7 +1383,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
           tail: completionThenLive(loaded.snapshot.snapshotSequence),
-          enrichment: enrichmentRefreshes,
+          enrichment: metadataRefreshes,
         });
       }
 
@@ -1353,7 +1398,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
               return composeShellStreamWithEnrichment({
                 initial: initialSnapshotItems(loaded),
                 tail: completionThenLive(loaded.snapshot.snapshotSequence),
-                enrichment: enrichmentRefreshes,
+                enrichment: metadataRefreshes,
               });
             });
       const highWater = yield* applicationEvents.latestApplicationSequence;
@@ -1393,7 +1438,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           }),
         }),
         tail: Stream.concat(Stream.concat(replay, completionMarker), liveFrom(highWater)),
-        enrichment: enrichmentRefreshes,
+        enrichment: metadataRefreshes,
       });
     }).pipe(
       Effect.mapError(
@@ -1516,6 +1561,8 @@ export const layerWsRpc = (
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
+      const workspacePath = yield* Path.Path;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -3178,7 +3225,24 @@ export const layerWsRpc = (
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
-          gitWorkflow.removeWorktree(input).pipe(
+          // An umbrella thread's folder holds a worktree of each member, removed together.
+          (workspacePath.isAbsolute(input.path)
+            ? umbrellaWorktrees.remove({ worktreePath: input.path, force: input.force === true })
+            : Effect.succeed(false)
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitCommandError({
+                  operation: "vcs.removeWorktree",
+                  command: "git worktree remove",
+                  cwd: input.cwd,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+            Effect.flatMap((removed) =>
+              removed ? Effect.void : gitWorkflow.removeWorktree(input),
+            ),
             Effect.tap(() => refreshGitStatus(input.cwd)),
             // Subscribers of the removed checkout learn it is no longer a repository.
             Effect.tap(() =>

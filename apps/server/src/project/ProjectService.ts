@@ -37,6 +37,7 @@ import { deletedProjectOverridePatch } from "../provider/ProjectSettingsOverride
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
+import { attachUmbrellaMembers, refreshUmbrellaIndex } from "./UmbrellaMembership.ts";
 import { makeIsWorktreeContainer } from "./worktreeContainer.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
@@ -452,6 +453,7 @@ export const make = Effect.gen(function* () {
       });
       if (workspaceRoot !== previousRoot || input.faviconPath !== undefined) {
         yield* projectEnrichment.invalidate([previousRoot, workspaceRoot]);
+        yield* refreshUmbrellaIndex;
       }
       return yield* readCommitted(input.projectId);
     },
@@ -586,6 +588,7 @@ export const make = Effect.gen(function* () {
         yield* clearProjectSettingsOverrides(projectId);
       }
       yield* projectEnrichment.invalidate([existing.value.workspaceRoot]);
+      yield* refreshUmbrellaIndex;
       return yield* readCommitted(projectId);
     },
   );
@@ -596,6 +599,8 @@ export const make = Effect.gen(function* () {
         ...shell,
         repositoryIdentity: enrichment.repositoryIdentity,
       })),
+      Effect.flatMap((enriched) => attachUmbrellaMembers([enriched])),
+      Effect.map(([enriched]) => enriched!),
     );
 
   const getShell: ProjectService["Service"]["getShell"] = Effect.fn("ProjectService.getShell")(

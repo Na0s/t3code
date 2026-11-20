@@ -16,6 +16,7 @@ import type {
   ScopedProjectRef,
   SidebarProjectGroupingMode,
   SidebarProjectSortOrder,
+  UmbrellaMember,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -31,6 +32,8 @@ export interface HomeProjectScope {
   readonly representative: EnvironmentProject;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly projectRefs: ReadonlyArray<ScopedProjectRef>;
+  /** Projects folded in as umbrella members, by scoped project key. */
+  readonly umbrellaMembers: ReadonlyMap<string, UmbrellaMember>;
   readonly pinned: boolean;
   readonly archived: boolean;
 }
@@ -68,6 +71,7 @@ export function buildHomeProjectScopes(input: {
       representative: group.representative,
       projects: group.members.map((member) => member.project),
       projectRefs: group.memberProjectRefs,
+      umbrellaMembers: group.umbrellaMembers,
       pinned: group.pinned,
       archived: group.archived,
     };

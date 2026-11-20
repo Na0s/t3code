@@ -47,6 +47,7 @@ import {
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
 import * as CheckoutCloner from "./CheckoutCloner.ts";
+import { excludePathspecs, UmbrellaMemberIndex } from "./UmbrellaMemberIndex.ts";
 import * as CheckpointUntrackedBlobs from "./checkpointUntrackedBlobs.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -611,12 +612,53 @@ const HEAD_MOVES_SCAN_LIMIT = 512;
 const HEAD_MARK_TRAILER = "T3-Head-Moved-At";
 const HEAD_MARK_TRAILER_PATTERN = new RegExp(`^${HEAD_MARK_TRAILER}: (\\d+) (\\d+)$`, "m");
 
+/** Prefixes each path in `git diff --numstat -z` output, whose renames carry two paths. */
+function prefixNumstatPaths(numstat: string, prefix: string): string {
+  const records = numstat.split("\0");
+  for (let index = 0; index < records.length; index += 1) {
+    const counts = /^(?:\d+|-)\t(?:\d+|-)\t/.exec(records[index]!);
+    if (!counts) continue;
+    const path = records[index]!.slice(counts[0].length);
+    if (path.length > 0) {
+      records[index] = `${counts[0]}${prefix}${path}`;
+      continue;
+    }
+    for (const renamed of [index + 1, index + 2]) {
+      if (records[renamed] !== undefined) records[renamed] = `${prefix}${records[renamed]}`;
+    }
+    index += 2;
+  }
+  return records.join("\0");
+}
+
+/** `--src-prefix`/`--dst-prefix` leave rename and copy headers bare; Git quotes unusual paths. */
+function prefixPatchHeaderPaths(patch: string, prefix: string): string {
+  return patch.replace(
+    /^((?:rename|copy) (?:from|to) )("?)/gm,
+    (_match, header: string, quote: string) => `${header}${quote}${prefix}`,
+  );
+}
+
 export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const vcsProcess = yield* VcsProcess.VcsProcess;
   const random = yield* SecureRandom.SecureRandom;
   const hostPlatform = yield* HostProcess.Platform;
+  const umbrellaMembers = yield* UmbrellaMemberIndex;
+  // Umbrella members keep their own checkpoints; the enclosing repository's must not stage or restore them.
+  // Git skips ignored members by itself, and git add fails on a pathspec naming one, excluding or not.
+  const memberExclusionsUnder = (cwd: string) =>
+    umbrellaMembers.hasMembers()
+      ? fileSystem.realPath(cwd).pipe(
+          Effect.map((resolved) => umbrellaMembers.memberPathsWithin(resolved)),
+          Effect.flatMap((paths) =>
+            filterIgnoredPaths(cwd, paths).pipe(Effect.orElseSucceed(() => paths)),
+          ),
+          Effect.map(excludePathspecs),
+          Effect.orElseSucceed((): ReadonlyArray<string> => []),
+        )
+      : Effect.succeed<ReadonlyArray<string>>([]);
   // Returns stdout, or null when there is no work tree. A non-repository exits 128 like a broken
   // one, so only Git's message (pinned to the C locale) or a missing cwd tells them apart.
   const probeWorkTree = Effect.fn("GitVcsDriver.probeWorkTree")(function* (
@@ -1394,6 +1436,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             ? CheckpointUntrackedBlobs.NOTHING
             : yield* untrackedBlobs.reuse({ ...untracked, indexConfig });
 
+        const memberExclusions = yield* memberExclusionsUnder(input.cwd);
         const stageFiles = (exclusions: ReadonlyArray<string>) =>
           execute({
             operation,
@@ -1411,6 +1454,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               workspaceIgnored ? "-u" : "-A",
               "--",
               ".",
+              ...memberExclusions,
               ...exclusions,
             ],
             env: commitEnv,
@@ -1851,6 +1895,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       yield* Effect.addFinalizer((exit) =>
         mutationStarted && Exit.hasInterrupts(exit) ? resetIndex.pipe(Effect.ignore) : Effect.void,
       );
+      const memberExclusions = yield* memberExclusionsUnder(input.cwd);
       // An empty index and checkpoint have nothing for git restore's pathspec to match.
       if (tracked.stdout.length > 0) {
         const restore = [...longPaths, "restore", "--source", commitOid, "--worktree", "--staged"];
@@ -1859,7 +1904,13 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: [...restore, ...(sparseCheckout ? [] : ["--ignore-skip-worktree-bits"]), "--", "."],
+          args: [
+            ...restore,
+            ...(sparseCheckout ? [] : ["--ignore-skip-worktree-bits"]),
+            "--",
+            ".",
+            ...memberExclusions,
+          ],
           onSpawn,
         });
         if (sparseCheckout) {
@@ -1936,7 +1987,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const clean = execute({
         operation,
         cwd: input.cwd,
-        args: [...longPaths, "clean", "-fd", "--", "."],
+        args: [...longPaths, "clean", "-fd", "--", ".", ...memberExclusions],
         env: { LC_ALL: "C" },
         allowNonZeroExit: true,
         onSpawn,
@@ -1956,7 +2007,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         const remaining = yield* execute({
           operation,
           cwd: input.cwd,
-          args: [...longPaths, "clean", "-dn", "--", "."],
+          args: [...longPaths, "clean", "-dn", "--", ".", ...memberExclusions],
           env: { LC_ALL: "C" },
         });
         if (/^Would remove /m.test(remaining.stdout)) {
@@ -2069,7 +2120,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "--no-ext-diff",
           "--no-textconv",
           "--submodule=short",
-          ...PATCH_RENDER_PREFIX_ARGS,
+          ...(input.pathPrefix
+            ? [`--src-prefix=a/${input.pathPrefix}`, `--dst-prefix=b/${input.pathPrefix}`]
+            : PATCH_RENDER_PREFIX_ARGS),
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           `${fromRevision}^{commit}`,
           `${input.toCheckpointRef}^{commit}`,
@@ -2093,7 +2146,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         });
       }
 
-      return result.stdout;
+      if (!input.pathPrefix) return result.stdout;
+      return input.format === "numstat"
+        ? prefixNumstatPaths(result.stdout, input.pathPrefix)
+        : prefixPatchHeaderPaths(result.stdout, input.pathPrefix);
     }),
 
     listAuthoredPaths: Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {

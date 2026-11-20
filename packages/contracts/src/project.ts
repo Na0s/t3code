@@ -151,6 +151,16 @@ export const ReceivedProjectIcon = ForwardCompatibleUnion(projectIconMembers, "k
   ),
 );
 
+/** A checkout an umbrella project spans: discovered under its root, or adopted from elsewhere on the environment. */
+export const UmbrellaMember = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  /** Relative to the umbrella root, with `/` separators; starts with `../` for an adopted checkout outside it. */
+  relativePath: TrimmedNonEmptyString,
+  repositoryIdentity: Schema.NullOr(RepositoryIdentity),
+  source: Schema.Literals(["nested", "adopted"]),
+});
+export type UmbrellaMember = typeof UmbrellaMember.Type;
+
 export const Project = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,

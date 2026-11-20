@@ -2,6 +2,7 @@ import {
   type CommandId,
   type GitRunStackedActionResult,
   type OrchestrationProjectShell,
+  type RepositoryIdentity,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -27,11 +28,19 @@ export function createdPullRequestKey(
   if ((status !== "created" && status !== "opened_existing") || number === undefined || !url) {
     return null;
   }
+  return pullRequestKeyOf({ number, url }, project?.repositoryIdentity);
+}
+
+/** The thread link key for a pull request, from its URL or else the repository it was opened in. */
+export function pullRequestKeyOf(
+  pullRequest: { readonly number: number; readonly url: string },
+  identity: RepositoryIdentity | null | undefined,
+): CreatedPullRequestKey | null {
+  const { number, url } = pullRequest;
   const parsed = sourceControlDefinitions.parseChangeRequestUrl(url)?.link;
   if (parsed !== undefined) {
     return { host: parsed.host, repository: parsed.repository, number: parsed.number, url };
   }
-  const identity = project?.repositoryIdentity;
   const kind = identity?.provider;
   const repository = sourceControlDefinitions.repositorySelector(identity);
   if (!identity || kind === undefined || repository === null) return null;

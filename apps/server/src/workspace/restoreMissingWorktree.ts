@@ -10,9 +10,11 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { scratchFolderRoot } from "../project/ManagedProjectFolders.ts";
+import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
+import { recreateBranchWorktree, WorktreeRecreateNoBaseError } from "./recreateBranchWorktree.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 import { TerminalCwdRecovery } from "../terminal/Manager.ts";
 
@@ -26,15 +28,6 @@ export class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateEr
 ) {
   override get message(): string {
     return `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}.`;
-  }
-}
-
-class WorktreeRecreateNoBaseError extends Schema.TaggedError<WorktreeRecreateNoBaseError>()(
-  "WorktreeRecreateNoBaseError",
-  { worktreePath: Schema.String, branch: Schema.String },
-) {
-  override get message(): string {
-    return `Could not recreate branch '${this.branch}' at ${this.worktreePath}: the project workspace has no commit to start it from.`;
   }
 }
 
@@ -55,6 +48,7 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
 
   // Storage cleanup prunes idle No project folders, which have no branch to restore from.
   // An empty folder, only directly inside the No project's own root, lets the thread run again.
@@ -99,76 +93,26 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
 
-  const resolveRecreateBase = Effect.fn("restoreMissingWorktree.resolveRecreateBase")(function* (
-    cwd: string,
-    remoteName: string | null,
-  ) {
-    // Recovery can follow an external checkout, before the status cache expires.
-    yield* gitWorkflow.invalidateLocalStatus(cwd);
-    const { refName: currentBranch } = yield* gitWorkflow.localStatus({ cwd });
-    if (currentBranch !== null) {
-      const refName = `refs/heads/${currentBranch}`;
-      return { refName, baseRefName: refName };
-    }
-    const remoteHead = `refs/remotes/${remoteName}/HEAD`;
-    if (remoteName !== null && (yield* gitWorkflow.hasCommit({ cwd, refName: remoteHead }))) {
-      const { commitSha } = yield* gitWorkflow.resolveRemoteTrackingCommit({
-        cwd,
-        refName: "HEAD",
-        fallbackRemoteName: remoteName,
-      });
-      // Start from the commit so the thread branch does not track the default branch.
-      return { refName: commitSha, baseRefName: remoteHead };
-    }
-    if (yield* gitWorkflow.hasCommit({ cwd, refName: "HEAD" })) {
-      return { refName: "HEAD", baseRefName: undefined };
-    }
-    return null;
-  });
-
-  const recreateMissingWorktree = Effect.fn("restoreMissingWorktree.recreate")(function* (input: {
-    readonly cwd: string;
-    readonly worktreePath: string;
-    readonly branch: string;
-  }) {
-    const { cwd, worktreePath, branch } = input;
-    yield* gitWorkflow.pruneWorktrees({ cwd });
-    const localBranchNames = yield* gitWorkflow.listLocalBranchNames(cwd);
-    if (localBranchNames.includes(branch)) {
-      yield* gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath });
-      return;
-    }
-    const remoteName = yield* gitWorkflow
-      .resolvePrimaryRemoteName(cwd)
-      .pipe(Effect.orElseSucceed(() => null));
-    // Push keeps the tracking ref current, so recovery reads it without fetching.
-    const pushedRef = remoteName === null ? null : `refs/remotes/${remoteName}/${branch}`;
-    if (pushedRef !== null && (yield* gitWorkflow.hasCommit({ cwd, refName: pushedRef }))) {
-      yield* gitWorkflow.createWorktree({
-        cwd,
-        refName: pushedRef,
-        newRefName: branch,
-        path: worktreePath,
-      });
-      return;
-    }
-    const base = yield* resolveRecreateBase(cwd, remoteName);
-    if (base === null) {
-      return yield* new WorktreeRecreateNoBaseError({ worktreePath, branch });
-    }
-    yield* gitWorkflow.createWorktree({
-      cwd,
-      refName: base.refName,
-      newRefName: branch,
-      ...(base.baseRefName === undefined ? {} : { baseRefName: base.baseRefName }),
-      path: worktreePath,
-    });
-  });
-
   return Effect.fn("restoreMissingWorktree")(function* (thread: WorktreeThread) {
     const { worktreePath, branch } = thread;
     if (worktreePath === null) return;
     if (branch === null) return yield* recreateScratchFolder(thread, worktreePath);
+    // An umbrella worktree recreates each missing repository on its own.
+    if (
+      (yield* umbrellaWorktrees.read(worktreePath)) !== null &&
+      (yield* isManagedWorktreePath(worktreePath))
+    ) {
+      yield* umbrellaWorktrees
+        .restoreMissing({ worktreePath, branch })
+        .pipe(
+          Effect.mapError((cause) =>
+            cause._tag === "WorktreeRecreateNoBaseError"
+              ? cause
+              : new WorktreeRecreateError({ worktreePath, branch, cause }),
+          ),
+        );
+      return;
+    }
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
     const leftover = exists && (yield* isLeftoverFolder(worktreePath));
     if ((exists && !leftover) || !(yield* isManagedWorktreePath(worktreePath))) return;
@@ -184,7 +128,11 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     });
     // `git worktree add` refuses a non-empty target.
     yield* (leftover ? fileSystem.remove(worktreePath, { recursive: true }) : Effect.void).pipe(
-      Effect.andThen(recreateMissingWorktree({ cwd: project.workspaceRoot, worktreePath, branch })),
+      Effect.andThen(
+        recreateBranchWorktree({ cwd: project.workspaceRoot, worktreePath, branch }).pipe(
+          Effect.provideService(GitWorkflowService.GitWorkflowService, gitWorkflow),
+        ),
+      ),
       Effect.mapError((cause) =>
         cause._tag === "WorktreeRecreateNoBaseError"
           ? cause

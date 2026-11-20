@@ -14,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 import { pickableProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { umbrellaMemberLabelsByProjectKey } from "@t3tools/client-runtime/state/umbrella";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -327,6 +328,9 @@ export function HomeScreen(props: HomeScreenProps) {
       }),
     [projects, selectedEnvironmentId, projectGroupingMode],
   );
+  const umbrellaMemberLabelByProjectKey = umbrellaMemberLabelsByProjectKey(
+    projectScopes.map((scope) => scope.umbrellaMembers),
+  );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
@@ -538,6 +542,11 @@ export function HomeScreen(props: HomeScreenProps) {
         timeLabel={item.timeLabel}
         showTrailingDivider={item.showTrailingDivider}
         project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
+        umbrellaMemberLabel={
+          umbrellaMemberLabelByProjectKey.get(
+            scopedProjectKey(thread.environmentId, thread.projectId),
+          ) ?? null
+        }
         providerInstance={resolveProviderInstance(thread)}
         providers={providersByEnvironmentId.get(thread.environmentId)}
         environmentLabel={
@@ -598,6 +607,7 @@ export function HomeScreen(props: HomeScreenProps) {
     activeNewTask,
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
+    umbrellaMemberLabelByProjectKey,
     listEnvironments,
     savedConnectionsById: props.savedConnectionsById,
     searchQuery: props.searchQuery,

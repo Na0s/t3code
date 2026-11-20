@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { ProjectScript, ReceivedProjectIcon } from "./project.ts";
+import { ProjectScript, ReceivedProjectIcon, UmbrellaMember } from "./project.ts";
 
 export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
@@ -13,6 +13,12 @@ export const OrchestrationProjectShell = Schema.Struct({
   hasCustomTitle: Schema.optional(Schema.Boolean),
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  // Absent until the server has scanned the root; empty means the project is not an umbrella.
+  umbrellaMembers: Schema.optional(Schema.Array(UmbrellaMember)),
+  // Checkouts found under the root while the umbrella is off, offered for the user to confirm.
+  umbrellaSuggestions: Schema.optional(Schema.Array(UmbrellaMember)),
+  // The repository whose work tree holds the root; umbrella mode is unavailable there.
+  umbrellaEnclosingRepository: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   // Opt-in because background sync performs network I/O and may move the checkout.

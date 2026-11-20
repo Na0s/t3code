@@ -58,13 +58,20 @@ vi.mock("~/state/review", () => ({
     diffFileContents: {},
   },
 }));
-vi.mock("~/state/vcs", () => ({
-  vcsEnvironment: {
-    status: () => state.status,
-    listRefs: ({ input }: { input: { refKind: "local" | "remote" } }) =>
-      input.refKind === "local" ? state.localRefs : state.remoteRefs,
-  },
-}));
+vi.mock("~/state/vcs", async () => {
+  const { Atom: MockAtom } = await import("effect/reactivity");
+  const noStatuses = MockAtom.make((): ReadonlyArray<null> => []);
+  return {
+    vcsEnvironment: {
+      status: () => state.status,
+      listRefs: ({ input }: { input: { refKind: "local" | "remote" } }) =>
+        input.refKind === "local" ? state.localRefs : state.remoteRefs,
+    },
+    NO_UMBRELLA_MEMBER_STATUSES_ATOM: noStatuses,
+    umbrellaMemberStatusesAtom: () => noStatuses,
+    umbrellaMemberStatusesKey: () => "",
+  };
+});
 vi.mock("~/state/entities", () => ({
   useQuietThreadShell: () => state.thread,
   useProject: () => state.project,
@@ -75,6 +82,9 @@ vi.mock("~/state/filesystem", () => ({
   useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
 }));
 vi.mock("~/hooks/useThreadRouteTarget", () => ({ useThreadRouteRef: () => state.threadRef }));
+vi.mock("~/hooks/useUmbrellaMembershipEdits", () => ({
+  useUmbrellaMembershipEdits: () => ({ confirmEnable: async () => {} }),
+}));
 vi.mock("~/hooks/useSettings", () => ({
   useClientSettings: (select: (settings: ClientSettings) => unknown) =>
     select({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: state.diffFilesCollapsed }),
@@ -101,6 +111,7 @@ vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => async () => {} }));
 vi.mock("./diffs/DiffCommentAnnotation", () => ({ DiffCommentAnnotation: () => null }));
 vi.mock("./diffs/DiffFileTree", () => ({ DiffFileTree: () => null }));
 vi.mock("./DiffFilePathCopyButton", () => ({ DiffFilePathCopyButton: () => null }));
+vi.mock("./ProjectFavicon", () => ({ ProjectFavicon: () => null }));
 
 import DiffPanel from "./DiffPanel";
 import { useDiffPanelSessionStore, useDiffPanelStore } from "~/diffPanelStore";

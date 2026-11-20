@@ -14,6 +14,11 @@ import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import {
+  umbrellaMemberLabel,
+  umbrellaMembersInFiles,
+} from "@t3tools/client-runtime/state/umbrella";
+import { ProjectFavicon } from "../ProjectFavicon";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
 import {
   readResponseSubagents,
@@ -475,9 +480,31 @@ function AssistantChangedFilesSectionInner({
     (status) => AsyncResult.getOrElse(status, () => null)?.workingTree.rootPath,
   );
 
+  const umbrellaProjects = activeProject?.umbrellaMembers?.length
+    ? umbrellaMembersInFiles(
+        activeProject.umbrellaMembers,
+        checkpointFiles.map((file) => file.path),
+        Boolean(thread?.worktreePath),
+      ).map(({ member, folder }) => {
+        const project = member
+          ? {
+              environmentId: activeProject.environmentId,
+              workspaceRoot: member.path,
+              title: umbrellaMemberLabel(member),
+            }
+          : activeProject;
+        return {
+          folder,
+          label: project.title,
+          icon: <ProjectFavicon project={project} className="size-3.5" />,
+        };
+      })
+    : undefined;
+
   return (
     <ChangedFilesCard
       runId={turnSummary.runId}
+      projects={umbrellaProjects}
       files={checkpointFiles}
       totals={checkpointFileTotals(turnSummary)}
       allDirectoriesExpanded={allDirectoriesExpanded}

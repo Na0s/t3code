@@ -11,6 +11,7 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2DelegatedFrom,
   type OrchestrationV2LinkOrigin,
+  type GitCommandError,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ThreadProjection,
   type ProviderDriverKind,
@@ -48,6 +49,10 @@ import { parseGitCloneProgressLine } from "../project/gitCloneProgress.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
+import { discoverNestedRepositories } from "../project/umbrellaDiscovery.ts";
+import type { UmbrellaWorktreeError } from "../project/umbrellaWorktreeLayout.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -168,11 +173,17 @@ export class ThreadLaunchBaseRefError extends Schema.TaggedError<ThreadLaunchBas
     projectTitle: Schema.String,
     workspaceRoot: Schema.String,
     baseRef: Schema.String,
+    /** An umbrella's checkouts, by path relative to its root, none of which has the base ref. */
+    umbrellaCheckouts: Schema.optional(Schema.Array(Schema.String)),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Base ref "${this.baseRef}" does not resolve to a commit in project "${this.projectTitle}" (${this.workspaceRoot}).`;
+    const checkouts =
+      this.umbrellaCheckouts === undefined || this.umbrellaCheckouts.length === 0
+        ? ""
+        : ` or in any of its umbrella checkouts (${this.umbrellaCheckouts.join(", ")})`;
+    return `Base ref "${this.baseRef}" does not resolve to a commit in project "${this.projectTitle}" (${this.workspaceRoot})${checkouts}.`;
   }
 }
 
@@ -190,18 +201,48 @@ export class ThreadLaunchBranchConflictError extends Schema.TaggedError<ThreadLa
   }
 }
 
+/** A Git checkout inside a project folder that is not itself a repository. */
+const NestedRepository = Schema.Struct({
+  /** Relative to the project folder, with `/` separators. */
+  relativePath: Schema.String,
+  /** The project rooted at this checkout, when there is one. */
+  projectId: Schema.optional(ProjectId),
+  projectTitle: Schema.optional(Schema.String),
+  /** Whether the requested base ref resolves in this checkout. */
+  hasBaseRef: Schema.Boolean,
+});
+
 export class ThreadLaunchNotRepositoryError extends Schema.TaggedError<ThreadLaunchNotRepositoryError>()(
   "ThreadLaunchNotRepositoryError",
   {
     projectId: ProjectId,
     projectTitle: Schema.String,
     workspaceRoot: Schema.String,
+    baseRef: Schema.optional(Schema.String),
+    nestedRepositories: Schema.optional(Schema.Array(NestedRepository)),
+    /** The folder is an umbrella, so `nestedRepositories` are its members. */
+    umbrella: Schema.optional(Schema.Boolean),
   },
 ) {
   override get message(): string {
-    return `Project "${this.projectTitle}" (${this.workspaceRoot}) is not a Git repository.`;
+    const project = `"${this.projectTitle}" (${this.workspaceRoot})`;
+    const nested = this.nestedRepositories ?? [];
+    const named = nested.map(({ relativePath, projectTitle }) =>
+      projectTitle === undefined ? relativePath : `${relativePath} (project "${projectTitle}")`,
+    );
+    const holders = named.filter((_, index) => nested[index]!.hasBaseRef);
+    const located = holders.length > 0 ? ` "${this.baseRef}" is in ${holders.join(", ")}.` : "";
+    if (this.umbrella === true) {
+      return `Umbrella worktrees need the umbrella folder to be a Git repository, and project ${project} is not one. Its member checkouts are ${named.join(", ")}.${located} To work in a member in a worktree, start the thread in its project.`;
+    }
+    const base = `Project ${project} is not a Git repository.`;
+    if (nested.length === 0) return base;
+    return `${base} It holds Git repositories: ${nested.map((repository) => repository.relativePath).join(", ")}.${located} To work in one of them, start the thread in its project.`;
   }
 }
+
+// Enough to point at the right checkout without listing a whole projects folder.
+const MAX_REPORTED_NESTED_REPOSITORIES = 12;
 
 export class ThreadLaunchService extends Context.Service<
   ThreadLaunchService,
@@ -262,6 +303,93 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const eventSink = yield* EventSink.EventSinkV2;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+  const umbrellaWorktrees = yield* makeUmbrellaWorktrees;
+  const umbrellaMembership = yield* Effect.serviceOption(UmbrellaMembership.UmbrellaMembership);
+  // An umbrella's worktree mode checks out every member inside the root's own worktree.
+  const umbrellaMembersOf = yield* UmbrellaMembership.makeUmbrellaMembersOf;
+  /** Whether `refName` names a commit in the checkout at `cwd`, without asking a remote. */
+  const refResolvesLocally = (cwd: string, refName: string) =>
+    // `:/text` is a commit search, which cannot be asked for a commit type.
+    refName.startsWith(":")
+      ? Effect.succeed(true)
+      : git.hasCommit({ cwd, refName: refName === "-" ? "@{-1}" : refName }).pipe(
+          Effect.filterOrElse(
+            (found) => found,
+            () => git.hasRefNamed({ cwd, refName }),
+          ),
+          Effect.orElseSucceed(() => false),
+        );
+  /** As refResolvesLocally, then asks the checkout's remote when the launch starts from origin. */
+  const refResolvesInCheckout = (cwd: string, refName: string, startFromOrigin: boolean) =>
+    refResolvesLocally(cwd, refName).pipe(
+      Effect.filterOrElse(
+        (found) => found || !startFromOrigin,
+        () =>
+          git.resolveWorktreeBaseRemote({ cwd, refName }).pipe(
+            Effect.flatMap((remote) =>
+              remote === null
+                ? Effect.succeed(false)
+                : git
+                    .fetchWorktreeBaseCommit({ cwd, refName, remote })
+                    .pipe(Effect.map((fetched) => fetched !== null)),
+            ),
+            Effect.orElseSucceed(() => false),
+          ),
+      ),
+    );
+  // A plain folder's checkouts or umbrella members, so a refused worktree launch can say where
+  // to start instead.
+  const notRepository = Effect.fn("ThreadLaunchService.notRepository")(function* (
+    project: { readonly id: ProjectId; readonly title: string; readonly workspaceRoot: string },
+    baseRef: string,
+  ) {
+    const state = Option.isNone(umbrellaMembership)
+      ? undefined
+      : yield* umbrellaMembership.value.stateOf(project);
+    const root = project.workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");
+    const checkouts =
+      state !== undefined
+        ? [...state.members, ...state.suggestions]
+        : (yield* discoverNestedRepositories(project.workspaceRoot)).map((checkoutPath) => {
+            const normalized = checkoutPath.replaceAll("\\", "/");
+            return {
+              path: checkoutPath,
+              relativePath: normalized.startsWith(`${root}/`)
+                ? normalized.slice(root.length + 1)
+                : normalized,
+            };
+          });
+    const nestedRepositories = yield* Effect.forEach(
+      checkouts.slice(0, MAX_REPORTED_NESTED_REPOSITORIES),
+      (checkout) =>
+        Effect.all(
+          [
+            projects
+              .getByWorkspaceRoot(checkout.path)
+              .pipe(Effect.orElseSucceed(() => Option.none())),
+            refResolvesLocally(checkout.path, baseRef),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(
+          Effect.map(([owner, hasBaseRef]) => ({
+            relativePath: checkout.relativePath,
+            ...(Option.isSome(owner)
+              ? { projectId: owner.value.id, projectTitle: owner.value.title }
+              : {}),
+            hasBaseRef,
+          })),
+        ),
+      { concurrency: 4 },
+    );
+    return yield* new ThreadLaunchNotRepositoryError({
+      projectId: project.id,
+      projectTitle: project.title,
+      workspaceRoot: project.workspaceRoot,
+      baseRef,
+      nestedRepositories,
+      ...(state !== undefined && state.members.length > 0 ? { umbrella: true } : {}),
+    });
+  });
   // A project-folder launch that names no branch records the folder's checkout, as the composer does.
   const launchBranch = (strategy: ThreadLaunchWorkspaceStrategy, workspaceRoot: string) =>
     strategy.type === "root" && strategy.branch === undefined
@@ -394,13 +522,9 @@ const make = Effect.gen(function* () {
       ],
       { concurrency: "unbounded" },
     );
-    if (repositoryRoot === null)
-      return yield* new ThreadLaunchNotRepositoryError({
-        projectId: project.id,
-        projectTitle: project.title,
-        workspaceRoot: cwd,
-      });
-    const baseResolves =
+    if (repositoryRoot === null) return yield* notRepository(project, baseRef);
+    const umbrellaMembers = yield* umbrellaMembersOf(project);
+    const rootResolves =
       hasBaseCommit ||
       (yield* Effect.gen(function* () {
         if (strategy.startFromOrigin === true) {
@@ -416,12 +540,25 @@ const make = Effect.gen(function* () {
         if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return true;
         return !(yield* git.hasCommit({ cwd, refName: "HEAD" }));
       }).pipe(Effect.orElseSucceed(() => true)));
+    // An umbrella checkout without the base ref starts from its own checkout, so one with it is enough.
+    const umbrellaResolves = Effect.gen(function* () {
+      if (baseRef === "HEAD") return true;
+      for (const member of umbrellaMembers) {
+        if (yield* refResolvesInCheckout(member.path, baseRef, strategy.startFromOrigin === true))
+          return true;
+      }
+      return false;
+    });
+    const baseResolves = rootResolves || (umbrellaMembers.length > 0 && (yield* umbrellaResolves));
     if (!baseResolves)
       return yield* new ThreadLaunchBaseRefError({
         projectId: project.id,
         projectTitle: project.title,
         workspaceRoot: project.workspaceRoot,
         baseRef,
+        ...(umbrellaMembers.length === 0
+          ? {}
+          : { umbrellaCheckouts: umbrellaMembers.map((member) => member.relativePath) }),
       });
     // Provisioning flattens temporary names that collide, so only explicit names are refused.
     if (!checksBranch) return;
@@ -616,18 +753,70 @@ const make = Effect.gen(function* () {
         input.workspaceStrategy.type === "existing_worktree"
           ? input.workspaceStrategy.worktreePath
           : null;
-      if (input.workspaceStrategy.type === "worktree") {
-        if (runId !== null) {
-          yield* threads
-            .dispatch({
-              type: "prepared-run.progress",
-              commandId: CommandId.make(`${input.commandId}:progress:worktree`),
-              threadId,
-              runId,
-              phase: "worktree",
-            })
-            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-        }
+      const umbrellaMembers =
+        input.workspaceStrategy.type === "worktree" ? yield* umbrellaMembersOf(project) : [];
+      // A retried or replayed launch skips checkWorktreeBase; refuse a plain folder the same way
+      // rather than with Git's driver error, and say which checkouts it holds.
+      if (
+        input.workspaceStrategy.type === "worktree" &&
+        (yield* git
+          .repositoryRoot(project.workspaceRoot)
+          .pipe(Effect.orElseSucceed(() => undefined))) === null
+      ) {
+        return yield* notRepository(project, input.workspaceStrategy.baseRef).pipe(
+          Effect.mapError(mapError(input, "provision-worktree", threadId)),
+        );
+      }
+      if (input.workspaceStrategy.type === "worktree" && runId !== null) {
+        yield* threads
+          .dispatch({
+            type: "prepared-run.progress",
+            commandId: CommandId.make(`${input.commandId}:progress:worktree`),
+            threadId,
+            runId,
+            phase: "worktree",
+          })
+          .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      }
+      if (input.workspaceStrategy.type === "worktree" && umbrellaMembers.length > 0) {
+        const startFromOrigin = input.workspaceStrategy.startFromOrigin === true;
+        yield* setupTracker.stageStatus(threadId, "fetch", startFromOrigin ? "running" : "skipped");
+        yield* setupTracker.stageStatus(threadId, "checkout", "running");
+        const submodules = yield* serverSettings.getSettings.pipe(
+          Effect.map(
+            (settings) =>
+              resolveProjectSettings(settings, input.projectId).settings.worktreeSubmodules,
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+        const created = yield* umbrellaWorktrees
+          .create({
+            umbrellaRoot: project.workspaceRoot,
+            members: umbrellaMembers,
+            baseRef: input.workspaceStrategy.baseRef,
+            startFromOrigin,
+            branch: branch!,
+            flattenOnConflict: generatedTemporaryBranch || isTemporaryWorktreeBranch(branch!),
+            submodules,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        worktreePath = created.path;
+        branch = created.branch;
+        createdWorktreePath = worktreePath;
+        createdBranch = branch;
+        if (startFromOrigin) yield* setupTracker.stageStatus(threadId, "fetch", "done");
+        yield* setupTracker.update(threadId, (snapshot) => ({
+          ...snapshot,
+          worktreePath,
+          branch,
+          stages: snapshot.stages.map((stage) =>
+            stage.id === "submodules" && stage.status === "pending"
+              ? { ...stage, status: "skipped", detail: "none" }
+              : stage,
+          ),
+        }));
+        yield* setupTracker.stageStatus(threadId, "checkout", "done");
+      } else if (input.workspaceStrategy.type === "worktree") {
         const requestedBaseRef = input.workspaceStrategy.baseRef;
         let startRef = requestedBaseRef;
         let baseRefName = requestedBaseRef;
@@ -823,7 +1012,7 @@ const make = Effect.gen(function* () {
         const worktreeCwd = worktreePath;
         branchRename = yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
-            git
+            umbrellaWorktrees
               .renameBranch({
                 cwd: worktreeCwd,
                 oldBranch,
@@ -1042,41 +1231,54 @@ const make = Effect.gen(function* () {
             if (branchRename !== null) yield* Fiber.interrupt(branchRename);
             const removedPath = createdWorktreePath;
             const removedBranch = createdBranch;
+            const umbrellaWorktree = (yield* umbrellaWorktrees.read(removedPath)) !== null;
             // Forget worktrees only after removal succeeds; failed removals must not reuse partially written checkouts.
-            yield* git
-              .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
-              .pipe(
-                Effect.andThen(
-                  removedBranch === null
-                    ? Effect.void
-                    : git
-                        .deleteLocalBranch({
-                          cwd: project.workspaceRoot,
-                          refName: removedBranch,
-                          force: true,
-                        })
-                        .pipe(Effect.ignoreCause({ log: true })),
-                ),
-                Effect.andThen(
-                  threads
-                    .dispatch({
-                      type: "thread.metadata.update",
-                      commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
-                      threadId,
-                      worktreePath: null,
-                      branch: null,
+            const removal: Effect.Effect<void, GitCommandError | UmbrellaWorktreeError> =
+              umbrellaWorktree
+                ? umbrellaWorktrees
+                    .remove({
+                      worktreePath: removedPath,
+                      force: true,
+                      ...(removedBranch === null ? {} : { deleteBranch: removedBranch }),
                     })
-                    .pipe(Effect.ignore),
-                ),
-                Effect.catchCause((removeCause) =>
-                  Effect.logWarning("Failed to remove an abandoned thread worktree", {
-                    commandId: input.commandId,
-                    threadId,
+                    .pipe(Effect.asVoid)
+                : git.removeWorktree({
+                    cwd: project.workspaceRoot,
                     path: removedPath,
-                    cause: removeCause,
-                  }),
-                ),
-              );
+                    force: true,
+                  });
+            yield* removal.pipe(
+              Effect.andThen(
+                umbrellaWorktree || removedBranch === null
+                  ? Effect.void
+                  : git
+                      .deleteLocalBranch({
+                        cwd: project.workspaceRoot,
+                        refName: removedBranch,
+                        force: true,
+                      })
+                      .pipe(Effect.ignoreCause({ log: true })),
+              ),
+              Effect.andThen(
+                threads
+                  .dispatch({
+                    type: "thread.metadata.update",
+                    commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
+                    threadId,
+                    worktreePath: null,
+                    branch: null,
+                  })
+                  .pipe(Effect.ignore),
+              ),
+              Effect.catchCause((removeCause) =>
+                Effect.logWarning("Failed to remove an abandoned thread worktree", {
+                  commandId: input.commandId,
+                  threadId,
+                  path: removedPath,
+                  cause: removeCause,
+                }),
+              ),
+            );
           }
         }),
       ),

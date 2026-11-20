@@ -1,10 +1,13 @@
 import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
+import { isUmbrellaProject } from "@t3tools/client-runtime/state/project-grouping";
+import { umbrellaMemberLabel } from "@t3tools/client-runtime/state/umbrella";
 
 import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
 import {
   buildCommandPaletteProjectMetadata,
   buildProjectActionItems,
+  type CommandPaletteActionItem,
   type CommandPaletteItemPin,
   type CommandPaletteProject,
   ITEM_ICON_CLASS,
@@ -37,13 +40,20 @@ function projectFaviconIcon(project: Project) {
   return <ProjectFavicon project={project} className={ITEM_ICON_CLASS} />;
 }
 
-/** Projects as root search results; a grouped project matches on every member. */
-export function buildProjectSearchItems(input: ProjectItemsInput) {
+/**
+ * Projects as root search results; a grouped project matches on every member. An umbrella is one
+ * line with its members' rows indented under it, and both match by name only.
+ */
+export function buildProjectSearchItems(
+  input: ProjectItemsInput & {
+    readonly openMemberProject: (project: CommandPaletteProject) => Promise<void>;
+  },
+) {
   const membersOf = (project: CommandPaletteProject) =>
     input.projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)?.memberProjects ?? [
       project,
     ];
-  return buildProjectActionItems({
+  const items = buildProjectActionItems({
     projects: input.projects,
     valuePrefix: "project",
     searchTerms: (project) =>
@@ -69,6 +79,55 @@ export function buildProjectSearchItems(input: ProjectItemsInput) {
     icon: projectFaviconIcon,
     runProject: input.runProject,
     ...(input.pin ? { pin: input.pin } : {}),
+  });
+  return items.flatMap((item, index): CommandPaletteActionItem[] => {
+    const target = input.projects[index]!;
+    const group = input.projectGroupByTargetKey.get(`${target.environmentId}:${target.id}`);
+    const umbrellas = group?.memberProjects.filter(isUmbrellaProject) ?? [];
+    const umbrella =
+      umbrellas.find((project) => project.environmentId === target.environmentId) ?? umbrellas[0];
+    if (group === undefined || umbrella === undefined) return [item];
+    const projectByMemberPath = new Map(
+      group.memberProjects.flatMap((project) => {
+        const member = group.foldedUmbrellaMembers.get(`${project.environmentId}:${project.id}`);
+        return member ? [[member.path, project] as const] : [];
+      }),
+    );
+    const { description: _description, ...umbrellaRow } = item;
+    return [
+      {
+        ...umbrellaRow,
+        searchTerms: [group.displayName, umbrella.title],
+        icon: projectFaviconIcon(umbrella),
+      },
+      ...(umbrella.umbrellaMembers ?? []).map((member) => {
+        const label = umbrellaMemberLabel(member);
+        const project = projectByMemberPath.get(member.path);
+        return {
+          kind: "action" as const,
+          value: `project-member:${umbrella.environmentId}:${umbrella.id}:${member.path}`,
+          parentValue: item.value,
+          searchTerms: project ? [label, project.title] : [label],
+          title: label,
+          icon: (
+            <ProjectFavicon
+              project={
+                project ?? {
+                  environmentId: umbrella.environmentId,
+                  workspaceRoot: member.path,
+                  title: label,
+                }
+              }
+              className={ITEM_ICON_CLASS}
+            />
+          ),
+          // A checkout with no project of its own opens in the umbrella.
+          run: project
+            ? () => input.openMemberProject({ ...project, displayName: project.title })
+            : item.run,
+        };
+      }),
+    ];
   });
 }
 

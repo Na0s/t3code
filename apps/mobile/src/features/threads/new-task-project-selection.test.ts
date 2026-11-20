@@ -54,6 +54,7 @@ function makeScope(projects: ReadonlyArray<EnvironmentProject>): HomeProjectScop
       environmentId: project.environmentId,
       projectId: project.id,
     })),
+    umbrellaMembers: new Map(),
     pinned: false,
     archived: false,
   };

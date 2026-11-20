@@ -55,8 +55,19 @@ function worktreeCheckHint(
     | ThreadLaunch.ThreadLaunchNotRepositoryError,
   strategy: { readonly startFromOrigin?: boolean | undefined },
 ) {
-  if (error._tag === "ThreadLaunchNotRepositoryError")
-    return `Use workspaceStrategy: {type: "root"}, or pass the projectId of a Git repository.`;
+  if (error._tag === "ThreadLaunchNotRepositoryError") {
+    const nested = error.nestedRepositories ?? [];
+    const projects = nested.filter((repository) => repository.projectId !== undefined);
+    const holders = projects.filter((repository) => repository.hasBaseRef);
+    const candidates = holders.length > 0 ? holders : projects;
+    const suggestion =
+      candidates.length === 0
+        ? "pass the projectId of a Git repository"
+        : `pass the projectId of the checkout's own project: ${candidates
+            .map((repository) => `"${repository.projectId}" (${repository.relativePath})`)
+            .join(", ")}`;
+    return `Use workspaceStrategy: {type: "root"}, or ${suggestion}.`;
+  }
   if (error._tag === "ThreadLaunchBranchConflictError") {
     const sibling = error.branch.replaceAll("/", "-");
     return `Use a name that does not nest under or contain an existing branch${

@@ -1238,7 +1238,20 @@ export const ProjectSettingsOverrides = Schema.Struct({
   providerInstances: Schema.optionalKey(
     Schema.Record(ProviderInstanceId, ProjectProviderInstanceOverride),
   ),
-} satisfies Record<ProjectScopedServerSettingKey | "providerInstances", unknown>);
+  /** Discovered checkouts join the project only once the user turns this on. */
+  umbrellaEnabled: Schema.optionalKey(Schema.Boolean),
+  /** Checkouts anywhere on this environment that join the project as umbrella members. */
+  umbrellaAdoptedPaths: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  /** Checkouts left out of the umbrella, including ones discovered under its root. */
+  umbrellaExcludedPaths: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+} satisfies Record<
+  | ProjectScopedServerSettingKey
+  | "providerInstances"
+  | "umbrellaEnabled"
+  | "umbrellaAdoptedPaths"
+  | "umbrellaExcludedPaths",
+  unknown
+>);
 export type ProjectSettingsOverrides = typeof ProjectSettingsOverrides.Type;
 
 // Whole-entry writers must round-trip unknown keys; keep the type closed to catch misspellings.

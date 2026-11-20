@@ -1,10 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { CheckpointRef, ThreadId, type VcsError } from "@t3tools/contracts";
+import { CheckpointRef, ThreadId, type VcsError, VcsProcessExitError } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -18,6 +19,7 @@ import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as UmbrellaMemberIndex from "../vcs/UmbrellaMemberIndex.ts";
 import * as ServerConfig from "../config.ts";
 
 function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number): CheckpointRef {
@@ -695,6 +697,346 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: refs.toCheckpointRef });
 
         expect(yield* checkpointStore.listAuthoredPaths(refs)).toEqual(new Set(["kept.txt"]));
+      }),
+    );
+  });
+  describe("umbrella members", () => {
+    const umbrellaStore = (root: string, members: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const index = UmbrellaMemberIndex.makeIndex();
+        yield* index.replace(
+          new Map([
+            [
+              root,
+              members.map((relativePath) => ({
+                path: NodePath.join(root, relativePath),
+                relativePath,
+              })),
+            ],
+          ]),
+        );
+        return yield* CheckpointStore.make.pipe(
+          // The shared registry memoized the git driver with an empty index.
+          Effect.provide(Layer.fresh(layerVcsDriverTest)),
+          Effect.provideService(UmbrellaMemberIndex.UmbrellaMemberIndex, index),
+        );
+      });
+
+    it.effect("checkpoints, diffs, and restores members under their own prefixes", () =>
+      Effect.gen(function* () {
+        const root = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(root);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const member = NodePath.join(root, "apps", "api");
+        yield* fileSystem.makeDirectory(member, { recursive: true });
+        yield* initRepoWithCommit(member);
+        yield* writeTextFile(NodePath.join(member, "notes.md"), buildLargeText(20));
+        const checkpointStore = yield* umbrellaStore(root, ["apps/api"]);
+        const threadId = ThreadId.make("thread-checkpoint-store-umbrella");
+        const refs = {
+          cwd: root,
+          fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+          toCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
+        };
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: root,
+          checkpointRef: refs.fromCheckpointRef,
+        });
+        yield* writeTextFile(NodePath.join(root, "README.md"), "# outer\n");
+        yield* writeTextFile(NodePath.join(member, "README.md"), "# member\n");
+        yield* writeTextFile(NodePath.join(member, "new.txt"), "new\n");
+        yield* fileSystem.rename(
+          NodePath.join(member, "notes.md"),
+          NodePath.join(member, "renamed.md"),
+        );
+        yield* checkpointStore.captureCheckpoint({
+          cwd: root,
+          checkpointRef: refs.toCheckpointRef,
+        });
+
+        const numstat = yield* checkpointStore.diffCheckpoints({
+          ...refs,
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        expect(
+          parseTurnDiffFilesFromNumstat(numstat).map((file) => [file.path, file.previousPath]),
+        ).toEqual([
+          ["apps/api/new.txt", undefined],
+          ["apps/api/README.md", undefined],
+          ["apps/api/renamed.md", "apps/api/notes.md"],
+          ["README.md", undefined],
+        ]);
+        const renamePatch = yield* checkpointStore.diffCheckpoints({
+          ...refs,
+          ignoreWhitespace: false,
+          filePaths: ["apps/api/renamed.md", "apps/api/notes.md"],
+        });
+        expect(renamePatch).toContain("rename from apps/api/notes.md\n");
+        expect(renamePatch).toContain("rename to apps/api/renamed.md\n");
+        const memberPatch = yield* checkpointStore.diffCheckpoints({
+          ...refs,
+          ignoreWhitespace: false,
+          filePaths: ["apps/api/README.md"],
+        });
+        expect(memberPatch).toContain("diff --git a/apps/api/README.md b/apps/api/README.md");
+        expect(memberPatch).not.toContain("new.txt");
+        expect(yield* git(root, ["ls-tree", "-r", "--name-only", refs.toCheckpointRef])).toBe(
+          "README.md",
+        );
+
+        expect(
+          yield* checkpointStore.restoreCheckpoint({
+            cwd: root,
+            checkpointRef: refs.fromCheckpointRef,
+          }),
+        ).toBe(true);
+        expect(yield* fileSystem.readFileString(NodePath.join(member, "README.md"))).toBe(
+          "# test\n",
+        );
+        expect(yield* fileSystem.exists(NodePath.join(member, "new.txt"))).toBe(false);
+        expect(yield* fileSystem.readFileString(NodePath.join(root, "README.md"))).toBe("# test\n");
+      }),
+    );
+
+    it.effect("checkpoints a repository umbrella whose members it ignores", () =>
+      Effect.gen(function* () {
+        const root = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(root);
+        yield* writeTextFile(NodePath.join(root, ".gitignore"), "/api/\n");
+        const fileSystem = yield* FileSystem.FileSystem;
+        const member = NodePath.join(root, "api");
+        yield* fileSystem.makeDirectory(member);
+        yield* initRepoWithCommit(member);
+        const checkpointStore = yield* umbrellaStore(root, ["api"]);
+        const threadId = ThreadId.make("thread-umbrella-ignored-member");
+        const refs = {
+          cwd: root,
+          fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+          toCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
+        };
+
+        yield* checkpointStore.captureCheckpoint({
+          cwd: root,
+          checkpointRef: refs.fromCheckpointRef,
+        });
+        yield* writeTextFile(NodePath.join(root, "README.md"), "# outer\n");
+        yield* writeTextFile(NodePath.join(member, "README.md"), "# member\n");
+        yield* checkpointStore.captureCheckpoint({
+          cwd: root,
+          checkpointRef: refs.toCheckpointRef,
+        });
+
+        const numstat = yield* checkpointStore.diffCheckpoints({
+          ...refs,
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+          "api/README.md",
+          "README.md",
+        ]);
+        expect(
+          yield* checkpointStore.restoreCheckpoint({
+            cwd: root,
+            checkpointRef: refs.fromCheckpointRef,
+          }),
+        ).toBe(true);
+        expect(yield* fileSystem.readFileString(NodePath.join(root, "README.md"))).toBe("# test\n");
+        expect(yield* fileSystem.readFileString(NodePath.join(member, "README.md"))).toBe(
+          "# test\n",
+        );
+      }),
+    );
+
+    it.effect("restores only members that changed and reports one that fails", () =>
+      Effect.gen(function* () {
+        const root = NodeFS.realpathSync.native(yield* makeTmpDir());
+        const fileSystem = yield* FileSystem.FileSystem;
+        for (const name of ["a-locked", "b-changed", "c-unchanged"]) {
+          yield* fileSystem.makeDirectory(NodePath.join(root, name));
+          yield* initRepoWithCommit(NodePath.join(root, name));
+        }
+        const unchanged = NodePath.join(root, "c-unchanged");
+        yield* writeTextFile(NodePath.join(unchanged, "staged.txt"), "staged\n");
+        yield* git(unchanged, ["add", "staged.txt"]);
+        const checkpointStore = yield* umbrellaStore(root, [
+          "a-locked",
+          "b-changed",
+          "c-unchanged",
+        ]);
+        const checkpointRef = checkpointRefForThreadTurn(
+          ThreadId.make("thread-umbrella-restore"),
+          0,
+        );
+        yield* checkpointStore.captureCheckpoint({ cwd: root, checkpointRef });
+
+        for (const name of ["a-locked", "b-changed"]) {
+          yield* writeTextFile(NodePath.join(root, name, "README.md"), "# edited\n");
+        }
+        yield* writeTextFile(NodePath.join(root, "a-locked", ".git", "index.lock"), "");
+
+        const error = yield* Effect.flip(
+          checkpointStore.restoreCheckpoint({ cwd: root, checkpointRef }),
+        );
+        expect(error.message).toContain("Could not restore a-locked:");
+        expect(error.message).not.toContain("b-changed");
+        expect(
+          yield* fileSystem.readFileString(NodePath.join(root, "b-changed", "README.md")),
+        ).toBe("# test\n");
+        // A member already matching the checkpoint is left alone, staged changes included.
+        expect(yield* git(unchanged, ["diff", "--cached", "--name-only"])).toBe("staged.txt");
+      }),
+    );
+
+    it.effect("fails the checkpoint when the umbrella's own repository cannot be captured", () =>
+      Effect.gen(function* () {
+        const root = "/clients/acme";
+        const member = `${root}/api`;
+        const captured: Array<string> = [];
+        const outerFailure = new VcsProcessExitError({
+          operation: "test.capture",
+          command: "git add",
+          cwd: root,
+          exitCode: 1,
+          detail: "outer capture failed",
+        });
+        const checkpointsFor = (cwd: string) =>
+          ({
+            captureCheckpoint: () =>
+              cwd === root
+                ? Effect.fail(outerFailure)
+                : Effect.sync(() => {
+                    captured.push(cwd);
+                  }),
+            // The umbrella's own ref is missing, as after a failed capture.
+            hasCheckpointRef: () => Effect.succeed(cwd !== root),
+            diffCheckpoints: () => Effect.succeed(cwd === root ? "outer-diff" : "member-diff"),
+          }) as unknown as VcsDriverRegistry.VcsDriverHandle["driver"]["checkpoints"];
+        const index = UmbrellaMemberIndex.makeIndex();
+        yield* index.replace(new Map([[root, [{ path: member, relativePath: "api" }]]]));
+        const checkpointStore = yield* CheckpointStore.make.pipe(
+          Effect.provide(
+            Layer.merge(
+              Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+                detect: ({ cwd }) =>
+                  Effect.succeed(cwd === root ? ({} as VcsDriverRegistry.VcsDriverHandle) : null),
+                resolve: ({ cwd }) =>
+                  Effect.succeed({
+                    driver: { checkpoints: checkpointsFor(cwd) },
+                  } as unknown as VcsDriverRegistry.VcsDriverHandle),
+              }),
+              FileSystem.layerNoop({ realPath: (value) => Effect.succeed(value) }),
+            ),
+          ),
+          Effect.provideService(UmbrellaMemberIndex.UmbrellaMemberIndex, index),
+        );
+        const checkpointRef = checkpointRefForThreadTurn(ThreadId.make("thread-outer-fail"), 1);
+
+        const error = yield* Effect.flip(
+          checkpointStore.captureCheckpoint({ cwd: root, checkpointRef }),
+        );
+        expect(error).toBe(outerFailure);
+        expect(captured).toEqual([]);
+        expect(
+          yield* checkpointStore.diffCheckpoints({
+            cwd: root,
+            fromCheckpointRef: checkpointRefForThreadTurn(ThreadId.make("thread-outer-fail"), 0),
+            toCheckpointRef: checkpointRef,
+            ignoreWhitespace: false,
+          }),
+        ).toBe("member-diff");
+      }),
+    );
+
+    it.effect("gives a plain umbrella folder checkpoints without making it a repository", () =>
+      Effect.gen(function* () {
+        const root = NodeFS.realpathSync.native(yield* makeTmpDir());
+        const member = NodePath.join(root, "site");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(member);
+        yield* initRepoWithCommit(member);
+        const checkpointStore = yield* umbrellaStore(root, ["site"]);
+
+        expect(yield* checkpointStore.isGitRepository(root)).toBe(false);
+        expect(yield* checkpointStore.hasCheckpointWorkspace(root)).toBe(true);
+      }),
+    );
+
+    it.effect("checkpoints and restores a worktree-mode thread's member worktrees", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const umbrella = NodeFS.realpathSync.native(yield* makeTmpDir());
+        const worktrees = NodeFS.realpathSync.native(yield* makeTmpDir());
+        yield* initRepoWithCommit(umbrella);
+        for (const name of ["api", "site"]) {
+          yield* fileSystem.makeDirectory(NodePath.join(umbrella, name));
+          yield* initRepoWithCommit(NodePath.join(umbrella, name));
+        }
+        // The thread's folder: the root's own worktree with each member's worktree inside it.
+        const folder = NodePath.join(worktrees, "thread");
+        yield* git(umbrella, ["worktree", "add", "-b", "thread", folder]);
+        for (const name of ["api", "site"]) {
+          yield* git(NodePath.join(umbrella, name), [
+            "worktree",
+            "add",
+            "-b",
+            "thread",
+            NodePath.join(folder, name),
+          ]);
+        }
+        yield* writeTextFile(
+          `${folder}.t3-umbrella.json`,
+          JSON.stringify({
+            version: 1,
+            umbrellaRoot: umbrella,
+            members: ["api", "site"].map((name) => ({
+              source: NodePath.join(umbrella, name),
+              path: name,
+            })),
+          }),
+        );
+        // Nothing registered the folder yet, as after a restart.
+        const checkpointStore = yield* umbrellaStore(
+          NodeFS.realpathSync.native(yield* makeTmpDir()),
+          [],
+        );
+        const threadId = ThreadId.make("thread-umbrella-worktree");
+        const baseline = checkpointRefForThreadTurn(threadId, 0);
+        const turn = checkpointRefForThreadTurn(threadId, 1);
+        yield* checkpointStore.captureCheckpoint({ cwd: folder, checkpointRef: baseline });
+        for (const name of ["api", "site"]) {
+          yield* writeTextFile(NodePath.join(folder, name, "README.md"), `# ${name} edited\n`);
+        }
+        yield* writeTextFile(NodePath.join(folder, "site", "new.md"), "new\n");
+        yield* checkpointStore.captureCheckpoint({ cwd: folder, checkpointRef: turn });
+
+        const numstat = yield* checkpointStore.diffCheckpoints({
+          cwd: folder,
+          fromCheckpointRef: baseline,
+          toCheckpointRef: turn,
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+          "api/README.md",
+          "site/new.md",
+          "site/README.md",
+        ]);
+        // The root's checkpoint leaves the members' worktrees out.
+        expect(yield* git(folder, ["ls-tree", "-r", "--name-only", turn])).toBe("README.md");
+
+        expect(
+          yield* checkpointStore.restoreCheckpoint({ cwd: folder, checkpointRef: baseline }),
+        ).toBe(true);
+        for (const name of ["api", "site"]) {
+          expect(yield* fileSystem.readFileString(NodePath.join(folder, name, "README.md"))).toBe(
+            "# test\n",
+          );
+          // The members' own checkouts are untouched.
+          expect(yield* git(NodePath.join(umbrella, name), ["status", "--porcelain"])).toBe("");
+        }
+        expect(yield* fileSystem.exists(NodePath.join(folder, "site", "new.md"))).toBe(false);
       }),
     );
   });

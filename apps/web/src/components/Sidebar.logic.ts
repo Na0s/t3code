@@ -38,6 +38,7 @@ import {
   type ThreadSortInput,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { SidebarThreadSummary, Thread } from "../types";
+import { parseTimestampDate } from "../timestampFormat";
 import { normalizeSearchText } from "../lib/utils";
 import { isLatestRunSettled } from "../session-logic";
 import { THREAD_STATUS_TEXT } from "@t3tools/client-runtime/state/thread-activity-announcement";
@@ -970,6 +971,36 @@ export function resolveSidebarRowStatus(
   return hasUnseenRunFailure(thread) ? status : "ready";
 }
 
+/** Woke shows from the wake until the user visits, unless the thread was settled since. */
+export function isSidebarThreadWoke(
+  thread: Pick<SidebarThreadSummary, "settledOverride"> & {
+    readonly lastVisitedAt?: string | null | undefined;
+  },
+  wokeAt: string | null,
+): boolean {
+  const wokeAtDate = wokeAt === null ? null : parseTimestampDate(wokeAt);
+  const visitedDate = thread.lastVisitedAt ? parseTimestampDate(thread.lastVisitedAt) : null;
+  return (
+    wokeAtDate !== null &&
+    (visitedDate === null || visitedDate < wokeAtDate) &&
+    thread.settledOverride !== "settled"
+  );
+}
+
+/** Whether a row shows a status such as Working, Waiting, Input, Done or Woke. */
+export function sidebarRowShowsStatus(
+  thread: ThreadStatusInput &
+    SidebarThreadStatusInput &
+    Pick<SidebarThreadSummary, "settledOverride">,
+  wokeAt: string | null,
+): boolean {
+  return (
+    resolveSidebarRowStatus(thread) !== "ready" ||
+    hasUnseenCompletion(thread) ||
+    isSidebarThreadWoke(thread, wokeAt)
+  );
+}
+
 /** What the window title says the open thread is doing, in the words its announcer uses. */
 export function resolveWindowTitleThreadStatus(thread: SidebarThreadStatusInput): string | null {
   // A guest waiting doesn't hide that the agent is still working.
@@ -1063,6 +1094,52 @@ export function groupSidebarThreadsByProject<
     folderByProject.get(`${thread.environmentId}:${thread.projectId}`)?.threads.push(thread);
   }
   return folders.filter((folder) => folder.threads.length > 0 || keepEmpty(folder.group));
+}
+
+/**
+ * The default sidebar's rows in runs: each umbrella's threads, its own and its members', gather
+ * at the place of its first thread, and every other thread is a run of one with no umbrella. A
+ * thread `gathers` rejects keeps its own place, as if it had no umbrella.
+ */
+export function gatherUmbrellaThreads<
+  TGroup extends {
+    readonly memberProjectRefs: ReadonlyArray<{
+      readonly environmentId: EnvironmentId;
+      readonly projectId: string;
+    }>;
+  },
+  TThread extends Pick<SidebarThreadSummary, "environmentId" | "projectId">,
+>(
+  umbrellas: readonly TGroup[],
+  threads: readonly TThread[],
+  gathers: (thread: TThread) => boolean,
+): Array<{ readonly umbrella: TGroup | null; readonly threads: TThread[] }> {
+  const umbrellaByProject = new Map<string, TGroup>();
+  for (const umbrella of umbrellas) {
+    for (const ref of umbrella.memberProjectRefs) {
+      umbrellaByProject.set(`${ref.environmentId}:${ref.projectId}`, umbrella);
+    }
+  }
+  const runs: Array<{ readonly umbrella: TGroup | null; readonly threads: TThread[] }> = [];
+  const runByUmbrella = new Map<TGroup, (typeof runs)[number]>();
+  for (const thread of threads) {
+    const umbrella = gathers(thread)
+      ? umbrellaByProject.get(`${thread.environmentId}:${thread.projectId}`)
+      : undefined;
+    if (umbrella === undefined) {
+      runs.push({ umbrella: null, threads: [thread] });
+      continue;
+    }
+    const run = runByUmbrella.get(umbrella);
+    if (run) {
+      run.threads.push(thread);
+      continue;
+    }
+    const created = { umbrella, threads: [thread] };
+    runByUmbrella.set(umbrella, created);
+    runs.push(created);
+  }
+  return runs;
 }
 
 export type SidebarV2TopStatusKind =

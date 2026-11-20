@@ -29,6 +29,7 @@ import {
   ThreadId,
   TextGenerationError,
   ServerSettingsError,
+  type UmbrellaMember,
   VcsProcessExitError,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -52,6 +53,8 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
+import { readUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -139,6 +142,10 @@ interface HarnessOptions {
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
   readonly isGitRepository?: CheckpointStore.CheckpointStore["Service"]["isGitRepository"];
+  readonly umbrellaMembers?: ReadonlyArray<UmbrellaMember>;
+  /** Checkouts a plain folder holds before its umbrella is turned on. */
+  readonly umbrellaSuggestions?: ReadonlyArray<UmbrellaMember>;
+  readonly getByWorkspaceRoot?: ProjectService.ProjectService["Service"]["getByWorkspaceRoot"];
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -206,7 +213,7 @@ function makeHarness(options: HarnessOptions = {}) {
               ? Option.some(otherProject)
               : Option.none(),
         ),
-      getByWorkspaceRoot: () => Effect.succeedSome(project),
+      getByWorkspaceRoot: options.getByWorkspaceRoot ?? (() => Effect.succeedSome(project)),
       workspaceScanDirectory: () => Effect.die("unused"),
       snapshot: Effect.die("unused"),
       getShell: () => Effect.die("unused"),
@@ -255,6 +262,20 @@ function makeHarness(options: HarnessOptions = {}) {
         layerReceipts,
         layerOrchestrator,
         IdAllocator.layer,
+        NodeServices.layer,
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-thread-launch-" }).pipe(
+          Layer.provide(NodeServices.layer),
+        ),
+        options.umbrellaMembers === undefined && options.umbrellaSuggestions === undefined
+          ? Layer.empty
+          : Layer.mock(UmbrellaMembership.UmbrellaMembership)({
+              stateOf: () =>
+                Effect.succeed({
+                  members: options.umbrellaMembers ?? [],
+                  suggestions: options.umbrellaSuggestions ?? [],
+                  enclosingRepository: null,
+                }),
+            }),
         options.getLaunchSettings === undefined
           ? Layer.empty
           : Layer.mock(ServerSettings.ServerSettingsService)({
@@ -3144,6 +3165,259 @@ it.effect.each(["origin/master", ":/initial"])(
         });
       }).pipe(Effect.provide(harness.layer));
     }),
+);
+
+it.effect("checks out every member of an umbrella inside the root's own worktree", () =>
+  Effect.gen(function* () {
+    const folder = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+      prefix: "t3-umbrella-thread-",
+    });
+    const members: ReadonlyArray<UmbrellaMember> = [
+      { path: "/repo/api", relativePath: "api", repositoryIdentity: null, source: "nested" },
+      {
+        path: "/elsewhere/site",
+        relativePath: "../elsewhere/site",
+        repositoryIdentity: null,
+        source: "adopted",
+      },
+    ];
+    const setupStarted = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      umbrellaMembers: members,
+      hasCommit: () => Effect.succeed(true),
+      git: { currentBranch: () => Effect.succeed("main") },
+      createWorktree: (input) =>
+        Effect.succeed({
+          worktree: { path: input.path ?? folder, refName: input.newRefName!, headSha: "abc" },
+        } as never),
+      runSetup: () =>
+        Deferred.succeed(setupStarted, undefined).pipe(Effect.as({ status: "no-script" as const })),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const workspace = { type: "worktree" as const, baseRef: "HEAD", branch: "feature" };
+      yield* launches.checkWorktreeBase({ projectId, workspaceStrategy: workspace });
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:umbrella",
+          thread: "thread:launch:umbrella",
+          workspace,
+        }),
+      );
+      yield* Deferred.await(setupStarted);
+      const { thread } = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(thread.branch, "feature");
+      assert.equal(thread.worktreePath, folder);
+      const layout = yield* readUmbrellaWorktree(thread.worktreePath!).pipe(
+        Effect.provide(NodeServices.layer),
+      );
+      assert.deepEqual(layout?.members, [
+        { source: "/repo/api", path: "api" },
+        { source: "/elsewhere/site", path: "_external/site" },
+      ]);
+      // Members are checked out concurrently, so the call order is not fixed.
+      assert.deepEqual(
+        harness.createWorktree.mock.calls
+          .map(([input]) => [input.cwd, input.path, input.newRefName])
+          .toSorted(([a], [b]) => String(a).localeCompare(String(b))),
+        [
+          ["/elsewhere/site", `${folder}/_external/site`, "feature"],
+          [project.workspaceRoot, null, "feature"],
+          ["/repo/api", `${folder}/api`, "feature"],
+        ],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+const plainFolderCheckouts: ReadonlyArray<UmbrellaMember> = [
+  { path: "/repo/app", relativePath: "app", repositoryIdentity: null, source: "nested" },
+  {
+    path: "/repo/dev-setup",
+    relativePath: "dev-setup",
+    repositoryIdentity: null,
+    source: "nested",
+  },
+];
+const appProjectId = ProjectId.make("project-app");
+// Only `/repo/app` has the base branch, and only it is registered as its own project.
+const plainFolderHarness = (options: HarnessOptions = {}) =>
+  makeHarness({
+    umbrellaSuggestions: plainFolderCheckouts,
+    getByWorkspaceRoot: (root) =>
+      Effect.succeed(
+        root === "/repo/app"
+          ? Option.some({ ...project, id: appProjectId, title: "app" })
+          : Option.none(),
+      ),
+    hasCommit: (input) =>
+      Effect.succeed(input.cwd === "/repo/app" && input.refName === "origin/develop"),
+    ...options,
+    git: {
+      repositoryRoot: (cwd) => Effect.succeed(cwd === project.workspaceRoot ? null : cwd),
+      hasRefNamed: () => Effect.succeed(false),
+      ...options.git,
+    },
+  });
+
+it.effect(
+  "names a plain folder's checkouts, and which has the base, when refusing its worktree",
+  () =>
+    Effect.gen(function* () {
+      const harness = plainFolderHarness();
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const result = yield* launches
+          .checkWorktreeBase({
+            projectId,
+            workspaceStrategy: {
+              type: "worktree",
+              baseRef: "origin/develop",
+              startFromOrigin: true,
+            },
+          })
+          .pipe(Effect.result);
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) {
+          const failure = result.failure;
+          assert.instanceOf(failure, ThreadLaunch.ThreadLaunchNotRepositoryError);
+          if (failure._tag !== "ThreadLaunchNotRepositoryError") return;
+          assert.deepEqual(failure.nestedRepositories, [
+            { relativePath: "app", projectId: appProjectId, projectTitle: "app", hasBaseRef: true },
+            { relativePath: "dev-setup", hasBaseRef: false },
+          ]);
+          assert.include(failure.message, "It holds Git repositories: app, dev-setup.");
+          assert.include(failure.message, '"origin/develop" is in app (project "app").');
+        }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "refuses a plain folder's worktree with its checkouts when preparation skipped the check",
+  () =>
+    Effect.gen(function* () {
+      const harness = plainFolderHarness();
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        // launch() alone does not run checkWorktreeBase, as a retried or replayed launch does not.
+        const launched = yield* launches.launch(
+          launchInput({
+            command: "command:launch:plain-folder",
+            thread: "thread:launch:plain-folder",
+            message: "Fix CI",
+            workspace: { type: "worktree", baseRef: "origin/develop", startFromOrigin: true },
+          }),
+        );
+        yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" && stored.event.payload.status === "failed",
+          ),
+          Stream.runHead,
+        );
+        const projection = yield* threads.getThreadProjection(launched.threadId);
+        const message =
+          projection.turnItems.find((item) => item.type === "error")?.failure.message ?? "";
+        assert.include(
+          message,
+          "is not a Git repository. It holds Git repositories: app, dev-setup.",
+        );
+        assert.notInclude(message, "VCS driver");
+        assert.equal(harness.createWorktree.mock.calls.length, 0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("refuses a plain umbrella folder's worktree, naming its members' projects", () =>
+  Effect.gen(function* () {
+    const harness = plainFolderHarness({
+      umbrellaMembers: plainFolderCheckouts,
+      umbrellaSuggestions: [],
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const failure = yield* launches
+        .checkWorktreeBase({
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef: "origin/develop" },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(failure, ThreadLaunch.ThreadLaunchNotRepositoryError);
+      if (failure._tag !== "ThreadLaunchNotRepositoryError") return;
+      assert.isTrue(failure.umbrella);
+      assert.include(
+        failure.message,
+        "Umbrella worktrees need the umbrella folder to be a Git repository",
+      );
+      assert.include(failure.message, 'Its member checkouts are app (project "app"), dev-setup.');
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+// The umbrella root is a repository with only its own HEAD; members are as above.
+const gitRootUmbrella: HarnessOptions = {
+  umbrellaMembers: plainFolderCheckouts,
+  umbrellaSuggestions: [],
+  hasCommit: (input) =>
+    Effect.succeed(
+      input.cwd === project.workspaceRoot
+        ? input.refName === "HEAD"
+        : input.cwd === "/repo/app" && input.refName === "origin/develop",
+    ),
+  git: { repositoryRoot: (cwd) => Effect.succeed(cwd) },
+};
+
+it.effect("accepts an umbrella base ref that only one of its checkouts has", () =>
+  Effect.gen(function* () {
+    const harness = plainFolderHarness(gitRootUmbrella);
+    yield* ThreadLaunch.ThreadLaunchService.pipe(
+      Effect.flatMap((launches) =>
+        launches.checkWorktreeBase({
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef: "origin/develop" },
+        }),
+      ),
+      Effect.provide(harness.layer),
+    );
+  }),
+);
+
+it.effect("refuses an umbrella base ref that none of its checkouts has", () =>
+  Effect.gen(function* () {
+    const harness = plainFolderHarness({
+      ...gitRootUmbrella,
+      fetchWorktreeBaseCommit: () => Effect.succeed(null),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const result = yield* launches
+        .checkWorktreeBase({
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef: "release/9", startFromOrigin: true },
+        })
+        .pipe(Effect.result);
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, ThreadLaunch.ThreadLaunchBaseRefError);
+        assert.include(
+          result.failure.message,
+          'Base ref "release/9" does not resolve to a commit in project',
+        );
+        assert.include(
+          result.failure.message,
+          "or in any of its umbrella checkouts (app, dev-setup).",
+        );
+      }
+      // HEAD means each checkout's own branch, which every checkout has.
+      yield* launches.checkWorktreeBase({
+        projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "HEAD" },
+      });
+    }).pipe(Effect.provide(harness.layer));
+  }),
 );
 
 it.effect("leaves uncertain Git detection failures to workspace preparation", () =>
