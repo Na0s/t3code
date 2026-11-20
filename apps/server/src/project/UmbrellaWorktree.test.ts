@@ -262,7 +262,7 @@ it.layer(layerTest)("UmbrellaWorktree", (it) => {
         submodules: null,
       });
       const renamed = yield* worktrees.renameBranch({
-        worktreePath: created.path,
+        cwd: created.path,
         oldBranch: created.branch,
         newBranch: "feature/renamed",
         exactName: true,

@@ -363,29 +363,14 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
     return true;
   });
 
-  /** Renames the thread branch in every repository, all to the first repository's resulting name. */
-  const renameBranch = Effect.fn("UmbrellaWorktree.renameBranch")(function* (input: {
-    readonly worktreePath: string;
-    readonly oldBranch: string;
-    readonly newBranch: string;
-    readonly exactName?: boolean;
-  }) {
-    const layout = yield* local(readUmbrellaWorktree(input.worktreePath));
-    if (layout === null) {
-      return yield* fail(
-        "UmbrellaWorktree.renameBranch",
-        `${input.worktreePath} is not an umbrella worktree.`,
-      );
-    }
-    const [first, ...rest] = umbrellaWorktreeRepositories(path, layout);
-    if (first === undefined) return { branch: input.oldBranch };
-    const renamed = yield* git.renameBranch({
-      cwd: first.cwd,
-      oldBranch: input.oldBranch,
-      newBranch: input.newBranch,
-      ...(input.exactName ? { exactName: true } : {}),
-    });
-    for (const repository of rest) {
+  /** Renames the thread branch in the folder and, in an umbrella worktree, every member to the same name. */
+  const renameBranch = Effect.fn("UmbrellaWorktree.renameBranch")(function* (
+    input: Parameters<typeof git.renameBranch>[0],
+  ) {
+    const renamed = yield* git.renameBranch(input);
+    const layout = yield* local(readUmbrellaWorktree(input.cwd));
+    const members = layout === null ? [] : umbrellaWorktreeRepositories(path, layout).slice(1);
+    for (const repository of members) {
       yield* git
         .renameBranch({
           cwd: repository.cwd,

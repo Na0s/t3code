@@ -1010,31 +1010,24 @@ const make = Effect.gen(function* () {
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;
-        const umbrellaWorktree = (yield* umbrellaWorktrees.read(worktreeCwd)) !== null;
         branchRename = yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
-            (umbrellaWorktree
-              ? umbrellaWorktrees.renameBranch({
-                  worktreePath: worktreeCwd,
-                  oldBranch,
-                  newBranch,
-                  ...(exactName ? { exactName: true } : {}),
-                })
-              : git.renameBranch({
-                  cwd: worktreeCwd,
-                  oldBranch,
-                  newBranch,
-                  ...(exactName ? { exactName: true } : {}),
-                })
-            ).pipe(
-              // A cancel must see the renamed branch, or its cleanup deletes the old name.
-              Effect.tap((renamed) =>
-                Effect.sync(() => {
-                  createdBranch = renamed.branch;
-                }),
+            umbrellaWorktrees
+              .renameBranch({
+                cwd: worktreeCwd,
+                oldBranch,
+                newBranch,
+                ...(exactName ? { exactName: true } : {}),
+              })
+              .pipe(
+                // A cancel must see the renamed branch, or its cleanup deletes the old name.
+                Effect.tap((renamed) =>
+                  Effect.sync(() => {
+                    createdBranch = renamed.branch;
+                  }),
+                ),
+                Effect.uninterruptible,
               ),
-              Effect.uninterruptible,
-            ),
           ),
           Effect.flatMap((renamed) =>
             Effect.gen(function* () {
