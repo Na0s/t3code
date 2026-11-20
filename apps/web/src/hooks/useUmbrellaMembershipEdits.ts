@@ -4,7 +4,6 @@ import {
   adoptUmbrellaMember,
   removeUmbrellaMember,
   restoreUmbrellaMember,
-  setUmbrellaEnabled,
   umbrellaMemberLabel,
 } from "@t3tools/client-runtime/state/umbrella";
 import type { ProjectSettingsOverrides, UmbrellaMember } from "@t3tools/contracts";
@@ -33,7 +32,7 @@ export function useUmbrellaMembershipEdits() {
     edit(umbrella, (current) => removeUmbrellaMember(umbrella, current, member));
   return {
     setEnabled: (umbrella: Umbrella, enabled: boolean) =>
-      edit(umbrella, (current) => setUmbrellaEnabled(current, enabled)),
+      edit(umbrella, () => ({ umbrellaEnabled: enabled })),
     /** Lists the checkouts that will join, then turns the umbrella on once the user confirms. */
     confirmEnable: async (
       umbrella: Umbrella & Pick<EnvironmentProject, "title" | "umbrellaSuggestions">,
@@ -43,7 +42,7 @@ export function useUmbrellaMembershipEdits() {
         { initialFocus: "confirm" },
       );
       if (confirmed !== true) return;
-      edit(umbrella, (current) => setUmbrellaEnabled(current, true));
+      edit(umbrella, () => ({ umbrellaEnabled: true }));
       const names = (umbrella.umbrellaSuggestions ?? []).map(umbrellaMemberLabel).join(", ");
       toastManager.add({
         type: "success",

@@ -95,26 +95,6 @@ function without(root: string, entries: ReadonlyArray<string> | undefined, path:
   return (entries ?? []).filter((entry) => !sameSettingPath(root, entry, path));
 }
 
-function withPaths(
-  overrides: UmbrellaOverrides | undefined,
-  adopted: ReadonlyArray<string>,
-  excluded: ReadonlyArray<string>,
-): UmbrellaOverrides {
-  return {
-    ...overrides,
-    umbrellaAdoptedPaths: adopted,
-    umbrellaExcludedPaths: excluded,
-  };
-}
-
-/** Turns the umbrella on or off; discovered checkouts wait for this, adopted ones turn it on. */
-export function setUmbrellaEnabled(
-  overrides: UmbrellaOverrides | undefined,
-  enabled: boolean,
-): UmbrellaOverrides {
-  return { ...overrides, umbrellaEnabled: enabled };
-}
-
 /** Adds a checkout, lifting an exclusion that hid it, and turns the umbrella on. */
 export function adoptUmbrellaMember(
   umbrella: Pick<UmbrellaProject, "workspaceRoot">,
@@ -122,11 +102,12 @@ export function adoptUmbrellaMember(
   path: string,
 ): UmbrellaOverrides {
   const root = umbrella.workspaceRoot;
-  return withPaths(
-    setUmbrellaEnabled(overrides, true),
-    [...without(root, overrides?.umbrellaAdoptedPaths, path), path],
-    without(root, overrides?.umbrellaExcludedPaths, path),
-  );
+  return {
+    ...overrides,
+    umbrellaEnabled: true,
+    umbrellaAdoptedPaths: [...without(root, overrides?.umbrellaAdoptedPaths, path), path],
+    umbrellaExcludedPaths: without(root, overrides?.umbrellaExcludedPaths, path),
+  };
 }
 
 /** Drops a member: an adopted one is forgotten, a discovered one is excluded so scans skip it. */
@@ -137,11 +118,11 @@ export function removeUmbrellaMember(
 ): UmbrellaOverrides {
   const root = umbrella.workspaceRoot;
   const excluded = without(root, overrides?.umbrellaExcludedPaths, member.path);
-  return withPaths(
-    overrides,
-    without(root, overrides?.umbrellaAdoptedPaths, member.path),
-    member.source === "nested" ? [...excluded, member.path] : excluded,
-  );
+  return {
+    ...overrides,
+    umbrellaAdoptedPaths: without(root, overrides?.umbrellaAdoptedPaths, member.path),
+    umbrellaExcludedPaths: member.source === "nested" ? [...excluded, member.path] : excluded,
+  };
 }
 
 /** Lets a discovered checkout back in. */
@@ -150,11 +131,11 @@ export function restoreUmbrellaMember(
   overrides: UmbrellaOverrides | undefined,
   path: string,
 ): UmbrellaOverrides {
-  return withPaths(
-    overrides,
-    overrides?.umbrellaAdoptedPaths ?? [],
-    without(umbrella.workspaceRoot, overrides?.umbrellaExcludedPaths, path),
-  );
+  return {
+    ...overrides,
+    umbrellaAdoptedPaths: overrides?.umbrellaAdoptedPaths ?? [],
+    umbrellaExcludedPaths: without(umbrella.workspaceRoot, overrides?.umbrellaExcludedPaths, path),
+  };
 }
 
 /** Umbrellas on the project's environment that could adopt its folder. */
