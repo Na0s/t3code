@@ -44,5 +44,4 @@ settings. On macOS the panel has no close, minimise or zoom buttons.
 
 The panel's tabs show your other open windows, the multiple windows switch, the list your Pull
 requests page opens with, each provider's usage limits, and whether an update is ready. It opens on
-**Usage**, which rereads the limits when the tab opens, when the window regains focus, and on
-**Refresh limits**.
+**Usage**, which rereads the limits when the tab opens if they are more than five minutes old.

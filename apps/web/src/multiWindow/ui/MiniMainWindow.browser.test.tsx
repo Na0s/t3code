@@ -1,6 +1,7 @@
 import "../../index.css";
 
 import type { DesktopOpenWindow, DesktopUpdateState } from "@t3tools/contracts";
+import type { LimitPresentations } from "@t3tools/shared/usageLimits";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
@@ -23,7 +24,6 @@ import { MiniPullRequestList } from "./MiniPullRequests";
 import { MiniSettings } from "./MiniSettings";
 import { MiniUpdate } from "./MiniUpdate";
 import { MiniUsageSection } from "./MiniUsage";
-import { deriveMiniUsage, type MiniUsagePresentations } from "./miniUsage.logic";
 import { MiniWindows } from "./MiniWindows";
 
 const mocks = vi.hoisted(() => ({ update: null as DesktopUpdateState | null }));
@@ -51,7 +51,7 @@ const makeActions = () => ({
 });
 
 interface PanelOptions {
-  readonly usage?: MiniUsagePresentations;
+  readonly usage?: LimitPresentations;
   readonly windows?: readonly DesktopOpenWindow[] | null;
   readonly multiWindowEnabled?: boolean;
   readonly pullRequestsSupported?: boolean;
@@ -96,13 +96,7 @@ function Panel({
       ) : tab === "update" ? (
         <MiniUpdate />
       ) : (
-        <MiniUsageSection
-          usage={deriveMiniUsage(usage, FIXTURE_NOW)}
-          now={FIXTURE_NOW}
-          refreshing={false}
-          onRefresh={() => {}}
-          onOpenExternal={() => {}}
-        />
+        <MiniUsageSection presentations={usage} now={FIXTURE_NOW} />
       )}
     </MiniPanel>
   );
@@ -125,6 +119,7 @@ describe("MiniPanel", () => {
     await using _screen = screen;
 
     await expect.element(screen.getByText("62% left")).toBeVisible();
+    expect(document.documentElement.scrollWidth).toBe(320);
     for (const tab of ["Windows", "Settings", "Pull requests", "Update", "Usage"]) {
       await openTab(tab);
       await expect
@@ -211,20 +206,10 @@ describe("MiniPanel", () => {
     expect(viewport.scrollWidth).toBe(viewport.clientWidth);
   });
 
-  it("says why Usage has no limits: still loading, none reported, or unavailable", async () => {
-    const { screen, actions } = await renderPanel({ usage: presentations(null, "connecting") });
+  it("says when Usage has no limits, and why", async () => {
+    const { screen } = await renderPanel({ usage: presentations([CLAUDE_UNREADABLE]) });
     await using _screen = screen;
-    await expect
-      .element(screen.getByRole("status", { name: "Loading usage limits" }))
-      .toBeVisible();
-
-    const rerender = (usage: MiniUsagePresentations) =>
-      screen.rerender(<Panel usage={usage} actions={actions} />);
-    await rerender(presentations([]));
-    await expect.element(screen.getByText(/No provider reports plan limits yet/)).toBeVisible();
-
-    await rerender(presentations([CLAUDE_UNREADABLE]));
-    await expect.element(screen.getByText("Limits unavailable")).toBeVisible();
+    await expect.element(screen.getByText("Usage unavailable")).toBeVisible();
     await expect
       .element(screen.getByText("Claude: Could not read limits. Sign in again."))
       .toBeVisible();

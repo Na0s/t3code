@@ -10,9 +10,9 @@ import {
   type ServerProviderUsageWindow,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import type { LimitPresentations } from "@t3tools/shared/usageLimits";
 
 import type { EnvironmentPullRequestEntry } from "../../components/pullRequest/pullRequestList.logic";
-import type { MiniUsagePresentations } from "./miniUsage.logic";
 import type { MiniWindowProject } from "./MiniWindows";
 
 export const FIXTURE_NOW = Date.parse("2026-10-25T16:00:00.000Z");
@@ -20,7 +20,7 @@ const HOUR = 3_600_000;
 
 const iso = (offsetMs: number) => new Date(FIXTURE_NOW + offsetMs).toISOString();
 
-export function usageWindow(
+function usageWindow(
   id: string,
   kind: ServerProviderUsageWindow["kind"],
   label: string,
@@ -38,10 +38,10 @@ export function usageWindow(
   };
 }
 
-export function provider(
+function provider(
   driver: string,
-  usageLimits: Partial<ServerProviderUsageLimits> | undefined,
-  options: { readonly plan?: string; readonly email?: string; readonly name?: string } = {},
+  usageLimits: Partial<ServerProviderUsageLimits>,
+  options: { readonly plan?: string; readonly name?: string } = {},
 ): ServerProvider {
   return {
     instanceId: ProviderInstanceId.make(options.name ? `${driver}_${options.name}` : driver),
@@ -51,34 +51,20 @@ export function provider(
     installed: true,
     version: "1.0.0",
     status: "ready",
-    auth: {
-      status: "authenticated",
-      ...(options.plan ? { label: options.plan } : {}),
-      ...(options.email ? { email: options.email } : {}),
-    },
+    auth: { status: "authenticated", ...(options.plan ? { label: options.plan } : {}) },
     checkedAt: iso(-4 * 60_000),
     models: [],
     slashCommands: [],
     skills: [],
-    ...(usageLimits
-      ? { usageLimits: { checkedAt: iso(-4 * 60_000), windows: [], ...usageLimits } }
-      : {}),
+    usageLimits: { checkedAt: iso(-4 * 60_000), windows: [], ...usageLimits },
   };
 }
 
-export function presentations(
-  providers: readonly ServerProvider[] | null,
-  phase = "connected",
-  label = "Desk",
-): MiniUsagePresentations {
+export function presentations(providers: readonly ServerProvider[]): LimitPresentations {
   return new Map([
     [
-      EnvironmentId.make(label.toLowerCase()),
-      {
-        entry: { target: { label } },
-        connection: { phase },
-        serverConfig: providers === null ? null : { providers },
-      },
+      EnvironmentId.make("desk"),
+      { entry: { target: { label: "Desk" } }, serverConfig: { providers } },
     ],
   ]);
 }
