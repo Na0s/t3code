@@ -261,6 +261,8 @@ export interface ProjectGroup<TProject extends EnvironmentProject = EnvironmentP
   readonly members: ReadonlyArray<ProjectGroupMember<TProject>>;
   /** Projects folded into an umbrella group, by scoped project key, with the member they matched. */
   readonly umbrellaMembers: ReadonlyMap<string, UmbrellaMember>;
+  /** The keys of the groups those folded projects left, so scopes saved with them follow. */
+  readonly foldedProjectKeys: ReadonlyArray<string>;
   readonly memberProjectRefs: ReadonlyArray<ScopedProjectRef>;
   /** Clients write every member together. When members still disagree, the project stays visible. */
   readonly pinned: boolean;
@@ -370,14 +372,20 @@ export function findUmbrellaMembership<
   return null;
 }
 
+interface Fold {
+  readonly key: string;
+  readonly ownKey: string;
+  readonly member: UmbrellaMember;
+}
+
 /** Where each umbrella member project folds, when that is not already its own group. */
 function foldIntoUmbrellas<TProject extends EnvironmentProject>(
   winners: ReadonlyMap<string, TProject>,
   logicalKeyByPhysicalKey: ReadonlyMap<string, string>,
   settings: ProjectGroupingSettings,
-): Map<string, { readonly key: string; readonly member: UmbrellaMember }> {
+): Map<string, Fold> {
   const umbrellas = [...winners.values()].filter(isUmbrellaProject);
-  const folded = new Map<string, { readonly key: string; readonly member: UmbrellaMember }>();
+  const folded = new Map<string, Fold>();
   if (umbrellas.length === 0) return folded;
   for (const [physicalKey, project] of winners) {
     // Umbrellas never fold into another.
@@ -385,9 +393,8 @@ function foldIntoUmbrellas<TProject extends EnvironmentProject>(
     const membership = findUmbrellaMembership(project, umbrellas, settings);
     if (membership === null) continue;
     const key = logicalKeyByPhysicalKey.get(derivePhysicalProjectKey(membership.umbrella))!;
-    if (key !== logicalKeyByPhysicalKey.get(physicalKey)) {
-      folded.set(physicalKey, { key, member: membership.member });
-    }
+    const ownKey = logicalKeyByPhysicalKey.get(physicalKey)!;
+    if (key !== ownKey) folded.set(physicalKey, { key, ownKey, member: membership.member });
   }
   return folded;
 }
@@ -499,6 +506,9 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
       representative,
       members,
       umbrellaMembers: umbrellaMembersByProjectRef.get(key) ?? EMPTY_UMBRELLA_MEMBERS,
+      foldedProjectKeys: members.flatMap(
+        (member) => folded.get(member.physicalProjectKey)?.ownKey ?? [],
+      ),
       memberProjectRefs: projectRefsByLogicalKey.get(key) ?? [],
       pinned: members.some((member) => member.project.pinnedAt != null),
       archived: members.every((member) => member.project.archivedAt != null),

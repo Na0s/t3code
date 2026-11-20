@@ -9,6 +9,7 @@ import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
   resolveSidebarProjectScopeKey,
+  resolveSidebarProjectScopeKeys,
   getSidebarProjectSettingsKey,
 } from "./sidebarProjectGrouping";
 import type { Project } from "./types";
@@ -123,6 +124,36 @@ describe("environment grouping", () => {
     });
     const key = deriveLogicalProjectKeyFromSettings(ordinary, defaultGroupingSettings);
     expect(resolveSidebarProjectScopeKey({ groups, key, canClearMissingScope: true })).toBe(key);
+  });
+
+  it("moves a saved project scope into the umbrella its project folds into", () => {
+    const api = makeProject({ id: ProjectId.make("api"), workspaceRoot: "/clients/acme/api" });
+    const acme = makeProject({
+      id: ProjectId.make("acme"),
+      title: "acme",
+      workspaceRoot: "/clients/acme",
+      umbrellaMembers: [
+        {
+          path: api.workspaceRoot,
+          relativePath: "api",
+          repositoryIdentity: null,
+          source: "nested",
+        },
+      ],
+    });
+    const groupsOf = (projects: Project[]) =>
+      buildSidebarProjectSnapshots({
+        projects,
+        settings: defaultGroupingSettings,
+        primaryEnvironmentId,
+        resolveEnvironmentLabel: () => null,
+      });
+    const saved = groupsOf([api]).map((group) => group.projectKey);
+    const groups = groupsOf([acme, api]);
+    expect(groups).toHaveLength(1);
+    expect(
+      resolveSidebarProjectScopeKeys({ groups, keys: saved, canClearMissingScope: true }),
+    ).toEqual([groups[0]!.projectKey]);
   });
 
   it("dedupes stale project rows with the same environment and workspace path", () => {

@@ -97,6 +97,7 @@ const group: SidebarProjectSnapshot = {
   allRemoteMembersAreDesktopLocal: false,
   allRemoteMembersAreWsl: false,
   foldedUmbrellaMembers: new Map(),
+  foldedProjectKeys: [],
   remoteEnvironmentLabels: [server.label, laptop.label],
   pinned: false,
   archived: false,

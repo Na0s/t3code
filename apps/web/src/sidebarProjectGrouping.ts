@@ -47,6 +47,7 @@ export interface SidebarProjectSnapshot extends Project {
   memberProjectRefs: readonly ScopedProjectRef[];
   /** Projects folded in as umbrella members, by `environmentId:projectId`. */
   foldedUmbrellaMembers: ReadonlyMap<string, UmbrellaMember>;
+  foldedProjectKeys: ReadonlyArray<string>;
   remoteEnvironmentLabels: readonly string[];
   pinned: boolean;
   archived: boolean;
@@ -98,16 +99,19 @@ export function resolveSidebarProjectScopeKey(input: {
   readonly settings?: ProjectGroupingSettings;
   readonly canClearMissingScope?: boolean;
 }): string | null {
-  if (input.key === null) return null;
+  const { key } = input;
+  if (key === null) return null;
   const group =
-    input.groups.find((candidate) => candidate.projectKey === input.key) ??
+    input.groups.find((candidate) => candidate.projectKey === key) ??
+    // A project folded into an umbrella takes the scopes saved for its own group along.
+    input.groups.find((candidate) => candidate.foldedProjectKeys.includes(key)) ??
     input.groups.find(
       (candidate) =>
         candidate.isScratch &&
-        resolveScratchProjectScopeKey(input.key, candidate.memberProjects, input.settings) ===
+        resolveScratchProjectScopeKey(key, candidate.memberProjects, input.settings) ===
           candidate.projectKey,
     );
-  return group?.projectKey ?? (input.canClearMissingScope ? null : input.key);
+  return group?.projectKey ?? (input.canClearMissingScope ? null : key);
 }
 
 export function resolveSidebarProjectScopeKeys(input: {
@@ -203,6 +207,7 @@ export function buildSidebarProjectSnapshots(input: {
       memberProjects: members,
       memberProjectRefs: group.memberProjectRefs,
       foldedUmbrellaMembers: group.umbrellaMembers,
+      foldedProjectKeys: group.foldedProjectKeys,
       remoteEnvironmentLabels,
       pinned: group.pinned,
       archived: group.archived,

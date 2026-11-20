@@ -54,6 +54,7 @@ function group(
     allRemoteMembersAreDesktopLocal: false,
     allRemoteMembersAreWsl: false,
     foldedUmbrellaMembers: new Map(),
+    foldedProjectKeys: [],
     remoteEnvironmentLabels: [],
     pinned: false,
     archived: false,
