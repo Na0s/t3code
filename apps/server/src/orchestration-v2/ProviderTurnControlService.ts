@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { makeFleetBotProjector } from "../fleetBots.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -119,6 +120,7 @@ export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
+    const projectFleetBotMentions = yield* makeFleetBotProjector;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
 
@@ -455,10 +457,25 @@ export const layer: Layer.Layer<
                 : { modelSelection: input.modelSelection }),
               message: {
                 messageId: message.id,
-                text: projectComposerContextForProvider({
-                  text: message.text,
-                  records: message.context?.records ?? [],
-                }),
+                text: yield* projectFleetBotMentions({
+                  mentionText: message.text,
+                  text: projectComposerContextForProvider({
+                    text: message.text,
+                    records: message.context?.records ?? [],
+                  }),
+                  threadId: input.threadId,
+                  messageId: message.id,
+                }).pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new ProviderTurnControlError({
+                        threadId: input.threadId,
+                        operation: "steer",
+                        providerTurnId: input.providerTurnId,
+                        cause: error.detail,
+                      }),
+                  ),
+                ),
                 attachments: message.attachments,
                 createdBy: message.createdBy,
                 creationSource: message.creationSource,

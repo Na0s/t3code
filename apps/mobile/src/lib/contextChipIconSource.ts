@@ -19,8 +19,15 @@ const isRasterIconUrl = (url: string | undefined): url is string =>
 /** A provider's own raster image, else its bundled logo, else a generic glyph; colored logos carry an accent. */
 export function modelChipIcon(model: {
   readonly driver: string;
+  readonly accent?: string;
   readonly iconUrl?: string | undefined;
 }): (typeof PROVIDER_CHIP_ICONS)[string] {
+  if (model.driver === "fleet-bot")
+    return {
+      source: CONTEXT_CHIP_ICON_SOURCES.bot,
+      tintsIcon: true,
+      ...(model.accent ? { accent: model.accent } : {}),
+    };
   if (isRasterIconUrl(model.iconUrl)) return { source: { uri: model.iconUrl }, tintsIcon: false };
   return (
     PROVIDER_CHIP_ICONS[model.driver] ?? { source: CONTEXT_CHIP_ICON_SOURCES.bot, tintsIcon: true }
@@ -28,5 +35,7 @@ export function modelChipIcon(model: {
 }
 
 export function modelChipIconUri(model: Parameters<typeof modelChipIcon>[0]): string | null {
-  return markdownIconAssetUri(modelChipIcon(model).source) ?? null;
+  return model.driver === "fleet-bot"
+    ? null
+    : (markdownIconAssetUri(modelChipIcon(model).source) ?? null);
 }

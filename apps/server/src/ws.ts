@@ -114,6 +114,7 @@ import { RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as ServerConfig from "./config.ts";
+import { discoverFleetBots } from "./fleetBots.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -399,7 +400,16 @@ export const withLateConfigDiscovery = <E, R>(
           case "providerStatuses":
             return [{ ...current, providers: event.payload.providers }, [event]];
           case "settingsUpdated":
-            return [{ ...current, settings: event.payload.settings }, [event]];
+            return [
+              {
+                ...current,
+                settings: event.payload.settings,
+                ...(event.payload.fleetBots === undefined
+                  ? {}
+                  : { fleetBots: event.payload.fleetBots }),
+              },
+              [event],
+            ];
           // Themes and usage-limit sources survive snapshots because snapshots never include them.
           default:
             return [current, [event]];
@@ -1844,6 +1854,9 @@ export const layerWsRpc = (
         return {
           environment,
           auth,
+          fleetBots: yield* discoverFleetBots(settings.fleetGatewayCommand).pipe(
+            Effect.orElseSucceed(() => []),
+          ),
           cwd: config.cwd,
           hostname: yield* HostProcess.Hostname,
           keybindingsConfigPath: config.keybindingsConfigPath,
@@ -3420,11 +3433,18 @@ export const layerWsRpc = (
                 Stream.map((settings) =>
                   ServerSettings.redactServerSettingsForClient(settings, settingsClient),
                 ),
-                Stream.map((settings) => ({
-                  version: 1 as const,
-                  type: "settingsUpdated" as const,
-                  payload: { settings },
-                })),
+                Stream.mapEffect(
+                  Effect.fn("ws.discoverFleetBotsOnSettings")(function* (settings) {
+                    const fleetBots = yield* discoverFleetBots(settings.fleetGatewayCommand).pipe(
+                      Effect.orElseSucceed(() => []),
+                    );
+                    return {
+                      version: 1 as const,
+                      type: "settingsUpdated" as const,
+                      payload: { settings, fleetBots },
+                    };
+                  }),
+                ),
               );
 
               const liveUpdates = Stream.merge(

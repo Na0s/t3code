@@ -1,3 +1,4 @@
+import { collectFleetBotMentions } from "@t3tools/shared/fleetBotMentions";
 import {
   collectComposerModelMentions,
   type ComposerModelMentionOccurrence,
@@ -177,7 +178,14 @@ export function collectComposerModelTokens(
   knownModels: { has(source: string): boolean },
   preserveTrailingFrom: ReadonlyArray<ComposerModelMentionOccurrence> = [],
 ): ReadonlyArray<ComposerModelMentionOccurrence> {
-  return collectComposerModelMentions(text).filter(
+  return [
+    ...collectComposerModelMentions(text),
+    ...collectFleetBotMentions(text).map((mention) => ({
+      ...mention,
+      instanceId: "fleet-bot",
+      model: mention.botId,
+    })),
+  ].filter(
     (mention) =>
       knownModels.has(mention.source) &&
       (/\s/u.test(text[mention.end] ?? "") ||

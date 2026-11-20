@@ -1,3 +1,5 @@
+import { matchFleetBots } from "@t3tools/shared/fleetBotMentions";
+import { serverEnvironment } from "~/state/server";
 import {
   legacyThreadPullRequestKey,
   threadPullRequestKeyOf,
@@ -122,6 +124,7 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
+  const fleetBots = useAtomValue(serverEnvironment.configValueAtom(environmentId))?.fleetBots ?? [];
   const environmentThreadShells = useVisibleThreadShells(isPathTrigger);
   // Mounts older settled threads matching the mention, here and on linked machines, which shells
   // may leave out.
@@ -206,6 +209,13 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
+        ...matchFleetBots(fleetBots, composerTrigger.query).map((bot) => ({
+          id: `bot:${bot.id}`,
+          type: "bot" as const,
+          bot,
+          label: bot.name,
+          description: "Grokbot · Fleet gateway",
+        })),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           environmentId,

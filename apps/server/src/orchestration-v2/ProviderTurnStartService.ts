@@ -38,6 +38,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeFleetBotProjector } from "../fleetBots.ts";
 import { makeRestoreMissingWorktree } from "../workspace/restoreMissingWorktree.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
@@ -186,6 +187,7 @@ export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
+    const projectFleetBotMentions = yield* makeFleetBotProjector;
     const turnAnalytics = yield* ProviderUsageAnalytics.ProviderTurnAnalytics;
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -844,10 +846,19 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const userText = projectComposerContextForProvider({
-        text: providerMessage.text,
-        records: providerMessage.context?.records ?? [],
-      });
+      const userText = yield* projectFleetBotMentions({
+        mentionText: providerMessage.text,
+        text: projectComposerContextForProvider({
+          text: providerMessage.text,
+          records: providerMessage.context?.records ?? [],
+        }),
+        threadId: input.threadId,
+        messageId: message.id,
+      }).pipe(
+        Effect.mapError(
+          (error) => new ProviderTurnStartError({ runId: run.id, cause: error.detail }),
+        ),
+      );
       // Native goal commands go verbatim; handoff history waits a turn.
       const goalDriver =
         session.driver === "codex" ||

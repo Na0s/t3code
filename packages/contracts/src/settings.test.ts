@@ -11,6 +11,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClientServerSettingsPatch,
+  requiredScopesForServerSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
@@ -548,4 +549,16 @@ describe("server model preferences", () => {
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
+});
+
+it("defaults Fleet routing off and requires provider-management access to change its executable", () => {
+  expect(decodeServerSettings({}).fleetGatewayCommand).toEqual([]);
+  const command = ["node", "/opt/gateway/bin/t3-fleet-gateway.js"];
+  expect(decodeServerSettingsPatch({ fleetGatewayCommand: command }).fleetGatewayCommand).toEqual(
+    command,
+  );
+  expect(requiredScopesForServerSettingsPatch({ fleetGatewayCommand: command })).toContain(
+    "providers:manage",
+  );
+  expect(() => decodeServerSettingsPatch({ fleetGatewayCommand: [""] })).toThrow();
 });

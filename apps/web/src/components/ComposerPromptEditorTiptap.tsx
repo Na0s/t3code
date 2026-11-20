@@ -1,3 +1,4 @@
+import { FleetBotMentionChip, fleetBotIdsAtom } from "./chat/FleetBotMentionChip";
 import { useAtomValue } from "@effect/atom-react";
 import { documentChipKindForFileName } from "~/pierre-icons";
 import { isProviderSkillUserInvocable } from "@t3tools/client-runtime/providerSkills";
@@ -377,6 +378,43 @@ const ComposerModelExtension = Node.create({
   },
   addNodeView() {
     return ReactNodeViewRenderer(ComposerModelNodeView);
+  },
+});
+
+function ComposerBotNodeView({ node }: NodeViewProps) {
+  const actions = use(ComposerContextActionsContext);
+  return (
+    <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
+      <FleetBotMentionChip
+        environmentId={actions.environmentId}
+        botId={String(node.attrs.botId)}
+        source={String(node.attrs.source)}
+      />
+    </NodeViewWrapper>
+  );
+}
+
+/** `bot:<id>` from the `@` menu; `source` is the exact prompt text. */
+const ComposerBotExtension = Node.create({
+  name: "composer-bot",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      botId: { default: "" },
+      source: { default: "" },
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-composer-bot]" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["span", { "data-composer-bot": "", ...HTMLAttributes }];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ComposerBotNodeView);
   },
 });
 
@@ -839,6 +877,7 @@ function createComposerExtensions(richText: boolean) {
     ComposerMentionExtension,
     ComposerSkillExtension,
     ComposerModelExtension,
+    ComposerBotExtension,
     ComposerCitationExtension,
     ComposerContextReferenceExtension,
     ComposerChipSelectionExtension,
@@ -981,6 +1020,8 @@ function ComposerPromptEditorTiptapInner(
 
   const { environmentId } = use(ComposerContextActionsContext);
   const modelKeys = useAtomValue(modelMentionKeysAtom(environmentId ?? ""));
+  const botIds = useAtomValue(fleetBotIdsAtom(environmentId ?? ""));
+  const isKnownBot = useStableCallback((botId: string) => botIds.has(botId));
   // Stable so a skills or models refresh does not rerun the controlled-value effect.
   const skillLabelFor = useStableCallback((name: string) => composerSkillMeta(skills, name));
   const isKnownModel = useStableCallback((instanceId: string, model: string) =>
@@ -1115,6 +1156,7 @@ function ComposerPromptEditorTiptapInner(
         styling: richText,
         literalText,
         isKnownModel: (instanceId, model) => modelKeys.has(modelMentionKey(instanceId, model)),
+        isKnownBot,
       }),
       editable: !disabled,
       editorProps: {
@@ -1438,7 +1480,8 @@ function ComposerPromptEditorTiptapInner(
           const isChip = (token: (typeof tokens)[number] | undefined) =>
             token?.type === "mention" ||
             (token?.type === "skill" && skillLabelFor(token.value) !== null) ||
-            (token?.type === "model" && isKnownModel(token.instanceId, token.model));
+            (token?.type === "model" && isKnownModel(token.instanceId, token.model)) ||
+            (token?.type === "bot" && isKnownBot(token.botId));
           const lastToken = tokens.at(-1);
           if (isChip(lastToken) && lastToken?.end === text.length) {
             text += " ";
@@ -1622,7 +1665,12 @@ function ComposerPromptEditorTiptapInner(
     if (previousSnapshot.value !== value) {
       saveCitationDraft(editor, previousSnapshot.value);
       editor.commands.setContent(
-        buildDocJson(value, skillLabelFor, { styling: richText, literalText, isKnownModel }),
+        buildDocJson(value, skillLabelFor, {
+          styling: richText,
+          literalText,
+          isKnownModel,
+          isKnownBot,
+        }),
         {
           emitUpdate: false,
         },
@@ -1670,6 +1718,7 @@ function ComposerPromptEditorTiptapInner(
     richText,
     skillLabelFor,
     isKnownModel,
+    isKnownBot,
     value,
   ]);
 
@@ -1681,9 +1730,10 @@ function ComposerPromptEditorTiptapInner(
       editor.state.doc,
       (name) => composerSkillMeta(skills, name),
       (instanceId, model) => modelKeys.has(modelMentionKey(instanceId, model)),
+      (botId) => botIds.has(botId),
     );
     if (replacements.length > 0) replaceSkillChips(editor, replacements);
-  }, [editor, literalText, modelKeys, skills]);
+  }, [editor, literalText, modelKeys, botIds, skills]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restores ProseMirror focus and caret scroll when the keyed editor remounts, capturing focus on teardown
   useLayoutEffect(() => {
