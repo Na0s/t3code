@@ -27,6 +27,8 @@ const DesktopSettingsPatch = Schema.Struct({
     ),
   ),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
+  windowProfiles: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  multiWindowEnabled: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
@@ -110,14 +112,19 @@ describe("DesktopSettings", () => {
       yield* withSettings(
         Effect.gen(function* () {
           const settings = yield* DesktopAppSettings.DesktopAppSettings;
-          yield* settings.setMainWindowBounds({ x: 10, y: 20, width: 900, height: 600 }, true);
+          yield* settings.setWindowProfilePlacement(
+            "main",
+            { x: 10, y: 20, width: 900, height: 600 },
+            true,
+          );
         }),
       ).pipe(Effect.provideService(Tracer.Tracer, tracer));
       const operationSpans = spans.filter(
-        (span) => span.name === "desktop.settings.setMainWindowBounds",
+        (span) => span.name === "desktop.settings.setWindowProfilePlacement",
       );
       assert.lengthOf(operationSpans, 1);
       assert.deepEqual(Object.fromEntries(operationSpans[0]!.attributes), {
+        profileId: "main",
         x: 10,
         y: 20,
         width: 900,
@@ -193,7 +200,11 @@ describe("DesktopSettings", () => {
 
         yield* Effect.exit(settings.load);
         yield* Effect.exit(
-          settings.setMainWindowBounds({ x: 10, y: 20, width: 900, height: 600 }, false),
+          settings.setWindowProfilePlacement(
+            "main",
+            { x: 10, y: 20, width: 900, height: 600 },
+            false,
+          ),
         );
 
         const persisted = yield* decodeDesktopSettingsPatch(
@@ -225,8 +236,13 @@ describe("DesktopSettings", () => {
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
-          mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
-          mainWindowMaximized: false,
+          multiWindowEnabled: true,
+          windowProfiles: [
+            {
+              ...DesktopAppSettings.DEFAULT_WINDOW_PROFILE,
+              bounds: { x: 120, y: 80, width: 1280, height: 900 },
+            },
+          ],
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
@@ -253,7 +269,11 @@ describe("DesktopSettings", () => {
         );
 
         assert.isFalse((yield* settings.load).localEnvironmentEnabled);
-        yield* settings.setMainWindowBounds({ x: 10, y: 20, width: 800, height: 600 }, false);
+        yield* settings.setWindowProfilePlacement(
+          "main",
+          { x: 10, y: 20, width: 800, height: 600 },
+          false,
+        );
         assert.include(
           yield* fileSystem.readFileString(environment.desktopSettingsPath),
           `"localEnvironmentEnabled":false`,
@@ -277,10 +297,10 @@ describe("DesktopSettings", () => {
             serverExposureMode: "network-accessible",
           });
 
-          const loaded = yield* settings.load;
-          assert.isNull(loaded.mainWindowBounds);
-          assert.isFalse(loaded.mainWindowMaximized);
-          assert.equal(loaded.serverExposureMode, "network-accessible");
+          const loaded = DesktopAppSettings.defaultWindowProfile(yield* settings.load);
+          assert.isNull(loaded.bounds);
+          assert.isFalse(loaded.maximized);
+          assert.equal((yield* settings.get).serverExposureMode, "network-accessible");
         }
       }),
     ),
@@ -293,8 +313,13 @@ describe("DesktopSettings", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
 
-        yield* settings.setMainWindowBounds({ x: -1200, y: 40, width: 400, height: 360 }, true);
+        yield* settings.setWindowProfilePlacement(
+          "main",
+          { x: -1200, y: 40, width: 400, height: 360 },
+          true,
+        );
         yield* settings.setServerExposureMode("network-accessible");
+        yield* settings.setMultiWindowEnabled(false);
 
         const persisted = yield* decodeDesktopSettingsPatch(
           yield* fileSystem.readFileString(environment.desktopSettingsPath),
@@ -302,6 +327,7 @@ describe("DesktopSettings", () => {
         assert.deepEqual(persisted, {
           mainWindowBounds: { x: -1200, y: 40, width: 400, height: 360 },
           mainWindowMaximized: true,
+          multiWindowEnabled: false,
           serverExposureMode: "network-accessible",
         } satisfies typeof DesktopSettingsPatch.Type);
 
@@ -309,8 +335,17 @@ describe("DesktopSettings", () => {
           const freshSettings = yield* DesktopAppSettings.DesktopAppSettings;
           return yield* freshSettings.load;
         }).pipe(Effect.provide(DesktopAppSettings.layer));
-        assert.deepEqual(restored.mainWindowBounds, persisted.mainWindowBounds);
-        assert.isTrue(restored.mainWindowMaximized);
+        const restoredMain = DesktopAppSettings.defaultWindowProfile(restored);
+        assert.deepEqual(restoredMain.bounds, persisted.mainWindowBounds);
+        assert.isTrue(restoredMain.maximized);
+        assert.isFalse(restored.multiWindowEnabled);
+
+        // The default leaves the key out, so an older build's file stays as it was.
+        yield* settings.setMultiWindowEnabled(true);
+        const reenabled = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        assert.isUndefined(reenabled.multiWindowEnabled);
       }),
     ),
   );
@@ -378,8 +413,8 @@ describe("DesktopSettings", () => {
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
-          mainWindowBounds: null,
-          mainWindowMaximized: false,
+          multiWindowEnabled: true,
+          windowProfiles: [DesktopAppSettings.DEFAULT_WINDOW_PROFILE],
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
@@ -407,8 +442,8 @@ describe("DesktopSettings", () => {
         assert.deepEqual(yield* settings.load, {
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
-          mainWindowBounds: null,
-          mainWindowMaximized: false,
+          multiWindowEnabled: true,
+          windowProfiles: [DesktopAppSettings.DEFAULT_WINDOW_PROFILE],
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
@@ -479,6 +514,102 @@ describe("DesktopSettings", () => {
         const diskReload = yield* settings.load;
         assert.equal(diskReload.wslBackendEnabled, true);
         assert.equal(diskReload.wslOnly, true);
+      }),
+    ),
+  );
+
+  it.effect("moves the legacy main window placement into the default profile and mirrors it", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const legacyBounds = { x: 40, y: 30, width: 1200, height: 800 };
+        yield* writeSettingsPatch({ mainWindowBounds: legacyBounds, mainWindowMaximized: true });
+
+        assert.deepEqual((yield* settings.load).windowProfiles, [
+          { ...DesktopAppSettings.DEFAULT_WINDOW_PROFILE, bounds: legacyBounds, maximized: true },
+        ]);
+
+        const work = {
+          id: "work",
+          name: "Work",
+          projectScopeKeys: ["env:/repo"],
+          theme: "dracula",
+          bounds: { x: 60, y: 50, width: 900, height: 700 },
+          maximized: false,
+          openAtQuit: true,
+        };
+        yield* settings.updateWindowProfiles(([main, ...rest]) => [
+          { ...main!, name: "Primary" },
+          ...rest,
+          work,
+        ]);
+        yield* settings.setWindowProfilePlacement("main", { ...legacyBounds, x: 80 }, false);
+
+        const persisted = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        // An older build reads only the legacy keys, so they keep the main window's placement.
+        assert.deepEqual(persisted.mainWindowBounds, { ...legacyBounds, x: 80 });
+        assert.isUndefined(persisted.mainWindowMaximized);
+        assert.deepEqual(persisted.windowProfiles, [{ id: "main", name: "Primary" }, work]);
+        assert.deepEqual((yield* settings.load).windowProfiles, [
+          {
+            ...DesktopAppSettings.DEFAULT_WINDOW_PROFILE,
+            name: "Primary",
+            bounds: { ...legacyBounds, x: 80 },
+          },
+          work,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("keeps only valid, unique window profiles with the default one first", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* writeSettingsPatch({
+          serverExposureMode: "network-accessible",
+          windowProfiles: [
+            "not a profile",
+            { name: "No id" },
+            {
+              id: "side",
+              name: "Side",
+              projectScopeKeys: ["a", "", "a", 7, "b"],
+              theme: "",
+              bounds: { x: 0, y: 0, width: 10, height: 10 },
+              maximized: true,
+              openAtQuit: "yes",
+            },
+            { id: "side", name: "Duplicate" },
+            { id: "long", name: "x".repeat(81) },
+            { id: "main", name: "Desk", theme: "dark", projectScopeKeys: ["a"], openAtQuit: true },
+          ],
+        });
+
+        const loaded = yield* settings.load;
+        assert.equal(loaded.serverExposureMode, "network-accessible");
+        assert.deepEqual(loaded.windowProfiles, [
+          { ...DesktopAppSettings.DEFAULT_WINDOW_PROFILE, name: "Desk" },
+          {
+            id: "side",
+            name: "Side",
+            projectScopeKeys: ["a", "b"],
+            theme: null,
+            bounds: null,
+            maximized: false,
+            openAtQuit: false,
+          },
+        ]);
+
+        // Profile edits normalize the same way, so the default profile cannot be removed.
+        yield* settings.updateWindowProfiles(() => []);
+        assert.deepEqual((yield* settings.get).windowProfiles, [
+          { ...DesktopAppSettings.DEFAULT_WINDOW_PROFILE, name: "Desk" },
+        ]);
       }),
     ),
   );

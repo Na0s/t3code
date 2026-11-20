@@ -5,7 +5,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-import type { DesktopUpdateCheckResult, DesktopUpdateState } from "@t3tools/contracts";
+import type {
+  DesktopUpdateCheckResult,
+  DesktopUpdateState,
+  DesktopWindowsState,
+} from "@t3tools/contracts";
 import * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
@@ -91,7 +95,35 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
     installPrepared: () => Effect.die("unexpected installPrepared"),
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
-const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
+const emptyWindowsState: DesktopWindowsState = {
+  profiles: [],
+  windows: [],
+  miniMode: false,
+  multiWindowEnabled: true,
+};
+
+const windowProfile = (id: string, name: string) => ({
+  id,
+  name,
+  projectScopeKeys: [],
+  theme: null,
+  isDefault: id === "main",
+});
+
+const openWindow = (windowId: number, profileId: string) => ({
+  windowId,
+  isMain: profileId === "main",
+  profileId,
+  name: profileId,
+  title: "",
+  focused: false,
+  projectScopeKeys: [],
+});
+
+const layerDesktopWindow = (
+  selectedAction: Deferred.Deferred<string>,
+  windowsState: DesktopWindowsState = emptyWindowsState,
+) =>
   Layer.mock(DesktopWindow.DesktopWindow)({
     createMain: Effect.die("unexpected createMain"),
     ensureMain: Effect.die("unexpected ensureMain"),
@@ -101,7 +133,7 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
     showConnectingSplash: Effect.void,
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
-    flushMainWindowBounds: Effect.void,
+    flushWindowState: Effect.void,
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     dispatchSnapShotEvent: () => Effect.void,
@@ -110,6 +142,10 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
     runFocusedContentsCommand: (command) =>
       Deferred.succeed(selectedAction, `main-${command}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
+    windowsState: Effect.succeed(windowsState),
+    subscribeWindowsState: () => Effect.void,
+    openProfile: (profileId) =>
+      Deferred.succeed(selectedAction, `open-${profileId}`).pipe(Effect.asVoid),
   });
 
 const layerElectronMenu = (
@@ -127,6 +163,7 @@ const configureMenu = (
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
   environment: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
   services: MenuServices = {},
+  windowsState?: DesktopWindowsState,
 ) =>
   Effect.gen(function* () {
     const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
@@ -135,7 +172,7 @@ const configureMenu = (
     Effect.provide(
       DesktopApplicationMenu.layer.pipe(
         Layer.provideMerge(layerElectronMenu(applicationMenuTemplate)),
-        Layer.provideMerge(layerDesktopWindow(selectedAction)),
+        Layer.provideMerge(layerDesktopWindow(selectedAction, windowsState)),
         Layer.provideMerge(layerDesktopUpdates(services)),
         Layer.provideMerge(layerElectronDialog(services)),
         Layer.provideMerge(layerElectronApp),
@@ -347,12 +384,27 @@ describe("DesktopApplicationMenu", () => {
       assert.equal(yield* Deferred.await(selectedAction), "main-reload");
     }),
   );
-  it.effect("leads the Window menu with New Window and leaves its chord to the renderer", () =>
+  it.effect("lists saved windows, marks open ones, and leaves New Window to the renderer", () =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
+      yield* configureMenu(
+        selectedAction,
+        applicationMenuTemplate,
+        {},
+        {},
+        {
+          profiles: [
+            windowProfile("main", "Main"),
+            windowProfile("work", "Work"),
+            windowProfile("side", "Side"),
+          ],
+          windows: [openWindow(1, "main"), openWindow(2, "work")],
+          miniMode: true,
+          multiWindowEnabled: true,
+        },
+      );
 
       const windowMenu = (yield* Deferred.await(applicationMenuTemplate)).find(
         (item) => item.role === "windowMenu",
@@ -360,15 +412,55 @@ describe("DesktopApplicationMenu", () => {
       if (!Array.isArray(windowMenu?.submenu)) {
         throw new Error("Expected the Window menu submenu to be an array.");
       }
-      const [newWindow] = windowMenu.submenu;
+      const items = windowMenu.submenu.filter((item) => item.label !== undefined);
       assert.deepEqual(
-        { label: newWindow?.label, accelerator: newWindow?.accelerator },
-        { label: "New Window", accelerator: "CmdOrCtrl+Alt+Shift+N" },
+        items.slice(0, 5).map(({ label, checked }) => ({ label, checked })),
+        [
+          { label: "New Window", checked: undefined },
+          { label: "Main Window", checked: undefined },
+          { label: "Work", checked: true },
+          { label: "Side", checked: false },
+          { label: "Mini Mode", checked: true },
+        ],
       );
-      assert.equal(newWindow?.registerAccelerator, false);
-      newWindow?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
+      assert.deepEqual(
+        { accelerator: items[0]?.accelerator, registerAccelerator: items[0]?.registerAccelerator },
+        { accelerator: "CmdOrCtrl+Alt+Shift+N", registerAccelerator: false },
+      );
+      items[0]?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
       assert.equal(yield* Deferred.await(selectedAction), "new-window");
     }),
+  );
+
+  it.effect(
+    "drops New Window and saved windows from the Window menu when multi-window is off",
+    () =>
+      Effect.gen(function* () {
+        const applicationMenuTemplate =
+          yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+        yield* configureMenu(
+          yield* Deferred.make<string>(),
+          applicationMenuTemplate,
+          {},
+          {},
+          {
+            ...emptyWindowsState,
+            profiles: [windowProfile("main", "Main"), windowProfile("work", "Work")],
+            multiWindowEnabled: false,
+          },
+        );
+
+        const windowMenu = (yield* Deferred.await(applicationMenuTemplate)).find(
+          (item) => item.role === "windowMenu",
+        );
+        if (!Array.isArray(windowMenu?.submenu)) {
+          throw new Error("Expected the Window menu submenu to be an array.");
+        }
+        assert.deepEqual(
+          windowMenu.submenu.flatMap((item) => (item.label === undefined ? [] : [item.label])),
+          ["Mini Mode"],
+        );
+      }),
   );
 
   it.effect("tells the user which update the menu check found", () =>

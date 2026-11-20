@@ -760,7 +760,13 @@ describe("composerDraftStore context persistence", () => {
   it("shows a draft another desktop window saved, without reverting it on its next save", async () => {
     const sharedStorage = createMemoryStorage();
     vi.stubGlobal("localStorage", sharedStorage);
-    const context = { windowId: 2, isMain: false };
+    const context = {
+      windowId: 2,
+      isMain: false,
+      profileId: null,
+      projectScopeKeys: [],
+      theme: null,
+    };
     vi.stubGlobal(
       "window",
       Object.assign(new EventTarget(), {

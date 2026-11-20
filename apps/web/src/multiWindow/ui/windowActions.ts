@@ -2,9 +2,11 @@ import type { DesktopWindowsBridge } from "@t3tools/contracts";
 
 import { toastManager } from "../../components/ui/toast";
 import { registerCommands, registerMenuAction } from "../../shortcuts/dispatcher";
+import { useUiStateStore } from "../../uiStateStore";
 import { desktopWindowsBridge } from "../windowContext";
+import { readDesktopWindowsState } from "../windowsState";
 
-function notifyWindowActionFailure(title: string, cause: unknown): void {
+export function notifyWindowActionFailure(title: string, cause: unknown): void {
   console.error(title, cause);
   toastManager.add({
     type: "error",
@@ -13,8 +15,10 @@ function notifyWindowActionFailure(title: string, cause: unknown): void {
   });
 }
 
+/** Opens an unsaved window that starts with this window's project filter. */
 export function openNewDesktopWindow(bridge: DesktopWindowsBridge): void {
-  bridge.openNew().catch((cause: unknown) => {
+  const projectScopeKeys = useUiStateStore.getState().sidebarProjectScopeKeys;
+  bridge.openNew({ projectScopeKeys }).catch((cause: unknown) => {
     notifyWindowActionFailure("Couldn't open a new window", cause);
   });
 }
@@ -26,6 +30,8 @@ export function registerDesktopWindowCommands(): () => void {
   const disposers = [
     registerCommands({
       "window.new": (event) => {
+        // Off, the chord is free for whatever else is bound to it.
+        if (readDesktopWindowsState()?.multiWindowEnabled === false) return false;
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) openNewDesktopWindow(bridge);

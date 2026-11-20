@@ -9,6 +9,7 @@ import type {
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
+  DesktopWindowCloseRequest,
   DesktopWindowContext,
   DesktopWindowsBridge,
   DesktopWindowsState,
@@ -100,7 +101,7 @@ const windowContext = ((): DesktopWindowContext => {
     const result: unknown = ipcRenderer.sendSync(IpcChannels.WINDOWS_GET_CONTEXT_CHANNEL);
     if (typeof result === "object" && result !== null) return result as DesktopWindowContext;
   } catch {}
-  return { windowId: -1, isMain: true };
+  return { windowId: -1, isMain: true, profileId: null, projectScopeKeys: [], theme: null };
 })();
 
 // A MessagePort cannot cross the context bridge, so the page receives it as a window message.
@@ -130,13 +131,51 @@ const subscribe =
     };
   };
 
+let closeRequestListeners = 0;
 const windows: DesktopWindowsBridge = {
   getContext: () => windowContext,
   getState: () => ipcRenderer.invoke(IpcChannels.WINDOWS_GET_STATE_CHANNEL),
   onState: subscribe(IpcChannels.WINDOWS_STATE_CHANNEL, (state) =>
     typeof state === "object" && state !== null ? (state as DesktopWindowsState) : undefined,
   ),
-  openNew: () => ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_NEW_CHANNEL),
+  openNew: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_NEW_CHANNEL, input),
+  openProfile: (profileId) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_OPEN_PROFILE_CHANNEL, profileId),
+  focus: (windowId) => ipcRenderer.invoke(IpcChannels.WINDOWS_FOCUS_CHANNEL, windowId),
+  createProfile: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_CREATE_PROFILE_CHANNEL, input),
+  saveAsProfile: (name) => ipcRenderer.invoke(IpcChannels.WINDOWS_SAVE_AS_PROFILE_CHANNEL, name),
+  updateProfile: (input) => ipcRenderer.invoke(IpcChannels.WINDOWS_UPDATE_PROFILE_CHANNEL, input),
+  deleteProfile: (profileId) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_DELETE_PROFILE_CHANNEL, profileId),
+  setProjectScopeKeys: (projectScopeKeys) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_SET_PROJECT_SCOPE_KEYS_CHANNEL, projectScopeKeys),
+  // The main process closes without asking while no listener could answer.
+  onCloseRequest: (listener) => {
+    const unsubscribe = subscribe(IpcChannels.WINDOWS_CLOSE_REQUEST_CHANNEL, (request) =>
+      typeof request === "object" && request !== null
+        ? (request as DesktopWindowCloseRequest)
+        : undefined,
+    )(listener);
+    closeRequestListeners += 1;
+    if (closeRequestListeners === 1) {
+      void ipcRenderer.invoke(IpcChannels.WINDOWS_CLOSE_REQUEST_LISTENING_CHANNEL, true);
+    }
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      unsubscribe();
+      closeRequestListeners -= 1;
+      if (closeRequestListeners === 0) {
+        void ipcRenderer.invoke(IpcChannels.WINDOWS_CLOSE_REQUEST_LISTENING_CHANNEL, false);
+      }
+    };
+  },
+  resolveCloseRequest: (requestId, decision) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_RESOLVE_CLOSE_REQUEST_CHANNEL, { requestId, decision }),
+  setMiniMode: (enabled) => ipcRenderer.invoke(IpcChannels.WINDOWS_SET_MINI_MODE_CHANNEL, enabled),
+  setMultiWindowEnabled: (enabled) =>
+    ipcRenderer.invoke(IpcChannels.WINDOWS_SET_MULTI_WINDOW_ENABLED_CHANNEL, enabled),
   registerHub: () => {
     void ipcRenderer.invoke(IpcChannels.WINDOWS_REGISTER_HUB_CHANNEL).catch(() => undefined);
   },

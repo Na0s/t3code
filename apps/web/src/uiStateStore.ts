@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 
-import { readDesktopWindowContext } from "./multiWindow/windowContext";
+import { desktopWindowsBridge, readDesktopWindowContext } from "./multiWindow/windowContext";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 2;
@@ -292,7 +292,7 @@ function resolveStateToPersist(state: UiState): UiState {
   const merged = mergeSharedUiState(stored, state, persistedBaseline ?? stored);
   return {
     ...merged,
-    // A secondary window's filter is its own, never the main window's state.
+    // A secondary window's filter lives in its window profile, never in the main window's state.
     sidebarProjectScopeKeys: windowContext.isMain
       ? state.sidebarProjectScopeKeys
       : stored.sidebarProjectScopeKeys,
@@ -532,7 +532,9 @@ interface UiStateStore extends UiState {
 function readInitialState(): UiState {
   const state = readPersistedState();
   persistedBaseline = state;
-  return state;
+  return windowContext !== null && !windowContext.isMain
+    ? { ...state, sidebarProjectScopeKeys: [...windowContext.projectScopeKeys] }
+    : state;
 }
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
@@ -569,6 +571,13 @@ if (windowContext !== null && typeof window !== "undefined") {
     persistedBaseline = stored;
     if (sharedStateChanged(local, merged)) useUiStateStore.setState(merged);
   });
+  if (!windowContext.isMain) {
+    const bridge = desktopWindowsBridge();
+    useUiStateStore.subscribe((state, previous) => {
+      if (state.sidebarProjectScopeKeys === previous.sidebarProjectScopeKeys) return;
+      void bridge?.setProjectScopeKeys(state.sidebarProjectScopeKeys).catch(() => undefined);
+    });
+  }
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {

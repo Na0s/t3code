@@ -212,7 +212,7 @@ function layerPool(
           showConnectingSplash: Effect.void,
           handleBackendReady: () => options.onReady ?? Effect.void,
           handleBackendNotReady: Effect.void,
-          flushMainWindowBounds: Effect.void,
+          flushWindowState: Effect.void,
           prepareCaptureReveal: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
           dispatchSnapShotEvent: () => Effect.void,
