@@ -2,7 +2,6 @@ import "../../index.css";
 
 import type { DesktopOpenWindow, DesktopUpdateState } from "@t3tools/contracts";
 import type { LimitPresentations } from "@t3tools/shared/usageLimits";
-import { useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -19,7 +18,7 @@ import {
   PULL_REQUESTS,
   UPDATE_AVAILABLE,
 } from "./mini.fixtures";
-import { MiniPanel, type MiniTab } from "./MiniMainWindow";
+import { MiniPanel } from "./MiniMainWindow";
 import { MiniPullRequestList } from "./MiniPullRequests";
 import { MiniSettings } from "./MiniSettings";
 import { MiniUpdate } from "./MiniUpdate";
@@ -64,41 +63,39 @@ function Panel({
   pullRequestsSupported = true,
   actions,
 }: PanelOptions & { readonly actions: ReturnType<typeof makeActions> }) {
-  const [tab, setTab] = useState<MiniTab>("usage");
   return (
     <MiniPanel
-      tab={tab}
-      onTabChange={setTab}
       pullRequestsSupported={pullRequestsSupported}
       updateAvailable={mocks.update !== null}
       onSearch={actions.search}
       onExpand={actions.expand}
       onNewWindow={multiWindowEnabled ? actions.newWindow : undefined}
-    >
-      {tab === "windows" ? (
-        <MiniWindows
-          windows={windows}
-          projectsFor={projectsFor}
-          onFocusWindow={actions.focusWindow}
-        />
-      ) : tab === "settings" ? (
-        <MiniSettings
-          multiWindowEnabled={multiWindowEnabled}
-          onMultiWindowEnabledChange={actions.multiWindowEnabledChange}
-          onOpenSettings={actions.openSettings}
-        />
-      ) : tab === "pullRequests" ? (
-        <MiniPullRequestList
-          entries={PULL_REQUESTS}
-          error={null}
-          onOpen={actions.openPullRequest}
-        />
-      ) : tab === "update" ? (
-        <MiniUpdate />
-      ) : (
-        <MiniUsageSection presentations={usage} now={FIXTURE_NOW} />
-      )}
-    </MiniPanel>
+      tabs={{
+        windows: (
+          <MiniWindows
+            windows={windows}
+            projectsFor={projectsFor}
+            onFocusWindow={actions.focusWindow}
+          />
+        ),
+        settings: (
+          <MiniSettings
+            multiWindowEnabled={multiWindowEnabled}
+            onMultiWindowEnabledChange={actions.multiWindowEnabledChange}
+            onOpenSettings={actions.openSettings}
+          />
+        ),
+        pullRequests: (
+          <MiniPullRequestList
+            entries={PULL_REQUESTS}
+            error={null}
+            onOpen={actions.openPullRequest}
+          />
+        ),
+        usage: <MiniUsageSection presentations={usage} now={FIXTURE_NOW} />,
+        update: <MiniUpdate />,
+      }}
+    />
   );
 }
 

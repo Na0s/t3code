@@ -35,7 +35,7 @@ import { MiniWindows } from "./MiniWindows";
 import { useProjectScopeGroups } from "./useProjectScopeGroups";
 import { notifyWindowActionFailure, openNewDesktopWindow } from "./windowActions";
 
-export type MiniTab = "windows" | "settings" | "pullRequests" | "usage" | "update";
+type MiniTab = "windows" | "settings" | "pullRequests" | "usage" | "update";
 
 /** The main window's compact stand-in for the app shell while Mini Mode is on. */
 export function MiniMainWindow() {
@@ -49,7 +49,6 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
   const updateState = useDesktopUpdateState();
   const pullRequestsSupported = usePullRequestsSupported();
   const { groupsForKeys } = useProjectScopeGroups();
-  const [tab, setTab] = useState<MiniTab>("usage");
   const multiWindowEnabled = windowsState?.multiWindowEnabled !== false;
 
   const expand = () => {
@@ -69,8 +68,6 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
   return (
     <CommandPalette>
       <MiniPanel
-        tab={tab}
-        onTabChange={setTab}
         pullRequestsSupported={pullRequestsSupported}
         updateAvailable={
           updateState !== null && resolveDesktopUpdateButtonAction(updateState) !== "none"
@@ -79,66 +76,63 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
         onExpand={expand}
         // Off in Settings, the main process refuses new windows, so don't offer one.
         onNewWindow={multiWindowEnabled ? () => openNewDesktopWindow(bridge) : undefined}
-      >
-        {tab === "windows" ? (
-          <MiniWindows
-            windows={windowsState?.windows.filter((window) => !window.isMain) ?? null}
-            projectsFor={groupsForKeys}
-            onFocusWindow={(windowId) => {
-              bridge.focus(windowId).catch((cause: unknown) => {
-                notifyWindowActionFailure("Couldn't focus the window", cause);
-              });
-            }}
-          />
-        ) : tab === "settings" ? (
-          <MiniSettings
-            multiWindowEnabled={multiWindowEnabled}
-            onMultiWindowEnabledChange={(enabled) => {
-              bridge.setMultiWindowEnabled(enabled).catch((cause: unknown) => {
-                notifyWindowActionFailure("Couldn't change multiple windows", cause);
-              });
-            }}
-            onOpenSettings={() => void router.navigate({ to: "/settings" })}
-          />
-        ) : tab === "pullRequests" ? (
-          <MiniPullRequests />
-        ) : tab === "update" ? (
-          <MiniUpdate />
-        ) : (
-          <MiniUsage />
-        )}
-      </MiniPanel>
+        tabs={{
+          windows: (
+            <MiniWindows
+              windows={windowsState?.windows.filter((window) => !window.isMain) ?? null}
+              projectsFor={groupsForKeys}
+              onFocusWindow={(windowId) => {
+                bridge.focus(windowId).catch((cause: unknown) => {
+                  notifyWindowActionFailure("Couldn't focus the window", cause);
+                });
+              }}
+            />
+          ),
+          settings: (
+            <MiniSettings
+              multiWindowEnabled={multiWindowEnabled}
+              onMultiWindowEnabledChange={(enabled) => {
+                bridge.setMultiWindowEnabled(enabled).catch((cause: unknown) => {
+                  notifyWindowActionFailure("Couldn't change multiple windows", cause);
+                });
+              }}
+              onOpenSettings={() => void router.navigate({ to: "/settings" })}
+            />
+          ),
+          pullRequests: <MiniPullRequests />,
+          usage: <MiniUsage />,
+          update: <MiniUpdate />,
+        }}
+      />
     </CommandPalette>
   );
 }
 
 /** The sidebar's top bar and bottom bar around one tab's content; the tabs never share the panel. */
 export function MiniPanel({
-  tab,
-  onTabChange,
   pullRequestsSupported,
   updateAvailable,
   onSearch,
   onExpand,
   onNewWindow,
-  children,
+  tabs,
 }: {
-  readonly tab: MiniTab;
-  readonly onTabChange: (tab: MiniTab) => void;
   readonly pullRequestsSupported: boolean;
   readonly updateAvailable: boolean;
   readonly onSearch: () => void;
   readonly onExpand: () => void;
   /** Omitted while multiple windows are turned off. */
   readonly onNewWindow?: (() => void) | undefined;
-  readonly children: ReactNode;
+  /** Only the showing tab's content mounts. */
+  readonly tabs: Readonly<Record<MiniTab, ReactNode>>;
 }) {
+  const [tab, setTab] = useState<MiniTab>("usage");
   const tabItem = (id: MiniTab, label: string, icon: ReactNode) => (
     <SidebarUtilityItem
       icon={icon}
       label={label}
       isActive={tab === id}
-      onClick={() => onTabChange(id)}
+      onClick={() => setTab(id)}
     />
   );
   return (
@@ -161,7 +155,7 @@ export function MiniPanel({
         </header>
         <main className="min-h-0 flex-1">
           <ScrollArea hideScrollbars scrollFade>
-            {children}
+            {tabs[tab]}
           </ScrollArea>
         </main>
         <SidebarFooter>
