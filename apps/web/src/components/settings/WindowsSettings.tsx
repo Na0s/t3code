@@ -9,7 +9,11 @@ import { useState, type ComponentProps } from "react";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useRenderedAppearance } from "../../hooks/useTheme";
 import { desktopWindowsBridge, readDesktopWindowContext } from "../../multiWindow/windowContext";
-import { selectCurrentWindow, useDesktopWindowsState } from "../../multiWindow/windowsState";
+import {
+  selectCurrentWindow,
+  selectCurrentWindowProfile,
+  useDesktopWindowsState,
+} from "../../multiWindow/windowsState";
 import { useProjectScopeGroups } from "../../multiWindow/ui/useProjectScopeGroups";
 import { useProjectTintColors } from "../../multiWindow/ui/useProjectTintColors";
 import { notifyWindowActionFailure } from "../../multiWindow/ui/windowActions";
@@ -54,10 +58,7 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
   const mainProfile = profiles.find((profile) => profile.isDefault);
   const savedProfiles = profiles.filter((profile) => !profile.isDefault);
   const multiWindowEnabled = windowsState?.multiWindowEnabled !== false;
-  const isCurrentWindow = (profile: DesktopWindowProfile) =>
-    currentWindow === null
-      ? context?.profileId === profile.id
-      : currentWindow.profileId === profile.id;
+  const currentProfileId = selectCurrentWindowProfile(windowsState, context)?.id;
 
   return (
     <SettingsSection
@@ -100,7 +101,7 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
           profile={mainProfile}
           projectGroups={projectGroups}
           openWindow={undefined}
-          isCurrentWindow={isCurrentWindow(mainProfile)}
+          isCurrentWindow={currentProfileId === mainProfile.id}
           canOpen
         />
       )}
@@ -115,7 +116,7 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
                 profile={profile}
                 projectGroups={projectGroups}
                 openWindow={windowsState?.windows.find((window) => window.profileId === profile.id)}
-                isCurrentWindow={isCurrentWindow(profile)}
+                isCurrentWindow={currentProfileId === profile.id}
                 canOpen={multiWindowEnabled}
               />
             ))}
