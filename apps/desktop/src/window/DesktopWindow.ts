@@ -629,6 +629,11 @@ export const make = Effect.gen(function* () {
     yield* previewManager.reapplyZoom();
   });
 
+  const nextUnsavedName = () =>
+    nextUnsavedWindowName(
+      liveEntries().flatMap((entry) => (entry.profileId === null ? [entry.unsavedName] : [])),
+    );
+
   const titleFor = (entry: AppWindowEntry) =>
     composeWindowTitle({
       rendererTitle: entry.rendererTitle,
@@ -670,12 +675,10 @@ export const make = Effect.gen(function* () {
   // Names, titles, renderers and menu listeners all follow from the open windows and profiles.
   const syncWindows = Effect.fn("desktop.window.syncWindows")(function* () {
     const settings = yield* desktopSettings.get;
-    const defaultProfile = DesktopAppSettings.defaultWindowProfile(settings);
     for (const entry of liveEntries()) {
+      // The main window always holds the default profile, which cannot be deleted.
       const profile = settings.windowProfiles.find((candidate) => candidate.id === entry.profileId);
-      entry.name = entry.isMain ? defaultProfile.name : (profile?.name ?? entry.unsavedName);
-    }
-    for (const entry of liveEntries()) {
+      entry.name = profile?.name ?? entry.unsavedName;
       const title = titleFor(entry);
       if (title !== entry.appliedTitle) {
         entry.appliedTitle = title;
@@ -1537,9 +1540,7 @@ export const make = Effect.gen(function* () {
       role: "secondary",
       profile: input.profile,
       projectScopeKeys: input.projectScopeKeys,
-      unsavedName: nextUnsavedWindowName(
-        liveEntries().flatMap((entry) => (entry.profileId === null ? [entry.unsavedName] : [])),
-      ),
+      unsavedName: nextUnsavedName(),
       anchorBounds:
         Option.isSome(anchor) && !anchor.value.isDestroyed() ? anchor.value.getBounds() : null,
     });
@@ -1587,13 +1588,11 @@ export const make = Effect.gen(function* () {
     profile: Omit<DesktopAppSettings.DesktopWindowProfileSettings, "id" | "openAtQuit">,
   ) {
     const id = yield* newId;
-    yield* desktopSettings.updateWindowProfiles((profiles) => [
+    const { settings } = yield* desktopSettings.updateWindowProfiles((profiles) => [
       ...profiles,
       { ...profile, id, name: profile.name.trim(), openAtQuit: false },
     ]);
-    const saved = (yield* desktopSettings.get).windowProfiles.find(
-      (candidate) => candidate.id === id,
-    );
+    const saved = settings.windowProfiles.find((candidate) => candidate.id === id);
     if (saved === undefined) {
       return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId: id });
     }
@@ -1607,7 +1606,7 @@ export const make = Effect.gen(function* () {
     const placement = entry.readPlacement();
     const saved = yield* addProfile({
       name,
-      projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(entry.projectScopeKeys),
+      projectScopeKeys: entry.projectScopeKeys,
       theme: null,
       bounds: placement?.bounds ?? null,
       maximized: placement?.isMaximized ?? false,
@@ -1998,7 +1997,7 @@ export const make = Effect.gen(function* () {
     createProfile: Effect.fn("desktop.window.createProfile")(function* (input) {
       const saved = yield* addProfile({
         name: input.name,
-        projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(input.projectScopeKeys),
+        projectScopeKeys: input.projectScopeKeys,
         theme: input.theme,
         bounds: null,
         maximized: false,
@@ -2041,9 +2040,7 @@ export const make = Effect.gen(function* () {
         if (entry.profileId !== profileId) continue;
         entry.profileId = null;
         entry.projectScopeKeys = profile.projectScopeKeys;
-        entry.unsavedName = nextUnsavedWindowName(
-          liveEntries().flatMap((other) => (other.profileId === null ? [other.unsavedName] : [])),
-        );
+        entry.unsavedName = nextUnsavedName();
       }
       yield* updateProfiles((profiles) =>
         profiles.filter((candidate) => candidate.id !== profileId),
