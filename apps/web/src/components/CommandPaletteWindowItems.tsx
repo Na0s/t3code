@@ -27,21 +27,21 @@ export function useCommandPaletteWindowItems(): ReadonlyArray<CommandPaletteActi
       shortcutCommand: "window.new",
       run: async () => openNewDesktopWindow(bridge),
     });
-  }
-  for (const profile of multiWindowEnabled ? (windowsState?.profiles ?? []) : []) {
-    if (profile.isDefault || profile.id === currentProfileId) continue;
-    items.push({
-      kind: "action",
-      value: `action:window-open:${profile.id}`,
-      title: `Open window: ${profile.name}`,
-      searchTerms: ["window", "open window", "saved window", profile.name],
-      icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        await bridge.openProfile(profile.id).catch((cause: unknown) => {
-          notifyWindowActionFailure("Couldn't open the window", cause);
-        });
-      },
-    });
+    for (const profile of windowsState?.profiles ?? []) {
+      if (profile.isDefault || profile.id === currentProfileId) continue;
+      items.push({
+        kind: "action",
+        value: `action:window-open:${profile.id}`,
+        title: `Open window: ${profile.name}`,
+        searchTerms: ["window", "open window", "saved window", profile.name],
+        icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await bridge.openProfile(profile.id).catch((cause: unknown) => {
+            notifyWindowActionFailure("Couldn't open the window", cause);
+          });
+        },
+      });
+    }
   }
   if (context?.isMain === true) {
     const miniMode = windowsState?.miniMode === true;
