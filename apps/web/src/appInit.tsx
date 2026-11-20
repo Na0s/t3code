@@ -49,6 +49,7 @@ import { syncBrowserChromeTheme } from "./hooks/useTheme";
 import { startThreadVisitedMigration } from "./hooks/useThreadVisitedMigration";
 import { installDesktopPasteAsText } from "./lib/desktopPasteAsText";
 import { startDesktopWindowHub } from "./multiWindow/hub";
+import { registerDesktopWindowCommands } from "./multiWindow/ui/windowActions";
 import { isSecondaryDesktopWindow } from "./multiWindow/windowContext";
 import {
   syncDocumentElectronPlatformClasses,
@@ -280,6 +281,7 @@ export function startAppServices(): AppRouter {
   installChatRouteCommands(router);
   installCommandPaletteCommands(router);
   registerOpenFavoriteEditorCommand();
+  registerDesktopWindowCommands();
   startThreadOverlayRetention(router);
   // Drafts promote as their server threads arrive, wherever the user is.
   subscribeDraftThreadPromotion({

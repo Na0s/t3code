@@ -13,7 +13,7 @@ import {
 } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { desktopWindowsBridge } from "../windowContext";
-import { notifyWindowActionFailure, registerDesktopWindowCommands } from "./windowActions";
+import { notifyWindowActionFailure } from "./windowActions";
 import {
   normalizeWindowProfileName,
   WINDOW_PROFILE_NAME_MAX_LENGTH,
@@ -21,7 +21,7 @@ import {
   windowCloseDecision,
 } from "./windowProfiles.logic";
 
-/** The New Window commands and the save-on-close prompt, once per desktop window. */
+/** The save-on-close prompt, once per desktop window. */
 export function DesktopWindowsHost() {
   const [bridge] = useState(desktopWindowsBridge);
   return bridge === null ? null : <DesktopWindowsHostContent bridge={bridge} />;
@@ -33,24 +33,21 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
   const pendingRequestIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the desktop shell's close requests and registers the window commands
-  useEffect(() => {
-    const disposeCommands = registerDesktopWindowCommands();
-    const unsubscribe = bridge.onCloseRequest((next) => {
-      const previous = pendingRequestIdRef.current;
-      // A newer request supersedes one still on screen; the shell waits on every request.
-      if (previous !== null && previous !== next.requestId) {
-        void bridge.resolveCloseRequest(previous, { action: "cancel" }).catch(() => {});
-      }
-      pendingRequestIdRef.current = next.requestId;
-      setRequest(next);
-      setName(next.suggestedName);
-    });
-    return () => {
-      unsubscribe();
-      disposeCommands();
-    };
-  }, [bridge]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the desktop shell's close requests
+  useEffect(
+    () =>
+      bridge.onCloseRequest((next) => {
+        const previous = pendingRequestIdRef.current;
+        // A newer request supersedes one still on screen; the shell waits on every request.
+        if (previous !== null && previous !== next.requestId) {
+          void bridge.resolveCloseRequest(previous, { action: "cancel" }).catch(() => {});
+        }
+        pendingRequestIdRef.current = next.requestId;
+        setRequest(next);
+        setName(next.suggestedName);
+      }),
+    [bridge],
+  );
 
   const resolve = (choice: WindowCloseChoice) => {
     if (request === null) return;
