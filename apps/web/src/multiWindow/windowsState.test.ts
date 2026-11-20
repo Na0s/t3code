@@ -5,6 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { openWindow } from "./ui/mini.fixtures";
 import {
   isMiniMainWindow,
   resolveWindowThemeOverride,
@@ -26,6 +27,8 @@ const workProfile: DesktopWindowProfile = {
   isDefault: false,
 };
 
+const unsavedWindow = openWindow(2, "Window 2", "", { profileId: null, focused: true });
+
 function context(overrides: Partial<DesktopWindowContext> = {}): DesktopWindowContext {
   return {
     windowId: 2,
@@ -41,24 +44,8 @@ function windowsState(overrides: Partial<DesktopWindowsState> = {}): DesktopWind
   return {
     profiles: [mainProfile, workProfile],
     windows: [
-      {
-        windowId: 1,
-        isMain: true,
-        profileId: "main",
-        name: "Main",
-        title: "",
-        focused: false,
-        projectScopeKeys: [],
-      },
-      {
-        windowId: 2,
-        isMain: false,
-        profileId: "work",
-        name: "Work",
-        title: "",
-        focused: true,
-        projectScopeKeys: [],
-      },
+      openWindow(1, "Main", "", { isMain: true, profileId: "main" }),
+      openWindow(2, "Work", "", { profileId: "work", focused: true }),
     ],
     miniMode: false,
     multiWindowEnabled: true,
@@ -72,19 +59,7 @@ describe("selectCurrentWindowProfile", () => {
     expect(selectCurrentWindowProfile(windowsState(), context({ profileId: null }))).toBe(
       workProfile,
     );
-    const deleted = windowsState({
-      windows: [
-        {
-          windowId: 2,
-          isMain: false,
-          profileId: null,
-          name: "Window 2",
-          title: "",
-          focused: true,
-          projectScopeKeys: [],
-        },
-      ],
-    });
+    const deleted = windowsState({ windows: [unsavedWindow] });
     expect(selectCurrentWindowProfile(deleted, context({ profileId: "work" }))).toBeNull();
   });
 
@@ -110,19 +85,7 @@ describe("resolveWindowThemeOverride", () => {
     [
       "an unsaved window",
       context({ theme: "nord" }),
-      windowsState({
-        windows: [
-          {
-            windowId: 2,
-            isMain: false,
-            profileId: null,
-            name: "W",
-            title: "",
-            focused: true,
-            projectScopeKeys: [],
-          },
-        ],
-      }),
+      windowsState({ windows: [unsavedWindow] }),
       null,
     ],
   ] as const)("resolves %s", (_label, windowContext, state, expected) => {
