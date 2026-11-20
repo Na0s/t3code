@@ -11,4 +11,4 @@ macOS or **Ctrl+Alt+Shift+N** on Windows and Linux. Change the shortcut under
 **Settings → Keybindings** (`window.new`).
 
 Closing the main window while others are open hides it instead, since the other windows connect
-through it. It closes once the last other window does.
+through it. On Windows and Linux it closes once the last other window does.
