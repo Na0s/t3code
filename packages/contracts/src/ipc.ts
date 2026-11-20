@@ -20,6 +20,7 @@ import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
 } from "./desktopAppActivation.ts";
+import type { DesktopWindowsBridge } from "./desktopWindows.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -1090,6 +1091,8 @@ export interface DesktopBridge {
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
+  /** Fires in every other app window after one window saves client settings. */
+  onClientSettingsChanged?: (listener: () => void) => () => void;
   getConnectionCatalog: () => Promise<string | null>;
   setConnectionCatalog: (catalog: string) => Promise<boolean>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
@@ -1191,6 +1194,8 @@ export interface DesktopBridge {
     onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
   };
   preview: DesktopPreviewBridge;
+  /** Multi-window support; absent in shells that predate it. */
+  windows?: DesktopWindowsBridge;
 }
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */

@@ -92,7 +92,7 @@ const layerDesktopUpdates = ({ checkResult }: MenuServices) =>
   } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
 const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
-  Layer.succeed(DesktopWindow.DesktopWindow, {
+  Layer.mock(DesktopWindow.DesktopWindow)({
     createMain: Effect.die("unexpected createMain"),
     ensureMain: Effect.die("unexpected ensureMain"),
     revealOrCreateMain: Effect.die("unexpected revealOrCreateMain"),
@@ -105,12 +105,12 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     dispatchSnapShotEvent: () => Effect.void,
-    zoomMain: (direction) =>
+    zoomFocused: (direction) =>
       Deferred.succeed(selectedAction, `zoom-${direction}`).pipe(Effect.asVoid),
-    runMainContentsCommand: (command) =>
+    runFocusedContentsCommand: (command) =>
       Deferred.succeed(selectedAction, `main-${command}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
-  } satisfies DesktopWindow.DesktopWindow["Service"]);
+  });
 
 const layerElectronMenu = (
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
@@ -347,6 +347,30 @@ describe("DesktopApplicationMenu", () => {
       assert.equal(yield* Deferred.await(selectedAction), "main-reload");
     }),
   );
+  it.effect("leads the Window menu with New Window and leaves its chord to the renderer", () =>
+    Effect.gen(function* () {
+      const selectedAction = yield* Deferred.make<string>();
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+      yield* configureMenu(selectedAction, applicationMenuTemplate);
+
+      const windowMenu = (yield* Deferred.await(applicationMenuTemplate)).find(
+        (item) => item.role === "windowMenu",
+      );
+      if (!Array.isArray(windowMenu?.submenu)) {
+        throw new Error("Expected the Window menu submenu to be an array.");
+      }
+      const [newWindow] = windowMenu.submenu;
+      assert.deepEqual(
+        { label: newWindow?.label, accelerator: newWindow?.accelerator },
+        { label: "New Window", accelerator: "CmdOrCtrl+Alt+Shift+N" },
+      );
+      assert.equal(newWindow?.registerAccelerator, false);
+      newWindow?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
+      assert.equal(yield* Deferred.await(selectedAction), "new-window");
+    }),
+  );
+
   it.effect("tells the user which update the menu check found", () =>
     Effect.gen(function* () {
       const dialog = yield* checkForUpdatesFromMacMenu({

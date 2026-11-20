@@ -60,6 +60,7 @@ import { readProject } from "../state/entities";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+import { isSecondaryDesktopWindow } from "../multiWindow/windowContext";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -153,6 +154,7 @@ function RootRouteBranch() {
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
+  const secondaryWindow = isSecondaryDesktopWindow();
 
   if (pathname === GUEST_PAGE_PATH) return <Outlet />;
 
@@ -179,11 +181,14 @@ function RootRouteBranch() {
   // first-run gate and the event router, whose first navigation would leave the page.
   const appHosts = (
     <>
-      {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-      {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+      {/* The desktop routes activations and web links to the main window, which also keeps the app awake. */}
+      {primaryEnvironmentAuthenticated && !secondaryWindow ? (
+        <DesktopAppActivationCoordinator />
+      ) : null}
+      {(primaryEnvironmentAuthenticated || localEnvironmentDisabled) && !secondaryWindow ? (
         <DesktopWebLinkCoordinator />
       ) : null}
-      {isElectron ? <RunningThreadKeepAlive /> : null}
+      {isElectron && !secondaryWindow ? <RunningThreadKeepAlive /> : null}
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <SshPasswordPromptDialog />

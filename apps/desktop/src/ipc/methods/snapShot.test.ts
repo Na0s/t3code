@@ -44,8 +44,8 @@ describe("window capture IPC", () => {
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(ElectronWindow.ElectronWindow, {
-            main: Effect.succeedSome({ webContents: { id: 7 } }),
-          } as ElectronWindow.ElectronWindow["Service"]),
+            apps: Effect.succeed([{ webContents: { id: 7 } }]),
+          } as unknown as ElectronWindow.ElectronWindow["Service"]),
           Layer.succeed(DesktopSnapShot.DesktopSnapShot, {
             previewConfig: () =>
               Effect.sync(() => {
@@ -67,7 +67,7 @@ describe("window capture IPC", () => {
     );
   });
 
-  it.effect("allows capture setup only from the trusted main renderer", () => {
+  it.effect("allows capture setup only from a trusted app renderer", () => {
     const actions: string[] = [];
     return Effect.gen(function* () {
       yield* setupSnapShot.handler("install-extension", { sender: { id: 7 } });
@@ -81,8 +81,8 @@ describe("window capture IPC", () => {
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(ElectronWindow.ElectronWindow, {
-            main: Effect.succeedSome({ webContents: { id: 7 } }),
-          } as ElectronWindow.ElectronWindow["Service"]),
+            apps: Effect.succeed([{ webContents: { id: 7 } }]),
+          } as unknown as ElectronWindow.ElectronWindow["Service"]),
           Layer.succeed(DesktopSnapShot.DesktopSnapShot, {
             setup: (action: string) =>
               Effect.sync(() => {

@@ -9,9 +9,12 @@ vi.mock("electron", () => ({}));
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
 
-it.effect("answers only the main window's top frame", () =>
+it.effect("answers only app windows' top frames and tells handlers which window sent", () =>
   Effect.gen(function* () {
     const mainFrame = {};
+    const secondaryFrame = {};
+    const mainWindow = { id: 10, webContents: { id: 1, mainFrame } };
+    const secondaryWindow = { id: 11, webContents: { id: 3, mainFrame: secondaryFrame } };
     const invoke = new Map<string, DesktopIpc.DesktopIpcHandleListener>();
     const sync = new Map<string, DesktopIpc.DesktopIpcSyncListener>();
     const ipc = yield* DesktopIpc.DesktopIpc.pipe(
@@ -24,9 +27,11 @@ it.effect("answers only the main window's top frame", () =>
         }).pipe(
           Layer.provide(
             Layer.mock(ElectronWindow.ElectronWindow, {
-              main: Effect.succeedSome({
-                webContents: { id: 1, mainFrame },
-              } as unknown as Electron.BrowserWindow),
+              main: Effect.succeedSome(mainWindow as unknown as Electron.BrowserWindow),
+              apps: Effect.succeed([
+                mainWindow,
+                secondaryWindow,
+              ] as unknown as ReadonlyArray<Electron.BrowserWindow>),
             }),
           ),
         ),
@@ -37,13 +42,21 @@ it.effect("answers only the main window's top frame", () =>
         channel: "token",
         payload: Schema.Void,
         result: Schema.String,
-        handler: () => Effect.succeed("secret"),
+        handler: () =>
+          Effect.map(
+            DesktopIpc.DesktopIpcSender,
+            ({ window, isMain }) => `secret-${window.id}${isMain ? "-main" : ""}`,
+          ),
       }),
     );
-    yield* ipc.handleSync({ channel: "token-sync", handler: () => Effect.succeed("secret") });
+    yield* ipc.handleSync({
+      channel: "token-sync",
+      handler: () => Effect.map(DesktopIpc.DesktopIpcSender, ({ window }) => `secret-${window.id}`),
+    });
 
     const senders = {
       app: { sender: { id: 1 }, senderFrame: mainFrame },
+      secondary: { sender: { id: 3 }, senderFrame: secondaryFrame },
       appSubframe: { sender: { id: 1 }, senderFrame: {} },
       previewGuest: { sender: { id: 2 }, senderFrame: {} },
     };
@@ -59,7 +72,8 @@ it.effect("answers only the main window's top frame", () =>
       ];
     }
     assert.deepEqual(results, {
-      app: ["secret", "secret"],
+      app: ["secret-10-main", "secret-10"],
+      secondary: ["secret-11", "secret-11"],
       appSubframe: ["rejected", undefined],
       previewGuest: ["rejected", undefined],
     });
