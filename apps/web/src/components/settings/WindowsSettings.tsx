@@ -1,8 +1,4 @@
-import type {
-  DesktopOpenWindow,
-  DesktopWindowProfile,
-  DesktopWindowsBridge,
-} from "@t3tools/contracts";
+import type { DesktopWindowProfile, DesktopWindowsBridge } from "@t3tools/contracts";
 import { CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState, type ComponentProps } from "react";
 
@@ -100,7 +96,7 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
           bridge={bridge}
           profile={mainProfile}
           projectGroups={projectGroups}
-          openWindow={undefined}
+          isOpen
           isCurrentWindow={currentProfileId === mainProfile.id}
           canOpen
         />
@@ -115,7 +111,9 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
                 bridge={bridge}
                 profile={profile}
                 projectGroups={projectGroups}
-                openWindow={windowsState?.windows.find((window) => window.profileId === profile.id)}
+                isOpen={
+                  windowsState?.windows.some((window) => window.profileId === profile.id) ?? false
+                }
                 isCurrentWindow={currentProfileId === profile.id}
                 canOpen={multiWindowEnabled}
               />
@@ -237,14 +235,14 @@ function WindowProfileRow({
   bridge,
   profile,
   projectGroups,
-  openWindow,
+  isOpen,
   isCurrentWindow,
   canOpen,
 }: {
   readonly bridge: DesktopWindowsBridge;
   readonly profile: DesktopWindowProfile;
   readonly projectGroups: ProjectScopeGroups;
-  readonly openWindow: DesktopOpenWindow | undefined;
+  readonly isOpen: boolean;
   readonly isCurrentWindow: boolean;
   readonly canOpen: boolean;
 }) {
@@ -259,7 +257,6 @@ function WindowProfileRow({
       notifyWindowActionFailure("Couldn't delete the saved window", cause);
     });
   };
-  const isOpen = profile.isDefault || openWindow !== undefined;
 
   return (
     <SettingsRow
