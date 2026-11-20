@@ -1,4 +1,4 @@
-import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   AuthPreviewOperateScope,
   type DesktopPreviewBridge,
@@ -8,9 +8,14 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { type ComponentProps, useState } from "react";
+import { type ComponentProps, useEffect, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
+import {
+  publishHostedPreviewThreads,
+  useThreadsHostedElsewhere,
+} from "~/multiWindow/previewHosting";
+import { isSecondaryDesktopWindow } from "~/multiWindow/windowContext";
 
 import { isElectron } from "~/env";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
@@ -134,8 +139,23 @@ export function startElectronBrowserHost(): () => void {
 export function ElectronBrowserHost() {
   const previewByThreadKey = useActivePreviewSessions();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
-  useDesktopHostedPreviewSessions(primaryEnvironmentId);
-  const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
+  // Background previews belong to the main window; a secondary one hosts only what it shows.
+  const [secondaryWindow] = useState(isSecondaryDesktopWindow);
+  useDesktopHostedPreviewSessions(secondaryWindow ? null : primaryEnvironmentId);
+  const hostedElsewhere = useThreadsHostedElsewhere();
+  const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId).filter(
+    (session) => !hostedElsewhere.has(scopedThreadKey(session.threadRef)),
+  );
+  const hostedThreadKeys = secondaryWindow
+    ? [...new Set(sessions.map((session) => scopedThreadKey(session.threadRef)))]
+        .toSorted()
+        .join("\n")
+    : "";
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes this window's hosted previews to the main window through shared storage
+  useEffect(() => {
+    if (!secondaryWindow) return;
+    return publishHostedPreviewThreads(hostedThreadKeys === "" ? [] : hostedThreadKeys.split("\n"));
+  }, [secondaryWindow, hostedThreadKeys]);
 
   if (!isElectron) return null;
   return (

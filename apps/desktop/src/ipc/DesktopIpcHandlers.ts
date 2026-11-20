@@ -79,6 +79,7 @@ import {
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
+import * as WindowsIpc from "./methods/windows.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
 import {
@@ -188,6 +189,13 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
       Effect.Error<ReturnType<(typeof PreviewIpc.methods)[number]["handler"]>>,
       Effect.Services<ReturnType<(typeof PreviewIpc.methods)[number]["handler"]>>
     >(previewMethod);
+  }
+  yield* ipc.handleSync(WindowsIpc.getContext);
+  for (const windowsMethod of WindowsIpc.methods) {
+    yield* ipc.handle<
+      Effect.Error<ReturnType<(typeof WindowsIpc.methods)[number]["handler"]>>,
+      Effect.Services<ReturnType<(typeof WindowsIpc.methods)[number]["handler"]>>
+    >(windowsMethod);
   }
   yield* ipc.handle(PreviewIpc.listBrowserImportSources);
   yield* ipc.handle(PreviewIpc.importBrowserCookies);

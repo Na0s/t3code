@@ -400,6 +400,33 @@ describe("thread navigation helpers", () => {
   });
 });
 
+describe("new window shortcut", () => {
+  it("opens a window only in the desktop app, apart from the no-project thread shortcut", () => {
+    const newWindow = event({ key: "n", ctrlKey: true, altKey: true, shiftKey: true });
+    assert.strictEqual(
+      resolveShortcutCommand(newWindow, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+        context: { isDesktop: true },
+      }),
+      "window.new",
+    );
+    assert.isNull(
+      resolveShortcutCommand(newWindow, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+        context: { isDesktop: false },
+      }),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "n", ctrlKey: true, altKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Linux", context: { isDesktop: true } },
+      ),
+      "chat.newWithoutProject",
+    );
+  });
+});
+
 describe("model picker navigation helpers", () => {
   it("keeps default model jumps off the web even while the picker is open", () => {
     const input = event({ key: "3", metaKey: true });

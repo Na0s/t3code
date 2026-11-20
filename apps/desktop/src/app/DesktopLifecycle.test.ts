@@ -73,7 +73,9 @@ function layerElectronWindow(destroyAll: Effect.Effect<void> = Effect.void) {
     create: () => Effect.die("unexpected window creation"),
     main: Effect.die("unexpected main window read"),
     currentMainOrFirst: Effect.die("unexpected current window read"),
-    focusedMainOrFirst: Effect.die("unexpected focused window read"),
+    apps: Effect.succeed([]),
+    focusedApp: Effect.succeedNone,
+    registerApp: () => Effect.void,
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
     prepareReveal: () => Effect.succeed(false),
@@ -90,7 +92,7 @@ function layerDesktopWindow(
     readonly flushMainWindowBounds?: Effect.Effect<void>;
   } = {},
 ) {
-  return Layer.succeed(DesktopWindow.DesktopWindow, {
+  return Layer.mock(DesktopWindow.DesktopWindow)({
     createMain: Effect.die("unexpected window creation"),
     ensureMain: Effect.die("unexpected window creation"),
     revealOrCreateMain: Effect.die("unexpected window creation"),
@@ -103,7 +105,6 @@ function layerDesktopWindow(
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: () => Effect.void,
     dispatchSnapShotEvent: () => Effect.void,
-    zoomMain: () => Effect.void,
     runMainContentsCommand: () => Effect.void,
     syncAppearance: Effect.void,
   });

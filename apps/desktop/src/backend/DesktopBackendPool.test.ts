@@ -203,7 +203,7 @@ function layerPool(
           showErrorBox: () => Effect.void,
         } satisfies ElectronDialog.ElectronDialog["Service"]),
         ElectronApp.layer,
-        Layer.succeed(DesktopWindow.DesktopWindow, {
+        Layer.mock(DesktopWindow.DesktopWindow)({
           createMain: Effect.die("unexpected window create"),
           ensureMain: Effect.die("unexpected window ensure"),
           revealOrCreateMain: Effect.die("unexpected window reveal"),
@@ -216,11 +216,10 @@ function layerPool(
           prepareCaptureReveal: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
           dispatchSnapShotEvent: () => Effect.void,
-          zoomMain: () => Effect.die("unexpected zoom"),
           runMainContentsCommand:
             options.onMainContentsCommand ?? (() => Effect.die("unexpected main contents command")),
           syncAppearance: Effect.void,
-        } satisfies DesktopWindow.DesktopWindow["Service"]),
+        }),
       ),
     ),
   );

@@ -33,7 +33,7 @@ it.effect("only drags existing absolute paths from the host environment and app 
           platform,
         } as DesktopEnvironment.DesktopEnvironment["Service"]),
         Effect.provideService(ElectronWindow.ElectronWindow, {
-          main: Effect.succeedSome({ webContents: { id: 1, startDrag } }),
+          apps: Effect.succeed([{ webContents: { id: 1, startDrag } }]),
         } as unknown as ElectronWindow.ElectronWindow["Service"]),
       );
     assert.isFalse(yield* run("remote", filePath));

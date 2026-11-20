@@ -2,7 +2,7 @@ import { msg } from "gt-i18n";
 import { translatableDetail } from "../errors/translatable.ts";
 import {
   type ServerConfig,
-  type ServerConfigStreamEvent,
+  ServerConfigStreamEvent,
   WsSubscribeServerConfigRpc,
   WS_METHODS,
 } from "@t3tools/contracts";
@@ -18,6 +18,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
+import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -33,6 +34,8 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
+import { makePortProtocol, type RelayHandle, type RpcPort, serveRelay } from "./relay.ts";
+import { canonicalJson, makeSharedStreamProtocol } from "./sharedStreams.ts";
 import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
 import type {
   ConnectionAttemptError,
@@ -64,6 +67,8 @@ export interface RpcSession {
   /** Frames received so far: proof the socket is alive that needs no reply. */
   readonly inboundFrames: Effect.Effect<number>;
   readonly closed: Effect.Effect<never, ConnectionAttemptError>;
+  /** Serves another window's RpcClient over `port` through this session's socket. */
+  readonly relay?: (port: RpcPort) => Effect.Effect<RelayHandle, never, Scope.Scope>;
 }
 
 export interface RpcSessionOptions {
@@ -73,6 +78,8 @@ export interface RpcSessionOptions {
   readonly providerCatalogsOnDemand?: boolean;
   readonly providerCatalogDigests?: boolean;
   readonly providerStatusDeltas?: boolean;
+  /** Desktop hub only: clients of one session share identical subscriptions. */
+  readonly shareStreams?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -80,6 +87,11 @@ export class RpcSessionFactory extends Context.Service<
   {
     readonly connect: (
       connection: PreparedConnection,
+    ) => Effect.Effect<RpcSession, ConnectionAttemptError, Scope.Scope>;
+    /** A session whose requests travel over `port` to a hub window's `relay`. */
+    readonly connectOverPort: (
+      connection: PreparedConnection,
+      port: RpcPort,
     ) => Effect.Effect<RpcSession, ConnectionAttemptError, Scope.Scope>;
   }
 >()("@t3tools/client-runtime/rpc/session/RpcSessionFactory") {}
@@ -178,6 +190,13 @@ function socketFailureLocation(via: "relay" | "direct") {
   return { hop: via === "relay" ? "tunnel" : "server", via } as const;
 }
 
+const encodeServerConfigPayload = Schema.encodeUnknownSync(
+  Schema.toCodecJson(WsSubscribeServerConfigRpc.payloadSchema),
+);
+const encodeServerConfigEvents = Schema.encodeUnknownEffect(
+  Schema.toCodecJson(Schema.Array(ServerConfigStreamEvent)),
+);
+
 /** @public */
 export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
@@ -196,6 +215,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...input,
     workspaceSnapshotsOnDemand: true,
   });
+  const sharedConfigInputKey = canonicalJson(
+    encodeServerConfigPayload(onDemandSnapshots(serverConfigInput)),
+  );
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
     const via = connection.target._tag === "RelayConnectionTarget" ? "relay" : "direct";
@@ -275,13 +297,15 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         // Teardown sends an interrupt per open stream, and a write to a closed
         // socket waits out the client's 1s interrupt timeout before reconnecting.
         // Requests still go through, so they fail with the protocol error.
-        Effect.map((protocol) => ({
+        Effect.map((protocol): RpcClient.Protocol["Service"] => ({
           ...protocol,
           send: (clientId, request, transferables) =>
             request._tag !== "Request" && Deferred.isDoneUnsafe(disconnected)
               ? Effect.void
               : protocol.send(clientId, request, transferables),
         })),
+        // A desktop hub's own client and every relayed window share each subscription.
+        options.shareStreams === true ? Effect.flatMap(makeSharedStreamProtocol) : identity,
       ),
     ).pipe(
       Layer.provide(
@@ -303,6 +327,29 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Effect.ignore,
       Effect.forkScoped,
     );
+    return yield* finishSession({
+      connection,
+      protocolContext,
+      via,
+      inboundFrames: Effect.sync(() => inboundFrames),
+      mapRpcError,
+      relayable: true,
+    });
+  });
+
+  const finishSession = Effect.fnUntraced(function* (input: {
+    readonly connection: PreparedConnection;
+    readonly protocolContext: Context.Context<RpcClient.Protocol>;
+    readonly via: "relay" | "direct";
+    /** Port sessions only: fails when the hub's relay goes away. */
+    readonly relayClosed?: Effect.Effect<never, ConnectionTransientError>;
+    readonly inboundFrames: Effect.Effect<number>;
+    readonly mapRpcError: (
+      error: Parameters<typeof mapSessionRpcError>[0],
+    ) => ConnectionAttemptError;
+    readonly relayable: boolean;
+  }) {
+    const { connection, protocolContext, via, mapRpcError } = input;
     const protocolClient = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfigDeferred = yield* Deferred.make<ServerConfig>();
     const serverConfigExit = yield* Deferred.make<
@@ -538,13 +585,78 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       subscribeServerConfig,
       ready: initialConfig.pipe(Effect.asVoid),
       probe,
-      inboundFrames: Effect.sync(() => inboundFrames),
+      inboundFrames: input.inboundFrames,
       // The config stream also fails on disconnect, and only it can report a decode failure.
-      closed: Deferred.await(configSubscriptionClosed),
+      closed:
+        input.relayClosed === undefined
+          ? Deferred.await(configSubscriptionClosed)
+          : Effect.raceFirst(input.relayClosed, Deferred.await(configSubscriptionClosed)),
+      ...(input.relayable
+        ? {
+            relay: (port: RpcPort) =>
+              serveRelay({
+                protocol: Context.get(protocolContext, RpcClient.Protocol),
+                port,
+                // Every window subscribes with the same options, so the hub's
+                // replaying config stream answers them all.
+                shared: [
+                  {
+                    tag: WS_METHODS.subscribeServerConfig,
+                    matches: (payload) => canonicalJson(payload) === sharedConfigInputKey,
+                    items: subscribeServerConfig().pipe(Stream.orDie),
+                    encode: (events) => encodeServerConfigEvents(events).pipe(Effect.orDie),
+                  },
+                ],
+              }),
+          }
+        : {}),
     } satisfies RpcSession;
   });
 
-  return RpcSessionFactory.of({ connect });
+  const connectOverPort = Effect.fnUntraced(function* (
+    connection: PreparedConnection,
+    port: RpcPort,
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      "connection.environment.id": connection.environmentId,
+    });
+    const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    let inboundMessages = 0;
+    const protocol = yield* makePortProtocol({
+      port,
+      onMessage: () => {
+        inboundMessages += 1;
+      },
+      onClosed: (detail) =>
+        Deferred.fail(
+          disconnected,
+          new ConnectionTransientErrorClass({
+            reason: "transport",
+            detail: `${connection.label}: ${detail}`,
+          }),
+        ).pipe(Effect.asVoid),
+    });
+    return yield* finishSession({
+      connection,
+      protocolContext: Context.make(RpcClient.Protocol, protocol),
+      via: "direct",
+      relayClosed: Deferred.await(disconnected),
+      inboundFrames: Effect.sync(() => inboundMessages),
+      mapRpcError: (error) =>
+        mapSessionRpcError(
+          error,
+          "direct",
+          () =>
+            new ConnectionTransientErrorClass({
+              reason: "transport",
+              ...translatableDetail(msg("{host} disconnected.", { host: connection.label })),
+            }),
+        ),
+      relayable: false,
+    });
+  });
+
+  return RpcSessionFactory.of({ connect, connectOverPort });
 });
 
 export const layer = (options: RpcSessionOptions) => Layer.effect(RpcSessionFactory, make(options));

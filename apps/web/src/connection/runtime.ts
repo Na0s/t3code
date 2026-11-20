@@ -10,6 +10,8 @@ import * as Layer from "effect/Layer";
 import { Atom } from "effect/reactivity";
 
 import { isGuestPage } from "../guestPage";
+import { isSecondaryDesktopWindow, readDesktopWindowContext } from "../multiWindow/windowContext";
+import { layerHubLeaseSource } from "../multiWindow/secondary";
 
 import * as Runtime from "../lib/runtime";
 import * as BackgroundActivityReporter from "../lib/backgroundActivityReporter";
@@ -34,11 +36,17 @@ type ConnectionLayerSource =
 
 const layerProvidedClientConnection = layerSnapshotLoader.pipe(
   Layer.provideMerge(
-    Connection.layerWithOptions({
-      environmentThemes: true,
-      usageLimitSources: true,
-      usageLimitsCommand: true,
-    }),
+    Connection.layerWithOptions(
+      {
+        environmentThemes: true,
+        usageLimitSources: true,
+        usageLimitsCommand: true,
+        // The main desktop window serves other windows, which share its subscriptions.
+        shareStreams: readDesktopWindowContext()?.isMain === true,
+      },
+      // A secondary desktop window shares the main window's sockets.
+      isSecondaryDesktopWindow() ? layerHubLeaseSource : undefined,
+    ),
   ),
   Layer.provideMerge(
     Layer.mergeAll(
