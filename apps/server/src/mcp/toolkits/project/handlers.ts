@@ -9,7 +9,6 @@ import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { OrchestratorRuntimeModeAboveCeilingError } from "../../../orchestration-v2/Orchestrator.ts";
@@ -33,7 +32,6 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestrationMcp from "../../OrchestratorMcpService.ts";
 import { newCommandId, readCaller, resolveProjectId, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
-import { readUmbrellaWorktree } from "../../../project/umbrellaWorktreeLayout.ts";
 
 const isAboveCeilingError = Schema.is(OrchestratorRuntimeModeAboveCeilingError);
 
@@ -68,11 +66,7 @@ function worktreeCheckHint(
         : `pass the projectId of the checkout's own project: ${candidates
             .map((repository) => `"${repository.projectId}" (${repository.relativePath})`)
             .join(", ")}`;
-    const umbrella =
-      nested.length > 0
-        ? ` To span all of its checkouts, ask the user to turn on Use as umbrella for "${error.projectTitle}".`
-        : "";
-    return `Use workspaceStrategy: {type: "root"}, or ${suggestion}.${umbrella}`;
+    return `Use workspaceStrategy: {type: "root"}, or ${suggestion}.`;
   }
   if (error._tag === "ThreadLaunchBranchConflictError") {
     const sibling = error.branch.replaceAll("/", "-");
@@ -99,10 +93,6 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     Effect.flatMap((paths) => Effect.forEach(paths, real)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
-  // A worktree-mode umbrella thread's folder is not one Git lists; its manifest names the umbrella.
-  const umbrella = yield* readUmbrellaWorktree(worktreePath).pipe(Effect.provide(Path.layer));
-  if (umbrella !== null && (yield* real(umbrella.umbrellaRoot)) === (yield* real(workspaceRoot)))
-    return;
   if (!worktrees.includes(yield* real(worktreePath)))
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",

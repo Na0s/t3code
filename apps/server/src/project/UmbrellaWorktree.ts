@@ -1,22 +1,12 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
-
 import type { UmbrellaMember, WorktreeSubmodules } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { umbrellaWorktreeMemberPaths } from "@t3tools/shared/umbrellaWorktree";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import type * as PlatformError from "effect/PlatformError";
 
-import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import { removeEmptyDirectory } from "../vcs/removeEmptyDirectory.ts";
 import { UmbrellaMemberIndex } from "../vcs/UmbrellaMemberIndex.ts";
-import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import { recreateBranchWorktree } from "../workspace/recreateBranchWorktree.ts";
 import {
   encodeUmbrellaWorktreeManifest,
@@ -48,8 +38,6 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* GitWorkflowService.GitWorkflowService;
-  const serverConfig = yield* ServerConfig.ServerConfig;
-  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const index = yield* UmbrellaMemberIndex;
   const local = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
@@ -67,24 +55,8 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
     });
   const errorDetail = (cause: unknown) =>
     cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause);
-  const isInside = (parent: string, child: string) => {
-    const relative = path.relative(parent, child);
-    return (
-      relative === "" ||
-      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-    );
-  };
-  const isLink = (target: string) =>
-    fileSystem.readLink(target).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    );
-  const present = (target: string) =>
-    Effect.zipWith(
-      fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false)),
-      isLink(target),
-      (exists, link) => exists || link,
-    );
+  const exists = (target: string) =>
+    fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
 
   /** Where a repository starts: the requested base when it has one, else its own checkout. */
   const resolveBase = Effect.fn("UmbrellaWorktree.resolveBase")(function* (
@@ -132,161 +104,20 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
     );
   });
 
-  /**
-   * Links each entry of the plain umbrella root that is neither a member nor holds one, walking
-   * into folders that hold members. Existing entries are kept, so a recovery only fills gaps.
-   */
-  const linkSiblings = Effect.fn("UmbrellaWorktree.linkSiblings")(function* (
-    layout: UmbrellaWorktreeLayout,
-  ) {
-    const memberPaths = new Set(layout.members.map((member) => member.path));
-    const holdsMember = (relativePath: string) =>
-      layout.members.some((member) => member.path.startsWith(`${relativePath}/`));
-    const visit = Effect.fnUntraced(function* (
-      relativeDirectory: string,
-    ): Effect.fn.Return<void, PlatformError.PlatformError> {
-      const entries = yield* fileSystem
-        .readDirectory(joinUmbrellaRelative(path, layout.umbrellaRoot, relativeDirectory))
-        .pipe(Effect.orElseSucceed((): string[] => []));
-      for (const name of entries.toSorted()) {
-        const relativePath = relativeDirectory === "" ? name : `${relativeDirectory}/${name}`;
-        if (memberPaths.has(relativePath)) continue;
-        const source = joinUmbrellaRelative(path, layout.umbrellaRoot, relativePath);
-        const target = joinUmbrellaRelative(path, layout.path, relativePath);
-        // A worktree folder set inside the umbrella would otherwise link to itself.
-        if (isInside(source, layout.path)) continue;
-        if (holdsMember(relativePath)) {
-          yield* fileSystem.makeDirectory(target, { recursive: true });
-          yield* visit(relativePath);
-          continue;
-        }
-        if (yield* present(target)) continue;
-        yield* fileSystem.symlink(source, target).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("could not link an umbrella entry into its worktree", {
-              source,
-              target,
-              cause,
-            }),
-          ),
-        );
-      }
-    });
-    yield* visit("");
-  });
-
-  /** A plain folder's own entries are links and folders this module made; files are the agent's. */
-  const removePlainFolder = Effect.fn("UmbrellaWorktree.removePlainFolder")(function* (
-    folder: string,
-    force: boolean,
-  ) {
-    const visit = Effect.fnUntraced(function* (
-      target: string,
-    ): Effect.fn.Return<boolean, UmbrellaWorktreeError> {
-      if (yield* isLink(target)) {
-        yield* fileSystem
-          .remove(target)
-          .pipe(
-            Effect.mapError((cause) =>
-              fail("UmbrellaWorktree.remove", `Could not remove ${target}.`, cause),
-            ),
-          );
-        return true;
-      }
-      const info = yield* fileSystem.stat(target).pipe(Effect.option);
-      if (Option.isNone(info)) return true;
-      if (info.value.type !== "Directory") {
-        if (!force) return false;
-        yield* fileSystem
-          .remove(target)
-          .pipe(
-            Effect.mapError((cause) =>
-              fail("UmbrellaWorktree.remove", `Could not remove ${target}.`, cause),
-            ),
-          );
-        return true;
-      }
-      const entries = yield* fileSystem
-        .readDirectory(target)
-        .pipe(Effect.orElseSucceed((): string[] => []));
-      let empty = true;
-      for (const name of entries) {
-        if (!(yield* visit(path.join(target, name)))) empty = false;
-      }
-      if (!empty) return false;
-      // Files written since the listing keep the folder.
-      return yield* removeEmptyDirectory(target).pipe(
-        Effect.mapError((cause) =>
-          fail("UmbrellaWorktree.remove", `Could not remove ${target}.`, cause),
-        ),
-      );
-    });
-    if (!(yield* visit(folder))) {
-      return yield* fail(
-        "UmbrellaWorktree.remove",
-        `${folder} holds files that are not part of any repository; remove it with force to delete them.`,
-      );
-    }
-  });
-
-  const threadFolderFor = Effect.fn("UmbrellaWorktree.threadFolderFor")(function* (
-    umbrellaRoot: string,
-    branch: string,
-  ) {
-    const settings = yield* serverSettings.getSettings.pipe(
-      Effect.orElseSucceed(() => ({ worktreesDirectory: "" })),
-    );
-    const parent = resolveWorktreesDirectory(
-      settings.worktreesDirectory,
-      serverConfig.worktreesDir,
-      path,
-      yield* HostProcess.HomeDirectory,
-    );
-    if (parent === null) {
-      return yield* fail(
-        "UmbrellaWorktree.create",
-        `The worktree location "${settings.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
-      );
-    }
-    // Named as Git worktrees are: by umbrella, then a short branch prefix and a stable hash.
-    const root = yield* fileSystem
-      .realPath(umbrellaRoot)
-      .pipe(Effect.orElseSucceed(() => path.resolve(umbrellaRoot)));
-    const hash = NodeCrypto.createHash("sha256").update(`${root}\0${branch}`).digest("hex");
-    let prefix = "";
-    for (const character of branch.replace(/\//g, "-")) {
-      if (Buffer.byteLength(prefix + character) > 23) break;
-      prefix += character;
-    }
-    const basePath = path.join(parent, path.basename(root), `${prefix}-${hash.slice(0, 16)}`);
-    let candidate = basePath;
-    for (
-      let suffix = 2;
-      (yield* present(candidate)) ||
-      (yield* present(umbrellaWorktreeManifestPath(path, candidate)));
-      suffix++
-    ) {
-      candidate = `${basePath}-${suffix}`;
-    }
-    return candidate;
-  });
-
   const create = Effect.fn("UmbrellaWorktree.create")(function* (
     input: CreateUmbrellaWorktreeInput,
   ) {
     const umbrellaRoot = path.resolve(input.umbrellaRoot);
-    const rootRepository =
-      (yield* git.repositoryRoot(umbrellaRoot).pipe(Effect.orElseSucceed(() => null))) !== null;
+    if ((yield* git.repositoryRoot(umbrellaRoot).pipe(Effect.orElseSucceed(() => null))) === null) {
+      return yield* fail(
+        "UmbrellaWorktree.create",
+        `Umbrella worktrees need the umbrella folder ${umbrellaRoot} to be a Git repository.`,
+      );
+    }
     const memberPaths = umbrellaWorktreeMemberPaths(
       input.members.map((member) => member.relativePath),
     );
-    const sources = [
-      ...(rootRepository ? [umbrellaRoot] : []),
-      ...input.members.map((member) => member.path),
-    ];
-    if (sources.length === 0) {
-      return yield* fail("UmbrellaWorktree.create", "This umbrella has no repositories.");
-    }
+    const sources = [umbrellaRoot, ...input.members.map((member) => member.path)];
     let branch = input.branch;
     if (input.flattenOnConflict) {
       const parts = branch.split("/");
@@ -315,9 +146,6 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
             Effect.ignoreCause({ log: true }),
           );
       }
-      if (folder !== null && !rootRepository) {
-        yield* fileSystem.remove(folder, { recursive: true }).pipe(Effect.ignore);
-      }
       if (folder !== null && manifestWritten) {
         yield* fileSystem.remove(umbrellaWorktreeManifestPath(path, folder)).pipe(Effect.ignore);
         yield* fileSystem.realPath(folder).pipe(
@@ -328,40 +156,34 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
     });
 
     const build = Effect.gen(function* () {
-      if (rootRepository) {
-        const base = yield* resolveBase(umbrellaRoot, input.baseRef, input.startFromOrigin);
-        const worktree = yield* git.createWorktree(
-          {
-            cwd: umbrellaRoot,
-            refName: base.startRef,
-            newRefName: branch,
-            ...(base.baseRefName === undefined ? {} : { baseRefName: base.baseRefName }),
-            path: null,
+      const base = yield* resolveBase(umbrellaRoot, input.baseRef, input.startFromOrigin);
+      const worktree = yield* git.createWorktree(
+        {
+          cwd: umbrellaRoot,
+          refName: base.startRef,
+          newRefName: branch,
+          ...(base.baseRefName === undefined ? {} : { baseRefName: base.baseRefName }),
+          path: null,
+        },
+        {
+          submodules: input.submodules,
+          progress: {
+            onWorktreeClaimed: (claimed) =>
+              Effect.sync(() => {
+                folder = claimed;
+                created.push({ cwd: umbrellaRoot, path: claimed });
+              }),
           },
-          {
-            submodules: input.submodules,
-            progress: {
-              onWorktreeClaimed: (claimed) =>
-                Effect.sync(() => {
-                  folder = claimed;
-                  created.push({ cwd: umbrellaRoot, path: claimed });
-                }),
-            },
-          },
-        );
-        folder = worktree.worktree.path;
-        if (!created.some((piece) => piece.path === folder)) {
-          created.push({ cwd: umbrellaRoot, path: folder });
-        }
-      } else {
-        folder = yield* threadFolderFor(umbrellaRoot, branch);
-        yield* fileSystem.makeDirectory(folder, { recursive: true });
+        },
+      );
+      const threadFolder = worktree.worktree.path;
+      folder = threadFolder;
+      if (!created.some((piece) => piece.path === threadFolder)) {
+        created.push({ cwd: umbrellaRoot, path: threadFolder });
       }
-      const threadFolder = folder;
       const layout: UmbrellaWorktreeLayout = {
         path: threadFolder,
         umbrellaRoot,
-        rootRepository,
         members: input.members.map((member, index) => ({
           source: path.resolve(member.path),
           path: memberPaths[index]!,
@@ -412,10 +234,9 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
           ),
         { concurrency: 4, discard: true },
       );
-      if (!rootRepository) yield* linkSiblings(layout);
       // Members' worktrees exist now, so their real paths register.
       yield* local(registerUmbrellaWorktree(layout));
-      return { path: threadFolder, branch, rootRepository };
+      return { path: threadFolder, branch };
     });
 
     return yield* build.pipe(
@@ -444,15 +265,11 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
       .realPath(layout.path)
       .pipe(Effect.orElseSucceed(() => layout.path));
     const failures: Array<string> = [];
-    const repositories = umbrellaWorktreeRepositories(path, layout);
-    // Members first: removing the root's worktree would delete the members inside it.
-    const members = repositories
-      .filter((repository) => repository.relativePath !== "")
-      .toSorted((left, right) => right.relativePath.length - left.relativePath.length);
+    const [root, ...members] = umbrellaWorktreeRepositories(path, layout);
     // Untraced: the removal's span covers each repository.
     const removeRepository = Effect.fnUntraced(
       function* (repository: UmbrellaWorktreeRepository) {
-        if (yield* present(repository.cwd)) {
+        if (yield* exists(repository.cwd)) {
           yield* git.removeWorktree({
             cwd: repository.source,
             path: repository.cwd,
@@ -482,12 +299,13 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
           ),
         ),
     );
-    for (const member of members) yield* removeRepository(member);
-    if (failures.length === 0) {
-      const root = repositories.find((repository) => repository.relativePath === "");
-      if (root !== undefined) yield* removeRepository(root);
-      else if (yield* present(layout.path)) yield* removePlainFolder(layout.path, input.force);
+    // Members first: removing the root's worktree would delete the members inside it.
+    for (const member of members.toSorted(
+      (left, right) => right.relativePath.length - left.relativePath.length,
+    )) {
+      yield* removeRepository(member);
     }
+    if (failures.length === 0) yield* removeRepository(root!);
     if (failures.length > 0) {
       return yield* fail(
         "UmbrellaWorktree.remove",
@@ -518,7 +336,6 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
         Effect.map((entries) => entries.length === 0),
         Effect.orElseSucceed(() => true),
       );
-    const folderMissing = !(yield* present(layout.path));
     for (const repository of umbrellaWorktreeRepositories(path, layout)) {
       if (yield* hasCheckout(repository.cwd)) continue;
       if (!(yield* isEmptyOrMissing(repository.cwd))) {
@@ -541,11 +358,6 @@ export const makeUmbrellaWorktrees = Effect.gen(function* () {
           branch: input.branch,
         }),
       );
-    }
-    // Links come back only with the folder; one the agent removed stays removed.
-    if (!layout.rootRepository && folderMissing) {
-      yield* fileSystem.makeDirectory(layout.path, { recursive: true });
-      yield* linkSiblings(layout);
     }
     yield* local(registerUmbrellaWorktree(layout));
     return true;

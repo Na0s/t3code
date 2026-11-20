@@ -216,7 +216,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
             Effect.andThen(
               Effect.succeed({
                 worktree: {
-                  path: input.path ?? `/worktrees/project/${input.newRefName}`,
+                  path:
+                    input.path ??
+                    `${options.worktreesDir ?? "/worktrees"}/project/${input.newRefName}`,
                   refName: input.newRefName ?? "detached",
                 },
               }),
@@ -319,9 +321,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
         } satisfies Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>),
         NodeServices.layer,
         NodeCrypto.layer,
-        Layer.succeed(ServerConfig.ServerConfig, {
-          worktreesDir: options.worktreesDir ?? "/worktrees",
-        } as ServerConfig.ServerConfig["Service"]),
         options.umbrellaMembers === undefined
           ? Layer.empty
           : Layer.mock(UmbrellaMembership.UmbrellaMembership)({
@@ -418,16 +417,18 @@ describe("t3_worktree_handoff", () => {
 
   it.effect("hands an umbrella thread off to one folder holding every member", () =>
     Effect.gen(function* () {
-      const worktreesDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+      const fileSystem = yield* FileSystem.FileSystem;
+      const worktreesDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "handoff-umbrella-",
       });
+      yield* fileSystem.makeDirectory(`${worktreesDir}/project/feature`, { recursive: true });
       const harness = makeHarness({
         worktreesDir,
         umbrellaMembers: [
           { path: "/project/api", relativePath: "api", repositoryIdentity: null, source: "nested" },
         ],
         git: {
-          repositoryRoot: () => Effect.succeed(null),
+          repositoryRoot: (cwd) => Effect.succeed(cwd),
           currentBranch: () => Effect.succeed("main"),
         },
       });

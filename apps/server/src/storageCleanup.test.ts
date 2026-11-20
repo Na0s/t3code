@@ -3020,31 +3020,30 @@ describe("storage cleanup reports and local file policies", () => {
           yield* TestClock.setTime(NOW_MS);
           const fixture = yield* cleanupFixture();
           const { fs, command, config } = fixture;
-          // A plain umbrella folder holding one member repository and a shared folder.
+          // An umbrella repository holding one member repository.
           const umbrella = yield* fs.realPath(
             yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-umbrella-" }),
           );
           const member = `${umbrella}/api`;
           yield* fs.makeDirectory(member);
-          yield* fs.makeDirectory(`${umbrella}/copy`);
-          yield* fs.writeFileString(`${umbrella}/copy/brief.md`, "brief\n");
-          yield* command(member, ["init", "-b", "main"]);
-          yield* command(member, ["config", "user.email", "cleanup@example.test"]);
-          yield* command(member, ["config", "user.name", "Cleanup test"]);
+          yield* fs.writeFileString(`${umbrella}/.gitignore`, "api/\n");
           yield* fs.writeFileString(`${member}/tracked.txt`, "original\n");
-          yield* command(member, ["add", "."]);
-          yield* command(member, ["commit", "-m", "initial"]);
+          for (const repository of [umbrella, member]) {
+            yield* command(repository, ["init", "-b", "main"]);
+            yield* command(repository, ["config", "user.email", "cleanup@example.test"]);
+            yield* command(repository, ["config", "user.name", "Cleanup test"]);
+            yield* command(repository, ["add", "."]);
+            yield* command(repository, ["commit", "-m", "initial"]);
+          }
           const folder = `${config.worktreesDir}/umbrella/feature`;
-          yield* fs.makeDirectory(folder, { recursive: true });
+          yield* command(umbrella, ["worktree", "add", "-b", "feature", folder]);
           yield* command(member, ["worktree", "add", "-b", "feature", `${folder}/api`]);
-          yield* fs.symlink(`${umbrella}/copy`, `${folder}/copy`);
           const manifest = `${folder}.t3-umbrella.json`;
           yield* fs.writeFileString(
             manifest,
             JSON.stringify({
               version: 1,
               umbrellaRoot: umbrella,
-              rootRepository: false,
               members: [{ source: member, path: "api" }],
             }),
           );
@@ -3064,13 +3063,14 @@ describe("storage cleanup reports and local file policies", () => {
             outcome: "removed",
           });
           expect(yield* fs.exists(folder)).toBe(false);
-          expect(
-            (yield* command(member, ["worktree", "list", "--porcelain"])).stdout,
-          ).not.toContain(folder);
-          expect((yield* command(member, ["branch", "--list", "feature"])).stdout.trim()).toBe(
-            "feature",
-          );
-          expect(yield* fs.readFileString(`${umbrella}/copy/brief.md`)).toBe("brief\n");
+          for (const repository of [umbrella, member]) {
+            expect(
+              (yield* command(repository, ["worktree", "list", "--porcelain"])).stdout,
+            ).not.toContain(folder);
+            expect(
+              (yield* command(repository, ["branch", "--list", "feature"])).stdout.trim(),
+            ).toBe("feature");
+          }
           // The next turn rebuilds the same layout from the manifest.
           expect(yield* fs.exists(manifest)).toBe(true);
         }),

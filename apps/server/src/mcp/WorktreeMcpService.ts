@@ -31,7 +31,6 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as UmbrellaMembership from "../project/UmbrellaMembership.ts";
 import { makeUmbrellaWorktrees } from "../project/UmbrellaWorktree.ts";
 import type { UmbrellaWorktreeError } from "../project/umbrellaWorktreeLayout.ts";
-import type * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import type { McpInvocationScope, McpThreadInvocationScope } from "./McpInvocationContext.ts";
@@ -548,5 +547,4 @@ export const layer: Layer.Layer<
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
   | Path.Path
-  | ServerConfig.ServerConfig
 > = Layer.effect(WorktreeMcpService, make);

@@ -7,7 +7,6 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import { makeReadUmbrellaWorktree } from "../project/umbrellaWorktreeLayout.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -18,15 +17,11 @@ export const makeReconcile = Effect.gen(function* () {
   const git = yield* GitWorkflowService.GitWorkflowService;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const fs = yield* FileSystem.FileSystem;
-  const readUmbrellaWorktree = yield* makeReadUmbrellaWorktree;
   return Effect.fn("WorktreeBranchSync.reconcile")(function* (input: {
     readonly cwd: string;
     readonly refName: string | null;
   }) {
     if (input.refName === null) return;
-    // A plain umbrella folder has no branch; one reported for it belongs to an enclosing repository.
-    const umbrella = yield* readUmbrellaWorktree(input.cwd);
-    if (umbrella !== null && !umbrella.rootRepository) return;
     const paths = yield* projections.getThreadWorktreePaths({ includeArchived: true });
     const matchingPaths = new Set<string>();
     for (const worktreePath of new Set(paths.map((thread) => thread.worktreePath))) {

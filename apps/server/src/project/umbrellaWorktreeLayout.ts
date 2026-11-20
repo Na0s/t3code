@@ -1,6 +1,6 @@
 // A worktree-mode umbrella thread works in one folder that mirrors the umbrella: the root's own
-// worktree (or a plain folder), a worktree of every member at its path, and links to the root's
-// other entries. A manifest beside the folder records which repositories it holds.
+// worktree with a worktree of every member at its path. A manifest beside the folder records
+// which repositories it holds.
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -14,7 +14,6 @@ export const UMBRELLA_WORKTREE_MANIFEST_SUFFIX = ".t3-umbrella.json";
 const UmbrellaWorktreeManifest = Schema.Struct({
   version: Schema.Literal(1),
   umbrellaRoot: Schema.String,
-  rootRepository: Schema.Boolean,
   /** `path` is relative to the thread's folder, with `/` separators; `source` is the member's own checkout. */
   members: Schema.Array(Schema.Struct({ source: Schema.String, path: Schema.String })),
 });
@@ -57,14 +56,12 @@ export const umbrellaWorktreeManifestPath = (path: Path.Path, worktreePath: stri
 export const joinUmbrellaRelative = (path: Path.Path, root: string, relativePath: string) =>
   relativePath === "" ? root : path.join(root, ...relativePath.split("/"));
 
-/** The repositories in an umbrella worktree: the root's own first, when it is one. */
+/** The repositories in an umbrella worktree: the root's own first. */
 export const umbrellaWorktreeRepositories = (
   path: Path.Path,
   layout: UmbrellaWorktreeLayout,
 ): ReadonlyArray<UmbrellaWorktreeRepository> => [
-  ...(layout.rootRepository
-    ? [{ cwd: layout.path, source: layout.umbrellaRoot, relativePath: "" }]
-    : []),
+  { cwd: layout.path, source: layout.umbrellaRoot, relativePath: "" },
   ...layout.members.map((member) => ({
     cwd: joinUmbrellaRelative(path, layout.path, member.path),
     source: member.source,
@@ -108,12 +105,7 @@ export const registerUmbrellaWorktree = Effect.fn("UmbrellaWorktree.register")(f
       Effect.map((memberPath) => ({ path: memberPath, relativePath: member.path })),
     ),
   );
-  const root = yield* realPath(layout.path);
-  yield* index.registerWorktree(
-    root,
-    members,
-    layout.rootRepository ? undefined : [...new Set([path.resolve(layout.path), root])],
-  );
+  yield* index.registerWorktree(yield* realPath(layout.path), members);
 });
 
 /** Reads and registers the umbrella worktree at `cwd`, for callers that may run before the startup scan. */

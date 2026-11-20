@@ -306,7 +306,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                     JSON.stringify({
                       version: 1,
                       umbrellaRoot: "/clients/acme",
-                      rootRepository: false,
                       members: ["apps/api", "apps/web", "apps/linked"].map((relativePath) => ({
                         source: `/clients/acme/${relativePath}`,
                         path: relativePath,

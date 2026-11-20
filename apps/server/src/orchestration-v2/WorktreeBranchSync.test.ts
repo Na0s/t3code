@@ -9,8 +9,6 @@ import * as Stream from "effect/Stream";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
@@ -35,8 +33,6 @@ it.effect.each([false, true])(
         thread("current", "union", "/worktree"),
         thread("root", "main", null),
         thread("other", "feature", "/other"),
-        // Status of a plain umbrella folder inside a repository reports that repository's branch.
-        thread("umbrella", "t3/feature", "/umbrella"),
       ],
       archivedThreads: [thread("archived", "t3/bfc349ae", "/worktree")],
     };
@@ -65,26 +61,7 @@ it.effect.each([false, true])(
         Layer.mergeAll(
           FileSystem.layerNoop({
             realPath: (path) => Effect.succeed(path === "/link/worktree" ? "/worktree" : path),
-            readFileString: (path) =>
-              path === "/umbrella.t3-umbrella.json"
-                ? Effect.succeed(
-                    JSON.stringify({
-                      version: 1,
-                      umbrellaRoot: "/clients/northwind",
-                      rootRepository: false,
-                      members: [],
-                    }),
-                  )
-                : Effect.fail(
-                    PlatformError.systemError({
-                      _tag: "NotFound",
-                      module: "FileSystem",
-                      method: "readFileString",
-                      pathOrDescriptor: path,
-                    }),
-                  ),
           }),
-          Path.layer,
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getThreadWorktreePaths: () =>
               Effect.succeed(
@@ -97,12 +74,10 @@ it.effect.each([false, true])(
           }),
           Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
             streamBranchChanges: Stream.fromIterable([null, "t3/bfc349ae", "union"]).pipe(
-              Stream.flatMap((refName) =>
-                Stream.fromIterable([
-                  { cwd: "/worktree", refName },
-                  { cwd: "/umbrella", refName },
-                ]),
-              ),
+              Stream.map((refName) => ({
+                cwd: "/worktree",
+                refName,
+              })),
               Stream.ensuring(Deferred.succeed(reconciled, undefined)),
             ),
           }),

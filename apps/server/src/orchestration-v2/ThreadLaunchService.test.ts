@@ -3167,8 +3167,11 @@ it.effect.each(["origin/master", ":/initial"])(
     }),
 );
 
-it.effect("checks out every member of a plain umbrella folder into one thread folder", () =>
+it.effect("checks out every member of an umbrella inside the root's own worktree", () =>
   Effect.gen(function* () {
+    const folder = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+      prefix: "t3-umbrella-thread-",
+    });
     const members: ReadonlyArray<UmbrellaMember> = [
       { path: "/repo/api", relativePath: "api", repositoryIdentity: null, source: "nested" },
       {
@@ -3181,13 +3184,11 @@ it.effect("checks out every member of a plain umbrella folder into one thread fo
     const setupStarted = yield* Deferred.make<void>();
     const harness = makeHarness({
       umbrellaMembers: members,
-      git: {
-        repositoryRoot: () => Effect.succeed(null),
-        currentBranch: () => Effect.succeed("main"),
-      },
+      hasCommit: () => Effect.succeed(true),
+      git: { currentBranch: () => Effect.succeed("main") },
       createWorktree: (input) =>
         Effect.succeed({
-          worktree: { path: input.path!, refName: input.newRefName!, headSha: "abc" },
+          worktree: { path: input.path ?? folder, refName: input.newRefName!, headSha: "abc" },
         } as never),
       runSetup: () =>
         Deferred.succeed(setupStarted, undefined).pipe(Effect.as({ status: "no-script" as const })),
@@ -3196,9 +3197,7 @@ it.effect("checks out every member of a plain umbrella folder into one thread fo
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const threads = yield* ThreadManagement.ThreadManagementService;
       const workspace = { type: "worktree" as const, baseRef: "HEAD", branch: "feature" };
-      // A plain umbrella folder is not refused as a non-Git project.
       yield* launches.checkWorktreeBase({ projectId, workspaceStrategy: workspace });
-      assert.isFalse(yield* launches.isNonGitProject(projectId));
       const launched = yield* launches.launch(
         launchInput({
           command: "command:launch:umbrella",
@@ -3209,6 +3208,7 @@ it.effect("checks out every member of a plain umbrella folder into one thread fo
       yield* Deferred.await(setupStarted);
       const { thread } = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(thread.branch, "feature");
+      assert.equal(thread.worktreePath, folder);
       const layout = yield* readUmbrellaWorktree(thread.worktreePath!).pipe(
         Effect.provide(NodeServices.layer),
       );
@@ -3222,12 +3222,13 @@ it.effect("checks out every member of a plain umbrella folder into one thread fo
           .map(([input]) => [input.cwd, input.path, input.newRefName])
           .toSorted(([a], [b]) => String(a).localeCompare(String(b))),
         [
-          ["/elsewhere/site", `${thread.worktreePath}/_external/site`, "feature"],
-          ["/repo/api", `${thread.worktreePath}/api`, "feature"],
+          ["/elsewhere/site", `${folder}/_external/site`, "feature"],
+          [project.workspaceRoot, null, "feature"],
+          ["/repo/api", `${folder}/api`, "feature"],
         ],
       );
     }).pipe(Effect.provide(harness.layer));
-  }),
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 const plainFolderCheckouts: ReadonlyArray<UmbrellaMember> = [
@@ -3288,7 +3289,6 @@ it.effect(
           ]);
           assert.include(failure.message, "It holds Git repositories: app, dev-setup.");
           assert.include(failure.message, '"origin/develop" is in app (project "app").');
-          assert.include(failure.message, "turn on Use as umbrella");
         }
       }).pipe(Effect.provide(harness.layer));
     }),
@@ -3331,12 +3331,48 @@ it.effect(
     }),
 );
 
-it.effect("accepts an umbrella base ref that only one of its checkouts has", () =>
+it.effect("refuses a plain umbrella folder's worktree, naming its members' projects", () =>
   Effect.gen(function* () {
     const harness = plainFolderHarness({
       umbrellaMembers: plainFolderCheckouts,
       umbrellaSuggestions: [],
     });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const failure = yield* launches
+        .checkWorktreeBase({
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef: "origin/develop" },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(failure, ThreadLaunch.ThreadLaunchNotRepositoryError);
+      if (failure._tag !== "ThreadLaunchNotRepositoryError") return;
+      assert.isTrue(failure.umbrella);
+      assert.include(
+        failure.message,
+        "Umbrella worktrees need the umbrella folder to be a Git repository",
+      );
+      assert.include(failure.message, 'Its member checkouts are app (project "app"), dev-setup.');
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+// The umbrella root is a repository with only its own HEAD; members are as above.
+const gitRootUmbrella: HarnessOptions = {
+  umbrellaMembers: plainFolderCheckouts,
+  umbrellaSuggestions: [],
+  hasCommit: (input) =>
+    Effect.succeed(
+      input.cwd === project.workspaceRoot
+        ? input.refName === "HEAD"
+        : input.cwd === "/repo/app" && input.refName === "origin/develop",
+    ),
+  git: { repositoryRoot: (cwd) => Effect.succeed(cwd) },
+};
+
+it.effect("accepts an umbrella base ref that only one of its checkouts has", () =>
+  Effect.gen(function* () {
+    const harness = plainFolderHarness(gitRootUmbrella);
     yield* ThreadLaunch.ThreadLaunchService.pipe(
       Effect.flatMap((launches) =>
         launches.checkWorktreeBase({
@@ -3352,8 +3388,7 @@ it.effect("accepts an umbrella base ref that only one of its checkouts has", () 
 it.effect("refuses an umbrella base ref that none of its checkouts has", () =>
   Effect.gen(function* () {
     const harness = plainFolderHarness({
-      umbrellaMembers: plainFolderCheckouts,
-      umbrellaSuggestions: [],
+      ...gitRootUmbrella,
       fetchWorktreeBaseCommit: () => Effect.succeed(null),
     });
     yield* Effect.gen(function* () {

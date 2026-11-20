@@ -877,10 +877,7 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
                     driver: { checkpoints: checkpointsFor(cwd) },
                   } as unknown as VcsDriverRegistry.VcsDriverHandle),
               }),
-              FileSystem.layerNoop({
-                realPath: (value) => Effect.succeed(value),
-                exists: (value) => Effect.succeed(value === `${root}/.git`),
-              }),
+              FileSystem.layerNoop({ realPath: (value) => Effect.succeed(value) }),
             ),
           ),
           Effect.provideService(UmbrellaMemberIndex.UmbrellaMemberIndex, index),
@@ -943,7 +940,6 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
           JSON.stringify({
             version: 1,
             umbrellaRoot: umbrella,
-            rootRepository: true,
             members: ["api", "site"].map((name) => ({
               source: NodePath.join(umbrella, name),
               path: name,
