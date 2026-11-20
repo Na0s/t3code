@@ -102,6 +102,24 @@ const emptyWindowsState: DesktopWindowsState = {
   multiWindowEnabled: true,
 };
 
+const windowProfile = (id: string, name: string) => ({
+  id,
+  name,
+  projectScopeKeys: [],
+  theme: null,
+  isDefault: id === "main",
+});
+
+const openWindow = (windowId: number, profileId: string) => ({
+  windowId,
+  isMain: profileId === "main",
+  profileId,
+  name: profileId,
+  title: "",
+  focused: false,
+  projectScopeKeys: [],
+});
+
 const layerDesktopWindow = (
   selectedAction: Deferred.Deferred<string>,
   windowsState: DesktopWindowsState = emptyWindowsState,
@@ -371,40 +389,18 @@ describe("DesktopApplicationMenu", () => {
       const selectedAction = yield* Deferred.make<string>();
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
-      const profile = (id: string, name: string) => ({
-        id,
-        name,
-        projectScopeKeys: [],
-        theme: null,
-        isDefault: id === "main",
-      });
       yield* configureMenu(
         selectedAction,
         applicationMenuTemplate,
         {},
         {},
         {
-          profiles: [profile("main", "Main"), profile("work", "Work"), profile("side", "Side")],
-          windows: [
-            {
-              windowId: 1,
-              isMain: true,
-              profileId: "main",
-              name: "Main",
-              title: "",
-              focused: true,
-              projectScopeKeys: [],
-            },
-            {
-              windowId: 2,
-              isMain: false,
-              profileId: "work",
-              name: "Work",
-              title: "",
-              focused: false,
-              projectScopeKeys: [],
-            },
+          profiles: [
+            windowProfile("main", "Main"),
+            windowProfile("work", "Work"),
+            windowProfile("side", "Side"),
           ],
+          windows: [openWindow(1, "main"), openWindow(2, "work")],
           miniMode: true,
           multiWindowEnabled: true,
         },
@@ -418,34 +414,18 @@ describe("DesktopApplicationMenu", () => {
       }
       const items = windowMenu.submenu.filter((item) => item.label !== undefined);
       assert.deepEqual(
-        items.slice(0, 5).map(({ label, checked, accelerator, registerAccelerator }) => ({
-          label,
-          checked,
-          accelerator,
-          registerAccelerator,
-        })),
+        items.slice(0, 5).map(({ label, checked }) => ({ label, checked })),
         [
-          {
-            label: "New Window",
-            checked: undefined,
-            accelerator: "CmdOrCtrl+Alt+Shift+N",
-            registerAccelerator: false,
-          },
-          {
-            label: "Main Window",
-            checked: undefined,
-            accelerator: undefined,
-            registerAccelerator: undefined,
-          },
-          { label: "Work", checked: true, accelerator: undefined, registerAccelerator: undefined },
-          { label: "Side", checked: false, accelerator: undefined, registerAccelerator: undefined },
-          {
-            label: "Mini Mode",
-            checked: true,
-            accelerator: undefined,
-            registerAccelerator: undefined,
-          },
+          { label: "New Window", checked: undefined },
+          { label: "Main Window", checked: undefined },
+          { label: "Work", checked: true },
+          { label: "Side", checked: false },
+          { label: "Mini Mode", checked: true },
         ],
+      );
+      assert.deepEqual(
+        { accelerator: items[0]?.accelerator, registerAccelerator: items[0]?.registerAccelerator },
+        { accelerator: "CmdOrCtrl+Alt+Shift+N", registerAccelerator: false },
       );
       items[0]?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
       assert.equal(yield* Deferred.await(selectedAction), "new-window");
@@ -465,10 +445,7 @@ describe("DesktopApplicationMenu", () => {
           {},
           {
             ...emptyWindowsState,
-            profiles: [
-              { id: "main", name: "Main", projectScopeKeys: [], theme: null, isDefault: true },
-              { id: "work", name: "Work", projectScopeKeys: [], theme: null, isDefault: false },
-            ],
+            profiles: [windowProfile("main", "Main"), windowProfile("work", "Work")],
             multiWindowEnabled: false,
           },
         );
