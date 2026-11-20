@@ -874,6 +874,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles prompt custom style naming rename regenerate"],
   },
   {
+    id: "fleet-gateway",
+    title: "Fleet gateway",
+    to: "/settings/threads",
+    scope: "environment-defaults",
+    environmentOnly: true,
+    searchTerms: ["grokbot bot mention contact command"],
+  },
+  {
     id: "app-version",
     title: "Version",
     to: "/settings/about",

@@ -32,6 +32,28 @@ describe("reuseUnchanged", () => {
 });
 
 describe("applyServerConfigProjection settingsUpdated", () => {
+  it("replaces discovered bots when gateway settings change and clears a removed gateway", () => {
+    const settings = decodeSettings({});
+    const bot = { id: "design", name: "Design", icon: "◕", color: "#10b981" };
+    const current = Option.some({
+      config: { settings } as ServerConfig,
+      latestEvent: {} as ServerConfigStreamEvent,
+      source: "live" as const,
+    });
+    const added = applyServerConfigProjection(current, {
+      version: 1,
+      type: "settingsUpdated",
+      payload: { settings, fleetBots: [bot] },
+    });
+    expect(Option.getOrThrow(added).config.fleetBots).toEqual([bot]);
+    const cleared = applyServerConfigProjection(added, {
+      version: 1,
+      type: "settingsUpdated",
+      payload: { settings, fleetBots: [] },
+    });
+    expect(Option.getOrThrow(cleared).config.fleetBots).toEqual([]);
+  });
+
   it("keeps unchanged settings sections when one field changes", () => {
     const settings = {
       favorites: [{ provider: "claude", model: "opus" }],

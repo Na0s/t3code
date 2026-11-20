@@ -641,6 +641,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     onOpenModelPicker: settingsSheetPresentation.open,
     modelOptions: mentionModelOptions,
     modelProviders: props.serverConfig?.providers,
+    fleetBots: props.serverConfig?.fleetBots,
     ...(props.onFreshSession === undefined ? {} : { onFreshSession: props.onFreshSession }),
     offersSideChat: props.offersSideChat === true,
   });

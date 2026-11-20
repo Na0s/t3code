@@ -1,3 +1,5 @@
+import { contextChipAccentWithHueOf } from "~/themePalette";
+import type { FleetBotPresentation } from "@t3tools/shared/fleetBotMentions";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
@@ -89,6 +91,13 @@ export type ComposerCommandItem =
       type: "environment";
       environmentId: EnvironmentId;
       machine: EnvironmentMachineKind;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "bot";
+      bot: FleetBotPresentation;
       label: string;
       description: string;
     }
@@ -245,6 +254,18 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           className="size-4 shrink-0 text-secondary-label"
         />
       ) : null}
+      {props.item.type === "bot" ? (
+        <span
+          aria-hidden="true"
+          className="size-4 shrink-0"
+          style={{
+            color:
+              contextChipAccentWithHueOf("model", props.item.bot.color) ?? props.item.bot.color,
+          }}
+        >
+          {props.item.bot.icon}
+        </span>
+      ) : null}
       {props.item.type === "model" ? (
         <ProviderInstanceIcon
           driverKind={props.item.driverKind}
@@ -263,7 +284,18 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         />
       ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium">
+        <span
+          className="min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium"
+          style={
+            props.item.type === "bot"
+              ? {
+                  color:
+                    contextChipAccentWithHueOf("model", props.item.bot.color) ??
+                    props.item.bot.color,
+                }
+              : undefined
+          }
+        >
           {isSlashSkill ? (
             <>
               <span className="text-secondary-label">/skill:</span>

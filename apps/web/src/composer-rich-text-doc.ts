@@ -61,6 +61,7 @@ export type IsKnownModel = (instanceId: string, model: string) => boolean;
 interface ChipResolver {
   skill: (name: string) => SkillMeta | null;
   model: IsKnownModel;
+  bot: (botId: string) => boolean;
 }
 
 const NO_MODELS: IsKnownModel = () => false;
@@ -824,6 +825,10 @@ function atomJsonForSegment(
       },
     };
   }
+  if (segment.type === "bot") {
+    if (!chips.bot(segment.botId)) return null;
+    return { type: "composer-bot", attrs: { botId: segment.botId, source: segment.source } };
+  }
   if (segment.type === "model") {
     if (!chips.model(segment.instanceId, segment.model)) return null;
     return {
@@ -915,9 +920,14 @@ export function buildTiptapContent(
     literalText?: boolean;
     literalLength?: number;
     isKnownModel?: IsKnownModel;
+    isKnownBot?: (botId: string) => boolean;
   },
 ): Record<string, unknown>[] {
-  const chips = { skill: skillLabelFor, model: options?.isKnownModel ?? NO_MODELS };
+  const chips = {
+    skill: skillLabelFor,
+    model: options?.isKnownModel ?? NO_MODELS,
+    bot: options?.isKnownBot ?? (() => false),
+  };
   if (options?.literalText) {
     return value.split("\n").map((line) => ({
       type: "paragraph",
@@ -1163,7 +1173,12 @@ export function buildTiptapContent(
 export function buildDocJson(
   value: string,
   skillLabelFor: (name: string) => SkillMeta | null,
-  options?: { styling?: boolean; literalText?: boolean; isKnownModel?: IsKnownModel },
+  options?: {
+    styling?: boolean;
+    literalText?: boolean;
+    isKnownModel?: IsKnownModel;
+    isKnownBot?: (botId: string) => boolean;
+  },
 ) {
   const content = buildTiptapContent(value, skillLabelFor, options);
   if (content.at(-1)?.type === "horizontalRule") content.push({ type: "paragraph" });
@@ -1196,6 +1211,7 @@ function readAtomSource(node: ProseMirrorNode): string {
   const attrs = node.attrs as Record<string, unknown>;
   switch (node.type.name) {
     case "composer-mention":
+    case "composer-bot":
     case "composer-model":
     case "composer-citation":
     case "composer-context-reference":
@@ -1752,6 +1768,7 @@ function isStaleChip(node: ProseMirrorNode, chips: ChipResolver): boolean {
   if (node.type.name === "composer-skill") {
     return typeof skillName === "string" && skillName !== "" && !chips.skill(skillName);
   }
+  if (node.type.name === "composer-bot") return !chips.bot(String(node.attrs.botId));
   if (node.type.name === "composer-model") return !chips.model(String(instanceId), String(model));
   return false;
 }
@@ -1764,8 +1781,9 @@ export function skillChipReplacements(
   doc: ProseMirrorNode,
   skillLabelFor: (name: string) => SkillMeta | null,
   isKnownModel: IsKnownModel = NO_MODELS,
+  isKnownBot: (botId: string) => boolean = () => false,
 ): SkillChipReplacement[] {
-  const chips = { skill: skillLabelFor, model: isKnownModel };
+  const chips = { skill: skillLabelFor, model: isKnownModel, bot: isKnownBot };
   const schema = doc.type.schema;
   const replacements: SkillChipReplacement[] = [];
   doc.descendants((node, pos) => {
@@ -1781,7 +1799,7 @@ export function skillChipReplacements(
   for (const segment of splitPromptIntoComposerSegments(map.value)) {
     const start = end;
     end += segment.type === "text" ? segment.text.length : segment.source.length;
-    if (segment.type !== "skill" && segment.type !== "model") continue;
+    if (segment.type !== "skill" && segment.type !== "model" && segment.type !== "bot") continue;
     const atom = atomJsonForSegment(segment, chips);
     const type = atom && schema.nodes[atom.type];
     if (!atom || !type) continue;

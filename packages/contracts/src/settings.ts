@@ -1357,7 +1357,12 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+export const FleetGatewayCommand = Schema.Array(TrimmedNonEmptyString).check(
+  Schema.isMaxLength(32),
+);
+
 export const ServerSettings = Schema.Struct({
+  fleetGatewayCommand: FleetGatewayCommand.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1792,6 +1797,7 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  fleetGatewayCommand: Schema.optionalKey(FleetGatewayCommand),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),
@@ -1997,6 +2003,7 @@ export function requiredScopesForServerSettingsPatch(
     if (key === "requireConnectDeviceApproval") {
       changesAccess = true;
     } else if (
+      key === "fleetGatewayCommand" ||
       key === "providers" ||
       key === "providerInstances" ||
       key === "usageLimitSources" ||

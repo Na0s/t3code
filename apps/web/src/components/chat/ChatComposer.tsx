@@ -1,3 +1,4 @@
+import { formatFleetBotMention } from "@t3tools/shared/fleetBotMentions";
 import { VoiceInputSetup } from "./VoiceInputSetup";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
@@ -2035,6 +2036,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
+    if (item.type === "bot") {
+      if (trigger.kind !== "path") return;
+      const replacement = `${formatFleetBotMention(item.bot.id)} `;
+      const end = extendReplacementRangeForTrailingSpace(
+        snapshot.value,
+        trigger.rangeEnd,
+        replacement,
+      );
+      if (
+        applyPromptReplacement(trigger.rangeStart, end, replacement, {
+          expectedText: snapshot.value.slice(trigger.rangeStart, end),
+        })
+      )
+        setComposerHighlightedItemId(null);
+      return;
+    }
     if (item.type === "model") {
       if (trigger.kind !== "path") return;
       const replacement = `${formatComposerModelMention(item.instanceId, item.model)} `;
@@ -3463,6 +3480,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 >
                   {prompt.trim() ? (
                     <CollapsedComposerPromptPreview
+                      environmentId={environmentId}
                       prompt={prompt}
                       skills={selectedProviderSkills}
                       contextRecords={composerContextRecords}
