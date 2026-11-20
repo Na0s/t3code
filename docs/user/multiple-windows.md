@@ -11,7 +11,7 @@ macOS or **Ctrl+Alt+Shift+N** on Windows and Linux. The new window starts with t
 project filter. Change the shortcut under **Settings → Keybindings** (`window.new`).
 
 Closing the main window while others are open hides it instead, since the other windows connect
-through it. It closes once the last other window does.
+through it. On Windows and Linux it closes once the last other window does.
 
 To keep to one window, turn off **Multiple windows** under **Settings → General → Windows**. New
 Window, its shortcut, and opening saved windows are then unavailable; windows already open stay open
