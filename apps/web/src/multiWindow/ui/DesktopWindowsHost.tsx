@@ -1,4 +1,8 @@
-import type { DesktopWindowCloseRequest, DesktopWindowsBridge } from "@t3tools/contracts";
+import type {
+  DesktopWindowCloseDecision,
+  DesktopWindowCloseRequest,
+  DesktopWindowsBridge,
+} from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/ui/button";
@@ -14,12 +18,7 @@ import {
 import { Input } from "../../components/ui/input";
 import { desktopWindowsBridge } from "../windowContext";
 import { notifyWindowActionFailure } from "./windowActions";
-import {
-  normalizeWindowProfileName,
-  WINDOW_PROFILE_NAME_MAX_LENGTH,
-  type WindowCloseChoice,
-  windowCloseDecision,
-} from "./windowProfiles.logic";
+import { normalizeWindowProfileName, WINDOW_PROFILE_NAME_MAX_LENGTH } from "./windowProfiles.logic";
 
 /** The save-on-close prompt, once per desktop window. */
 export function DesktopWindowsHost() {
@@ -49,22 +48,25 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
     [bridge],
   );
 
-  const resolve = (choice: WindowCloseChoice) => {
+  const resolve = (decision: DesktopWindowCloseDecision) => {
     if (request === null) return;
-    const decision = windowCloseDecision(choice, name);
-    if (decision === null) return;
     pendingRequestIdRef.current = null;
     setRequest(null);
     bridge.resolveCloseRequest(request.requestId, decision).catch((cause: unknown) => {
       notifyWindowActionFailure("Couldn't close the window", cause);
     });
   };
+  const savedName = normalizeWindowProfileName(name);
+  // Without a usable name, Save leaves the prompt open.
+  const save = () => {
+    if (savedName !== null) resolve({ action: "save", name: savedName });
+  };
 
   return (
     <Dialog
       open={request !== null}
       onOpenChange={(open) => {
-        if (!open) resolve("cancel");
+        if (!open) resolve({ action: "cancel" });
       }}
     >
       <DialogPopup className="max-w-md" initialFocus={inputRef}>
@@ -85,23 +87,28 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
               event.preventDefault();
-              resolve("save");
+              save();
             }}
           />
         </DialogPanel>
         <DialogFooter>
-          <Button type="button" variant="outline" size="sm" onClick={() => resolve("cancel")}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => resolve({ action: "cancel" })}
+          >
             Cancel
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => resolve("discard")}>
-            Don't Save
           </Button>
           <Button
             type="button"
+            variant="outline"
             size="sm"
-            disabled={normalizeWindowProfileName(name) === null}
-            onClick={() => resolve("save")}
+            onClick={() => resolve({ action: "discard" })}
           >
+            Don't Save
+          </Button>
+          <Button type="button" size="sm" disabled={savedName === null} onClick={save}>
             Save
           </Button>
         </DialogFooter>
