@@ -9,12 +9,7 @@ let cachedContext: DesktopWindowContext | null | undefined;
 
 /** Null outside a desktop shell with multi-window support. */
 export function readDesktopWindowContext(): DesktopWindowContext | null {
-  if (cachedContext !== undefined) return cachedContext;
-  try {
-    cachedContext = desktopWindowsBridge()?.getContext() ?? null;
-  } catch {
-    cachedContext = null;
-  }
+  if (cachedContext === undefined) cachedContext = desktopWindowsBridge()?.getContext() ?? null;
   return cachedContext;
 }
 

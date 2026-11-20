@@ -140,7 +140,7 @@ export function ElectronBrowserHost() {
   const previewByThreadKey = useActivePreviewSessions();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   // Background previews belong to the main window; a secondary one hosts only what it shows.
-  const [secondaryWindow] = useState(isSecondaryDesktopWindow);
+  const secondaryWindow = isSecondaryDesktopWindow();
   useDesktopHostedPreviewSessions(secondaryWindow ? null : primaryEnvironmentId);
   const hostedElsewhere = useThreadsHostedElsewhere();
   const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId).filter(
