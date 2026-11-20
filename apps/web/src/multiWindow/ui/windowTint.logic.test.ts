@@ -5,8 +5,6 @@ import { deriveProjectIdentity } from "../../projectIdentity";
 import {
   projectIconTintColor,
   projectTintColors,
-  rightFadeBackground,
-  tintBackground,
   type WindowTintProject,
 } from "./windowTint.logic";
 
@@ -52,26 +50,5 @@ describe("projectTintColors", () => {
   it("is empty when no project shows a colour", () => {
     const image = automatic("brand-site");
     expect(projectTintColors([emoji, image], (project) => project === image)).toEqual([]);
-  });
-});
-
-describe("rightFadeBackground", () => {
-  it("fades one colour from the right edge to nothing at the left", () => {
-    expect(rightFadeBackground(["red"], 16)).toBe(
-      "linear-gradient(to left, color-mix(in oklab, red 16%, transparent) 0%, transparent)",
-    );
-  });
-
-  it("keeps several colours in order left to right, fainter towards the left", () => {
-    expect(rightFadeBackground(["red", "blue"], 16)).toBe(
-      "linear-gradient(to left, color-mix(in oklab, blue 16%, transparent) 0%, color-mix(in oklab, red 8%, transparent) 50%, transparent)",
-    );
-  });
-});
-
-describe("tintBackground", () => {
-  it("fills with one colour and blends several left to right", () => {
-    expect(tintBackground(["red"])).toBe("red");
-    expect(tintBackground(["red", "blue"])).toBe("linear-gradient(to right, red, blue)");
   });
 });

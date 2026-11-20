@@ -5,7 +5,6 @@ import { readDesktopWindowContext } from "../windowContext";
 import { resolveWindowThemeOverride, useDesktopWindowsState } from "../windowsState";
 import { useProjectScopeGroups } from "./useProjectScopeGroups";
 import { useProjectTintColors } from "./useProjectTintColors";
-import { tintBackground } from "./windowTint.logic";
 
 /**
  * A secondary window's project colours across the sidebar's top banner. The main window, an
@@ -30,7 +29,11 @@ function SecondaryWindowTint({ context }: { readonly context: DesktopWindowConte
       data-window-tint
       // As tall as the stage artwork: under the title bar and the Search row, fading out below.
       className="pointer-events-none absolute inset-x-0 top-0 z-0 h-20 opacity-30 mask-b-from-40% dark:opacity-40"
-      style={{ background: tintBackground(colors) }}
+      // A gradient needs two colours, so one colour fills.
+      style={{
+        background:
+          colors.length === 1 ? colors[0] : `linear-gradient(to right, ${colors.join(", ")})`,
+      }}
     />
   );
 }

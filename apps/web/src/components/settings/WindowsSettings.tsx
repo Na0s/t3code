@@ -15,11 +15,8 @@ import { useProjectTintColors } from "../../multiWindow/ui/useProjectTintColors"
 import { notifyWindowActionFailure } from "../../multiWindow/ui/windowActions";
 import {
   normalizeWindowProfileName,
-  themeFromSelectValue,
-  themeSelectValue,
   WINDOW_PROFILE_NAME_MAX_LENGTH,
 } from "../../multiWindow/ui/windowProfiles.logic";
-import { rightFadeBackground } from "../../multiWindow/ui/windowTint.logic";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useThemeCards } from "../CommandPaletteThemeItems";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -36,6 +33,10 @@ type ProjectScopeGroups = ReturnType<typeof useProjectScopeGroups>;
 
 // The theme's accent, or its projects' colours, washes a window's row this strongly at the right.
 const ROW_THEME_WASH_PERCENT = 16;
+
+// Select values cannot be null, so following the main window gets a value no theme id has.
+const FOLLOW_MAIN_WINDOW_THEME = ":follow-main-window";
+const themeSelectValue = (theme: string | null) => theme ?? FOLLOW_MAIN_WINDOW_THEME;
 
 /** Saved desktop windows; renders nothing outside a multi-window desktop shell. */
 export function WindowsSettingsSection() {
@@ -199,7 +200,7 @@ function useWindowThemeOptions(projects: readonly SidebarProjectSnapshot[]): Win
   return [
     // Without a project filter there is no project colour to take on.
     {
-      value: themeSelectValue(null),
+      value: FOLLOW_MAIN_WINDOW_THEME,
       label: projects.length > 0 ? "Project colour" : "Follow main window",
       previews: [],
       colors: projectColors,
@@ -217,12 +218,18 @@ function useWindowThemeOptions(projects: readonly SidebarProjectSnapshot[]): Win
   ];
 }
 
-/** The row's wash of its theme's colours, from the right edge. */
+/**
+ * The row's wash of its theme's colours, strongest at the right edge and fading to nothing at the
+ * left. Several colours keep their left-to-right order, each fainter than the one to its right.
+ */
 function themeWashStyle(options: readonly WindowThemeOption[], theme: string | null) {
   const colors = options.find((option) => option.value === themeSelectValue(theme))?.colors ?? [];
-  return colors.length === 0
-    ? undefined
-    : { backgroundImage: rightFadeBackground(colors, ROW_THEME_WASH_PERCENT) };
+  if (colors.length === 0) return undefined;
+  const stops = colors.toReversed().map((color, index) => {
+    const share = index / colors.length;
+    return `color-mix(in oklab, ${color} ${ROW_THEME_WASH_PERCENT * (1 - share)}%, transparent) ${share * 100}%`;
+  });
+  return { backgroundImage: `linear-gradient(to left, ${[...stops, "transparent"].join(", ")})` };
 }
 
 function WindowProfileRow({
@@ -502,7 +509,7 @@ function WindowThemeSelect({
       value={selectValue}
       onValueChange={(next) => {
         if (typeof next !== "string" || next === selectValue) return;
-        onChange(themeFromSelectValue(next));
+        onChange(next === FOLLOW_MAIN_WINDOW_THEME ? null : next);
       }}
     >
       <SelectTrigger
