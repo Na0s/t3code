@@ -160,6 +160,157 @@ const make = Effect.gen(function* () {
       Effect.orDie,
     );
 
+  const performHandoff = Effect.fn("WorktreeMcpService.performHandoff")(function* (
+    scope: McpThreadInvocationScope,
+    input: WorktreeMcpHandoffInput,
+  ) {
+    const alreadyInWorktree = (worktreePath: string) =>
+      failure(
+        "already_in_worktree",
+        `Thread '${scope.thread.threadId}' is already attached to worktree '${worktreePath}'.`,
+      );
+
+    const projection = yield* loadThread(scope);
+    if (projection.thread.worktreePath !== null) {
+      return yield* alreadyInWorktree(projection.thread.worktreePath);
+    }
+    if (projection.thread.archivedAt !== null) {
+      return yield* failure(
+        "invalid_request",
+        `Thread '${scope.thread.threadId}' is archived and cannot be handed off to a worktree.`,
+      );
+    }
+
+    const project = yield* loadProject(scope, projection.thread.projectId);
+    const projectCwd = project.workspaceRoot;
+    const umbrellaMembers = yield* umbrellaMembersOf(project);
+    if (umbrellaMembers.length > 0) {
+      const baseRef = input.baseRef ?? "HEAD";
+      return yield* bindWorktree(scope, input, project, {
+        baseRef,
+        startedFromOrigin: false,
+        create: Effect.gen(function* () {
+          const startFromOrigin =
+            input.startFromOrigin ?? (yield* readDefaultStartFromOrigin(project.id));
+          const submodules = yield* serverSettings.getSettings.pipe(
+            Effect.map(
+              (settings) =>
+                resolveProjectSettings(settings, project.id).settings.worktreeSubmodules,
+            ),
+            Effect.orElseSucceed(() => null),
+          );
+          return yield* umbrellaWorktrees
+            .create({
+              umbrellaRoot: projectCwd,
+              members: umbrellaMembers,
+              baseRef,
+              startFromOrigin,
+              branch: input.branch,
+              flattenOnConflict: false,
+              submodules,
+            })
+            .pipe(asOperationFailed("Unable to create the umbrella worktree"));
+        }),
+        remove: (created) =>
+          umbrellaWorktrees.remove({
+            worktreePath: created.path,
+            force: true,
+            deleteBranch: created.branch,
+          }),
+      });
+    }
+
+    const localStatus = yield* gitWorkflow
+      .localStatus({ cwd: projectCwd })
+      .pipe(asOperationFailed("Unable to read git status"));
+    if (!localStatus.isRepo) {
+      return yield* failure(
+        "invalid_request",
+        `Project workspace '${projectCwd}' is not a git repository.`,
+      );
+    }
+
+    const localBranchNames = yield* gitWorkflow
+      .listLocalBranchNames(projectCwd)
+      .pipe(asOperationFailed("Unable to list branches"));
+    if (localBranchNames.includes(input.branch)) {
+      const existingRef = yield* gitWorkflow
+        .listRefs({ cwd: projectCwd, query: input.branch, refKind: "local" })
+        .pipe(
+          Effect.map((result) =>
+            result.refs.find((ref) => ref.name === input.branch && ref.isRemote !== true),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        );
+      const checkoutPath = existingRef?.worktreePath ?? null;
+      return yield* failure(
+        "invalid_request",
+        `Branch '${input.branch}' already exists${
+          checkoutPath === null ? "" : ` and is checked out at '${checkoutPath}'`
+        }. Choose a different branch name, or delete the existing branch${
+          checkoutPath === null ? "" : " and its worktree"
+        } first.`,
+      );
+    }
+
+    let baseRef = input.baseRef;
+    if (baseRef === undefined) {
+      if (localStatus.refName === null) {
+        return yield* failure(
+          "invalid_request",
+          "Could not determine the current branch of the project workspace (detached HEAD?). Pass baseRef explicitly.",
+        );
+      }
+      baseRef = localStatus.refName;
+    }
+
+    const startFromOrigin =
+      input.startFromOrigin ?? (yield* readDefaultStartFromOrigin(project.id));
+
+    let worktreeBaseRef = baseRef;
+    let baseRefName = baseRef;
+    let startedFromOrigin = false;
+    if (startFromOrigin) {
+      const resolvedRemoteBase = yield* gitWorkflow
+        .fetchWorktreeBaseCommit({ cwd: projectCwd, refName: baseRef })
+        .pipe(asOperationFailed(`Unable to fetch the remote base of '${baseRef}'`));
+      if (resolvedRemoteBase !== null) {
+        worktreeBaseRef = resolvedRemoteBase.commitSha;
+        baseRefName = `refs/remotes/${resolvedRemoteBase.remoteRefName}`;
+        startedFromOrigin = true;
+      }
+    }
+
+    return yield* bindWorktree(scope, input, project, {
+      baseRef,
+      startedFromOrigin,
+      create: gitWorkflow
+        .createWorktree({
+          cwd: projectCwd,
+          refName: worktreeBaseRef,
+          newRefName: input.branch,
+          baseRefName,
+          path: null,
+        })
+        .pipe(
+          Effect.map(({ worktree }) => ({ path: worktree.path, branch: worktree.refName })),
+          asOperationFailed("Unable to create the worktree"),
+        ),
+      remove: (created) =>
+        gitWorkflow.removeWorktree({ cwd: projectCwd, path: created.path, force: true }).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              gitWorkflow.deleteLocalBranch({
+                cwd: projectCwd,
+                refName: created.branch,
+                force: true,
+              }),
+            ),
+          ),
+        ),
+    });
+  });
+
   const bindWorktree = Effect.fn("WorktreeMcpService.bindWorktree")(function* (
     scope: McpThreadInvocationScope,
     input: WorktreeMcpHandoffInput,
@@ -321,158 +472,6 @@ const make = Effect.gen(function* () {
         return result;
       }),
     );
-  });
-
-  const performHandoff = Effect.fn("WorktreeMcpService.performHandoff")(function* (
-    scope: McpThreadInvocationScope,
-    input: WorktreeMcpHandoffInput,
-  ) {
-    const alreadyInWorktree = (worktreePath: string) =>
-      failure(
-        "already_in_worktree",
-        `Thread '${scope.thread.threadId}' is already attached to worktree '${worktreePath}'.`,
-      );
-
-    const projection = yield* loadThread(scope);
-    if (projection.thread.worktreePath !== null) {
-      return yield* alreadyInWorktree(projection.thread.worktreePath);
-    }
-    if (projection.thread.archivedAt !== null) {
-      return yield* failure(
-        "invalid_request",
-        `Thread '${scope.thread.threadId}' is archived and cannot be handed off to a worktree.`,
-      );
-    }
-
-    const project = yield* loadProject(scope, projection.thread.projectId);
-    const projectCwd = project.workspaceRoot;
-    const umbrellaMembers = yield* umbrellaMembersOf(project);
-    if (umbrellaMembers.length > 0) {
-      const baseRef = input.baseRef ?? "HEAD";
-      return yield* bindWorktree(scope, input, project, {
-        baseRef,
-        startedFromOrigin: false,
-        create: Effect.gen(function* () {
-          const startFromOrigin =
-            input.startFromOrigin ?? (yield* readDefaultStartFromOrigin(project.id));
-          const submodules = yield* serverSettings.getSettings.pipe(
-            Effect.map(
-              (settings) =>
-                resolveProjectSettings(settings, project.id).settings.worktreeSubmodules,
-            ),
-            Effect.orElseSucceed(() => null),
-          );
-          const created = yield* umbrellaWorktrees
-            .create({
-              umbrellaRoot: projectCwd,
-              members: umbrellaMembers,
-              baseRef,
-              startFromOrigin,
-              branch: input.branch,
-              flattenOnConflict: false,
-              submodules,
-            })
-            .pipe(asOperationFailed("Unable to create the umbrella worktree"));
-          return { path: created.path, branch: created.branch };
-        }),
-        remove: (created) =>
-          umbrellaWorktrees.remove({
-            worktreePath: created.path,
-            force: true,
-            deleteBranch: created.branch,
-          }),
-      });
-    }
-
-    const localStatus = yield* gitWorkflow
-      .localStatus({ cwd: projectCwd })
-      .pipe(asOperationFailed("Unable to read git status"));
-    if (!localStatus.isRepo) {
-      return yield* failure(
-        "invalid_request",
-        `Project workspace '${projectCwd}' is not a git repository.`,
-      );
-    }
-
-    const localBranchNames = yield* gitWorkflow
-      .listLocalBranchNames(projectCwd)
-      .pipe(asOperationFailed("Unable to list branches"));
-    if (localBranchNames.includes(input.branch)) {
-      const existingRef = yield* gitWorkflow
-        .listRefs({ cwd: projectCwd, query: input.branch, refKind: "local" })
-        .pipe(
-          Effect.map((result) =>
-            result.refs.find((ref) => ref.name === input.branch && ref.isRemote !== true),
-          ),
-          Effect.orElseSucceed(() => undefined),
-        );
-      const checkoutPath = existingRef?.worktreePath ?? null;
-      return yield* failure(
-        "invalid_request",
-        `Branch '${input.branch}' already exists${
-          checkoutPath === null ? "" : ` and is checked out at '${checkoutPath}'`
-        }. Choose a different branch name, or delete the existing branch${
-          checkoutPath === null ? "" : " and its worktree"
-        } first.`,
-      );
-    }
-
-    let baseRef = input.baseRef;
-    if (baseRef === undefined) {
-      if (localStatus.refName === null) {
-        return yield* failure(
-          "invalid_request",
-          "Could not determine the current branch of the project workspace (detached HEAD?). Pass baseRef explicitly.",
-        );
-      }
-      baseRef = localStatus.refName;
-    }
-
-    const startFromOrigin =
-      input.startFromOrigin ?? (yield* readDefaultStartFromOrigin(project.id));
-
-    let worktreeBaseRef = baseRef;
-    let baseRefName = baseRef;
-    let startedFromOrigin = false;
-    if (startFromOrigin) {
-      const resolvedRemoteBase = yield* gitWorkflow
-        .fetchWorktreeBaseCommit({ cwd: projectCwd, refName: baseRef })
-        .pipe(asOperationFailed(`Unable to fetch the remote base of '${baseRef}'`));
-      if (resolvedRemoteBase !== null) {
-        worktreeBaseRef = resolvedRemoteBase.commitSha;
-        baseRefName = `refs/remotes/${resolvedRemoteBase.remoteRefName}`;
-        startedFromOrigin = true;
-      }
-    }
-
-    return yield* bindWorktree(scope, input, project, {
-      baseRef,
-      startedFromOrigin,
-      create: gitWorkflow
-        .createWorktree({
-          cwd: projectCwd,
-          refName: worktreeBaseRef,
-          newRefName: input.branch,
-          baseRefName,
-          path: null,
-        })
-        .pipe(
-          Effect.map(({ worktree }) => ({ path: worktree.path, branch: worktree.refName })),
-          asOperationFailed("Unable to create the worktree"),
-        ),
-      remove: (created) =>
-        gitWorkflow.removeWorktree({ cwd: projectCwd, path: created.path, force: true }).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              gitWorkflow.deleteLocalBranch({
-                cwd: projectCwd,
-                refName: created.branch,
-                force: true,
-              }),
-            ),
-          ),
-        ),
-    });
   });
 
   const handoff: WorktreeMcpService["Service"]["handoff"] = Effect.fn("WorktreeMcpService.handoff")(
