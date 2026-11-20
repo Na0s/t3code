@@ -142,3 +142,15 @@ export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-stor
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
 
 export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
+
+export const CLIENT_SETTINGS_CHANGED_CHANNEL = "desktop:client-settings-changed";
+
+export const WINDOWS_GET_CONTEXT_CHANNEL = "desktop:windows-get-context";
+export const WINDOWS_GET_STATE_CHANNEL = "desktop:windows-get-state";
+export const WINDOWS_STATE_CHANNEL = "desktop:windows-state";
+export const WINDOWS_OPEN_NEW_CHANNEL = "desktop:windows-open-new";
+export const WINDOWS_REGISTER_HUB_CHANNEL = "desktop:windows-register-hub";
+export const WINDOWS_REQUEST_HUB_LINK_CHANNEL = "desktop:windows-request-hub-link";
+export const WINDOWS_HUB_LINK_CHANNEL = "desktop:windows-hub-link";
+export const WINDOWS_HUB_PEER_GONE_CHANNEL = "desktop:windows-hub-peer-gone";
+export const WINDOWS_HUB_RESET_CHANNEL = "desktop:windows-hub-reset";

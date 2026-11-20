@@ -5,6 +5,7 @@ import {
   legacyProjectCwdPreferenceKey,
   markThreadUnread,
   markThreadVisited,
+  mergeSharedUiState,
   parsePersistedState,
   PERSISTED_STATE_KEY,
   type PersistedUiState,
@@ -91,6 +92,35 @@ describe("uiStateStore pure functions", () => {
     const next = reorderProjects(makeUiState(), currentOrder, [keyALocal, keyARemote], [keyC]);
 
     expect(next.projectOrder).toEqual([keyB, keyC, keyALocal, keyARemote]);
+  });
+});
+
+describe("mergeSharedUiState", () => {
+  it("keeps this window's changes over another window's save and takes the rest", () => {
+    const { sidebarProjectScopeKeys: _baselineScope, ...baseline } = makeUiState({
+      projectExpandedById: { a: true, b: true },
+      projectOrder: ["a", "b"],
+      threadLastVisitedAtById: { t1: "2026-01-01T00:00:00.000Z" },
+    });
+    const { sidebarProjectScopeKeys: _localScope, ...local } = makeUiState({
+      projectExpandedById: { a: false, b: true },
+      projectOrder: ["a", "b"],
+      threadLastVisitedAtById: { t1: "2026-01-01T00:00:00.000Z" },
+    });
+    const { sidebarProjectScopeKeys: _storedScope, ...stored } = makeUiState({
+      projectExpandedById: { a: true, b: false },
+      projectOrder: ["b", "a"],
+      threadLastVisitedAtById: {
+        t1: "2026-01-01T00:00:00.000Z",
+        t2: "2026-01-02T00:00:00.000Z",
+      },
+      pullRequestMergeMethod: "squash",
+    });
+
+    expect(mergeSharedUiState(stored, local, baseline)).toEqual({
+      ...stored,
+      projectExpandedById: { a: false, b: false },
+    });
   });
 });
 

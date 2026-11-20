@@ -68,6 +68,8 @@ const environmentInput = {
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
+let nextFakeWindowId = 1;
+
 function makeFakeBrowserWindow() {
   const windowListeners = new Map<string, (...args: readonly unknown[]) => void>();
   const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
@@ -105,7 +107,9 @@ function makeFakeBrowserWindow() {
   };
 
   const window = {
+    id: nextFakeWindowId++,
     close: vi.fn(),
+    hide: vi.fn(),
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
@@ -160,6 +164,8 @@ function makeFakeBrowserWindow() {
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
+    close: window.close,
+    hide: window.hide,
   };
 }
 
@@ -245,6 +251,8 @@ function layerTest(input: {
   readonly onPopupTemplate?: (input: ElectronMenu.ElectronMenuTemplateInput) => Effect.Effect<void>;
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
+  /** Windows to hand out in creation order; `window` once these run out. */
+  readonly createdWindows?: Electron.BrowserWindow[];
   readonly focusedWindow?: Electron.BrowserWindow;
   readonly fallbackWindow?: Electron.BrowserWindow;
   readonly platform?: NodeJS.Platform;
@@ -297,16 +305,20 @@ function layerTest(input: {
       }).pipe(
         Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
         Effect.andThen(input.onWindowCreate ?? Effect.void),
-        Effect.as(input.window),
+        Effect.map(() => input.createdWindows?.shift() ?? input.window),
       ),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow).pipe(
       Effect.map(Option.orElse(() => Option.fromNullishOr(input.fallbackWindow ?? null))),
     ),
-    focusedMainOrFirst:
-      input.focusedWindow === undefined
-        ? Ref.get(input.mainWindow)
-        : Effect.succeedSome(input.focusedWindow),
+    apps: Effect.map(Ref.get(input.mainWindow), Option.toArray),
+    // Popups and auxiliary windows are never app windows, so focus falls back to main.
+    focusedApp: Effect.map(Ref.get(input.mainWindow), (main) =>
+      input.focusedWindow !== undefined && Option.contains(main, input.focusedWindow)
+        ? Option.some(input.focusedWindow)
+        : main,
+    ),
+    registerApp: () => Effect.void,
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
     prepareReveal: () => Effect.succeed(false),
@@ -367,6 +379,7 @@ function layerTest(input: {
         Layer.mock(PreviewManager.PreviewManager)({
           getBrowserSession: () => Effect.succeed({} as Electron.Session),
           setMainWindow: input.setPreviewMainWindow ?? (() => Effect.void),
+          registerSecondaryWindow: () => Effect.void,
           prepareWebview: () => Effect.void,
           isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
           getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
@@ -436,7 +449,9 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
         }),
       main: Ref.get(mainWindow),
       currentMainOrFirst,
-      focusedMainOrFirst: currentMainOrFirst,
+      apps: Effect.map(Ref.get(mainWindow), Option.toArray),
+      focusedApp: Ref.get(mainWindow),
+      registerApp: () => Effect.void,
       setMain: (window) => Ref.set(mainWindow, Option.some(window)),
       clearMain: () => Ref.set(mainWindow, Option.none()),
       prepareReveal: () => Effect.succeed(false),
@@ -800,10 +815,10 @@ describe("DesktopWindow", () => {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
-        yield* desktopWindow.zoomMain("out");
-        yield* desktopWindow.zoomMain("out");
-        yield* desktopWindow.zoomMain("in");
-        yield* desktopWindow.zoomMain("reset");
+        yield* desktopWindow.zoomFocused("out");
+        yield* desktopWindow.zoomFocused("out");
+        yield* desktopWindow.zoomFocused("in");
+        yield* desktopWindow.zoomFocused("reset");
 
         assert.deepEqual(
           fakeWindow.setZoomLevel.mock.calls.map(([level]) => level),
@@ -1384,6 +1399,41 @@ describe("DesktopWindow", () => {
         swipe({}, "right");
         assert.equal(history.goBack.mock.calls.length, 1);
         assert.equal(history.goForward.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("opens a secondary window, keeping the main window hidden while it serves it", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const secondary = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: main.window,
+        createdWindows: [main.window, secondary.window],
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const windows = yield* DesktopWindow.DesktopWindow;
+        yield* windows.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* windows.openNewWindow;
+        assert.equal(yield* Ref.get(createCount), 2);
+        assert.deepEqual(Option.getOrThrow(yield* windows.windowContext(secondary.window)), {
+          windowId: secondary.window.id,
+          isMain: false,
+        });
+        assert.deepEqual((yield* windows.windowsState).windows, [
+          { windowId: main.window.id, isMain: true },
+          { windowId: secondary.window.id, isMain: false },
+        ]);
+
+        const preventMainClose = vi.fn();
+        main.windowListeners.get("close")?.({ preventDefault: preventMainClose });
+        assert.equal(preventMainClose.mock.calls.length, 1);
+        assert.equal(main.hide.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
   );
