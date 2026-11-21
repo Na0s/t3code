@@ -30,6 +30,18 @@ export interface DesktopHubLinkMessage {
   readonly peerWindowId: number;
 }
 
+export type DesktopBotWindowSize = "narrow" | "medium";
+
+/** The single T3_BOT window: a floating, optionally always-on-top window showing the `/bot` route. */
+export interface DesktopBotWindowBridge {
+  /** Opens the bot window, or focuses it when it is already open. */
+  open: () => Promise<void>;
+  /** Bot window only: keep it above other apps' windows. */
+  setPinned: (pinned: boolean) => Promise<void>;
+  /** Bot window only. */
+  setSize: (size: DesktopBotWindowSize) => Promise<void>;
+}
+
 export interface DesktopWindowsBridge {
   getContext: () => DesktopWindowContext;
   getState: () => Promise<DesktopWindowsState>;
@@ -43,4 +55,6 @@ export interface DesktopWindowsBridge {
   onHubPeerGone: (listener: (windowId: number) => void) => () => void;
   /** Secondary side: the hub's renderer went away; drop links and request a new one. */
   onHubReset: (listener: () => void) => () => void;
+  /** Absent on desktop builds without the bot window. */
+  bot?: DesktopBotWindowBridge;
 }
