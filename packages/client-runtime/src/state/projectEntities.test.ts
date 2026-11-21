@@ -9,6 +9,7 @@ import { v2Project, v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
 
 const environmentId = EnvironmentId.make("local");
 const remoteEnvironmentId = EnvironmentId.make("remote");
+const NO_BOTS = { bots: {} };
 
 function makeHarness(withConfig = true) {
   const snapshotAtom = Atom.family((_environmentId: EnvironmentId) =>
@@ -26,7 +27,13 @@ function makeHarness(withConfig = true) {
     }),
   );
   const configAtom = Atom.family((_environmentId: EnvironmentId) =>
-    Atom.make<(Pick<ServerConfig, "scratchWorkspaceRoot"> & { revision?: number }) | null>(null),
+    Atom.make<
+      | (Pick<ServerConfig, "scratchWorkspaceRoot"> & {
+          settings: Pick<ServerConfig["settings"], "bots">;
+          revision?: number;
+        })
+      | null
+    >(null),
   );
   const catalogValueAtom = Atom.make({
     isReady: true,
@@ -59,7 +66,10 @@ describe("project scratch identity", () => {
     const { registry, projects, configAtom, catalogValueAtom } = makeHarness();
     try {
       expect(registry.get(projects.projectConfigsReadyAtom)).toBe(false);
-      registry.set(configAtom(environmentId), { scratchWorkspaceRoot: v2Project.workspaceRoot });
+      registry.set(configAtom(environmentId), {
+        scratchWorkspaceRoot: v2Project.workspaceRoot,
+        settings: NO_BOTS,
+      });
       expect(registry.get(projects.projectConfigsReadyAtom)).toBe(false);
       const catalog = registry.get(catalogValueAtom);
       registry.set(catalogValueAtom, {
@@ -74,7 +84,7 @@ describe("project scratch identity", () => {
       expect(registry.get(projects.projectConfigsReadyAtom)).toBe(true);
       registry.set(catalogValueAtom, catalog);
       expect(registry.get(projects.projectConfigsReadyAtom)).toBe(false);
-      registry.set(configAtom(remoteEnvironmentId), {});
+      registry.set(configAtom(remoteEnvironmentId), { settings: NO_BOTS });
       expect(registry.get(projects.projectConfigsReadyAtom)).toBe(true);
       registry.set(catalogValueAtom, { ...catalog, isReady: false });
       expect(registry.get(projects.projectConfigsReadyAtom)).toBe(false);
@@ -90,6 +100,7 @@ describe("project scratch identity", () => {
       const source = registry.get(snapshotAtom(environmentId));
       registry.set(configAtom(environmentId), {
         scratchWorkspaceRoot: `${v2Project.workspaceRoot}/`,
+        settings: NO_BOTS,
       });
       const next = registry.get(projects.projectsAtom);
 
@@ -104,11 +115,12 @@ describe("project scratch identity", () => {
 
       registry.set(configAtom(environmentId), {
         scratchWorkspaceRoot: v2Project.workspaceRoot,
+        settings: NO_BOTS,
         revision: 1,
       });
       expect(registry.get(projects.projectsAtom)).toBe(next);
 
-      registry.set(configAtom(environmentId), { scratchWorkspaceRoot: "/repo" });
+      registry.set(configAtom(environmentId), { scratchWorkspaceRoot: "/repo", settings: NO_BOTS });
       const changedRoot = registry.get(projects.projectsAtom);
       expect(changedRoot[0]).not.toHaveProperty("isScratch");
       expect(changedRoot[1]?.isScratch).toBe(true);
@@ -116,6 +128,37 @@ describe("project scratch identity", () => {
 
       registry.set(configAtom(environmentId), null);
       expect(registry.get(projects.projectsAtom).every((project) => !project.isScratch)).toBe(true);
+    } finally {
+      registry.dispose();
+    }
+  });
+
+  it("marks bot projects and leaves them out of the visible list only", () => {
+    const { registry, projects, configAtom } = makeHarness();
+    const ordinary = ProjectId.make("ordinary");
+    const ordinaryRef = { environmentId, projectId: ordinary };
+    try {
+      const all = registry.get(projects.projectsAtom);
+      expect(registry.get(projects.visibleProjectsAtom)).toBe(all);
+
+      registry.set(configAtom(environmentId), { settings: { bots: { [ordinary]: {} } } });
+      expect(registry.get(projects.projectAtom(ordinaryRef))?.isBot).toBe(true);
+      expect(
+        registry.get(
+          projects.projectAtom({ environmentId: remoteEnvironmentId, projectId: ordinary }),
+        )?.isBot,
+      ).toBeUndefined();
+      expect(registry.get(projects.projectsAtom)).toHaveLength(all.length);
+      const visible = registry.get(projects.visibleProjectsAtom);
+      expect(visible.map((project) => `${project.environmentId}:${project.id}`)).toEqual(
+        all
+          .filter((project) => project.environmentId !== environmentId || project.id !== ordinary)
+          .map((project) => `${project.environmentId}:${project.id}`),
+      );
+
+      registry.set(configAtom(environmentId), { settings: NO_BOTS });
+      expect(registry.get(projects.projectAtom(ordinaryRef))).not.toHaveProperty("isBot");
+      expect(registry.get(projects.visibleProjectsAtom)).toHaveLength(all.length);
     } finally {
       registry.dispose();
     }

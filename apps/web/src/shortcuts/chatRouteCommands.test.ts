@@ -42,7 +42,7 @@ describe("new thread commands", () => {
       boringSidebarEnabled: scenario.mode === "boring",
     });
     using _projects = vi
-      .spyOn(entities, "readProjects")
+      .spyOn(entities, "readVisibleProjects")
       .mockReturnValue([project("active"), project("idle")].slice(0, scenario.count));
     using _ready = vi
       .spyOn(projectsState, "defaultProjectFallbackReadyAtom")

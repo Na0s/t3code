@@ -22,9 +22,12 @@ export function createEnvironmentProjectAtoms(input: {
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
-  readonly serverConfigValueAtom?: (
-    environmentId: EnvironmentId,
-  ) => Atom.Atom<Pick<ServerConfig, "scratchWorkspaceRoot" | "settings"> | null>;
+  readonly serverConfigValueAtom?: (environmentId: EnvironmentId) => Atom.Atom<
+    | (Pick<ServerConfig, "scratchWorkspaceRoot"> & {
+        readonly settings: Pick<ServerConfig["settings"], "bots">;
+      })
+    | null
+  >;
 }) {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
@@ -115,6 +118,17 @@ export function createEnvironmentProjectAtoms(input: {
     return previousProjects;
   }).pipe(Atom.withLabel("environment-project-list"));
 
+  /** projectsAtom without T3_BOT projects, for the main window's lists and pickers. */
+  let previousVisibleProjects: ReadonlyArray<EnvironmentProject> = [];
+  const visibleProjectsAtom = Atom.make((get) => {
+    const projects = get(projectsAtom);
+    if (!projects.some((project) => project.isBot)) return projects;
+    const next = projects.filter((project) => !project.isBot);
+    if (arrayElementsEqual(previousVisibleProjects, next)) return previousVisibleProjects;
+    previousVisibleProjects = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-visible-project-list"));
+
   const projectConfigsReadyAtom = Atom.make((get) => {
     const catalog = get(input.catalogValueAtom);
     if (!catalog.isReady) return false;
@@ -132,6 +146,7 @@ export function createEnvironmentProjectAtoms(input: {
     environmentProjectRefsAtom,
     projectRefsAtom,
     projectsAtom,
+    visibleProjectsAtom,
     projectConfigsReadyAtom,
     projectAtom: (ref: ScopedProjectRef) => projectAtomFamily(projectKey(ref)),
   };

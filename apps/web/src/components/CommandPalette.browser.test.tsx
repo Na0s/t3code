@@ -47,6 +47,7 @@ vi.mock("../hooks/useHandleNewThread", async (original) => {
 vi.mock("../state/entities", async (original) => ({
   ...(await original<typeof import("../state/entities")>()),
   useProjects: () => entities.projects,
+  useVisibleProjects: () => entities.projects,
   useVisibleThreadShells: () => entities.threads,
   useDelegatedUnderParent: () => entities.delegatedUnderParent,
 }));

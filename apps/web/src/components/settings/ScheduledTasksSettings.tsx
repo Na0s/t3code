@@ -69,13 +69,15 @@ import {
   type EnvironmentPresentation,
 } from "../../state/environments";
 import {
+  useHiddenThreadKeys,
   useProjects,
   useQuietThreadShell,
   useThreadShell,
-  useVisibleThreadShells,
+  useThreadShells,
 } from "../../state/entities";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { usePaginatedBranches, useThreadSearch } from "../../state/queries";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
@@ -1336,7 +1338,12 @@ function ScheduledTaskDestination({
       : threadMode === "new_thread"
         ? gt("New thread each run")
         : gt("Started by the first run");
-  const shells = useVisibleThreadShells(open);
+  // Unlike other lists, bot threads stay pickable: a bot's tasks post to its own conversations.
+  const hiddenKeys = useHiddenThreadKeys();
+  const shells = useThreadShells(open).filter(
+    (shell) =>
+      !hiddenKeys.has(threadKey({ environmentId: shell.environmentId, threadId: shell.id })),
+  );
   // Mounts older settled threads matching the query, which shells may leave out.
   useThreadSearch(open && projectId ? [environmentId] : [], query, {
     titlesOnly: true,

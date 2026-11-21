@@ -104,6 +104,11 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
 }
 
+/** Projects without T3_BOT projects, for lists and pickers in the main window. */
+export function useVisibleProjects(): ReadonlyArray<EnvironmentProject> {
+  return useAtomValue(environmentProjects.visibleProjectsAtom);
+}
+
 /** Providers are left out; read them with `useEnvironmentProviders()`. */
 export function useServerConfigs() {
   return useAtomValue(environmentPresentations.serverConfigsAtom);
@@ -125,7 +130,7 @@ export function useHiddenThreadKeys(): ReadonlySet<string> {
   return useAtomValue(environmentThreadShells.hiddenThreadKeysAtom);
 }
 
-/** Thread shells minus those the tag filter hides, for lists that show threads to the user. */
+/** Thread shells minus tag-hidden and T3_BOT threads, for lists that show threads to the user. */
 export function useVisibleThreadShells(enabled = true): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(
     enabled ? environmentThreadShells.visibleThreadShellsAtom : EMPTY_THREAD_SHELLS_ATOM,
@@ -303,6 +308,10 @@ export function subscribeProject(
 
 export function readProjects(): ReadonlyArray<EnvironmentProject> {
   return appAtomRegistry.get(environmentProjects.projectsAtom);
+}
+
+export function readVisibleProjects(): ReadonlyArray<EnvironmentProject> {
+  return appAtomRegistry.get(environmentProjects.visibleProjectsAtom);
 }
 
 export function waitForProject(

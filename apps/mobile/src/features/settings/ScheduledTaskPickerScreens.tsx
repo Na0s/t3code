@@ -1,8 +1,10 @@
 import { msg, T, useGT, useMessages } from "gt-react-native";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { LegendList } from "@legendapp/list/react-native";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { scheduledTaskWorktreeBaseRef } from "@t3tools/client-runtime/scheduled-task-worktree";
+import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { isListedThreadLineage } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
@@ -14,11 +16,8 @@ import { SelectionRow } from "../../components/ui/SelectionRow";
 import { useSearchToolbarInset } from "../../components/ui/useBarInset";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
-import {
-  useEnvironmentServerConfig,
-  useProjects,
-  useVisibleThreadShells,
-} from "../../state/entities";
+import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
+import { environmentThreadShells } from "../../state/threads";
 import { useDebouncedValue, usePaginatedBranches, useThreadSearch } from "../../state/queries";
 import { BranchPickerScreen } from "../threads/NewTaskContextPickerScreens";
 import { ThreadSettingsPickerScreen } from "../threads/ThreadSettingsSheet";
@@ -204,7 +203,12 @@ export function ScheduledTaskThreadPickerRouteScreen() {
   const projectId = editor?.draft.projectId ?? null;
   const threadId = editor?.draft.threadId ?? null;
   const currentLabel = useScheduledTaskDestinationLabel(environmentId, threadId);
-  const shells = useVisibleThreadShells();
+  // Unlike other lists, bot threads stay pickable: a bot's tasks post to its own conversations.
+  const hiddenKeys = useAtomValue(environmentThreadShells.hiddenThreadKeysAtom);
+  const shells = useThreadShells().filter(
+    (shell) =>
+      !hiddenKeys.has(threadKey({ environmentId: shell.environmentId, threadId: shell.id })),
+  );
   const [query, setQuery] = useState("");
   const search = {
     value: query,
