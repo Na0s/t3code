@@ -37,6 +37,7 @@ import {
   environmentAxisValue,
   projectAxisValue,
   projectScopeMenuGroups,
+  projectScopeIsBot,
   selectCheckoutAxis,
   selectEnvironmentAxis,
   selectProjectAxis,
@@ -436,9 +437,13 @@ function ProjectScopeMenu({ value, groups, environments, onChange }: SettingsSco
         return {
           value: group.projectKey,
           label: group.displayName,
-          secondary: group.archived
-            ? [gt("Archived", { $context: "project state" }), location].filter(Boolean).join(" · ")
-            : location,
+          secondary: [
+            ...(group.archived ? [gt("Archived", { $context: "project state" })] : []),
+            ...(projectScopeIsBot(group) ? ["T3_BOT"] : []),
+            location,
+          ]
+            .filter(Boolean)
+            .join(" · "),
           icon: <ProjectFavicon project={group} className="size-3.5 shrink-0" />,
         };
       })}

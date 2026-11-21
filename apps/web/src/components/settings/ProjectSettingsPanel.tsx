@@ -53,6 +53,7 @@ import {
   ProjectFaviconPickerDialog,
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
+import { ProjectBotSettings } from "./ProjectBotSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ProjectRepositoriesSettings } from "./ProjectRepositoriesSettings";
 import {
@@ -691,6 +692,9 @@ function ProjectDetail({
             </>
           ) : null}
         </SettingsSection>
+        {group.memberProjects.some((member) => member.isScratch) ? null : (
+          <ProjectBotSettings members={group.memberProjects} />
+        )}
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
         <ProjectRepositoriesSettings members={group.memberProjects} />

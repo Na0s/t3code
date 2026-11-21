@@ -17,6 +17,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import type { SettingsScopeSearch } from "./settingsScope";
 import {
   projectScopeMenuGroups,
+  projectScopeIsBot,
   selectProjectAxis,
   settingsScopeEnvironmentAddress,
   settingsScopeEnvironmentLabels,
@@ -90,6 +91,7 @@ export function SettingsScopeNotice({
             label: group.displayName,
             secondary: [
               ...(group.archived ? [gt("Archived", { $context: "project state" })] : []),
+              ...(projectScopeIsBot(group) ? ["T3_BOT"] : []),
               ...(projectGroups.some(
                 (other) =>
                   other.projectKey !== group.projectKey && other.displayName === group.displayName,

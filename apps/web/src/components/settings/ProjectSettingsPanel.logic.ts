@@ -1,4 +1,4 @@
-import type { ProjectIconOverride } from "@t3tools/contracts";
+import type { BotSettings, ProjectIconOverride } from "@t3tools/contracts";
 
 import type {
   SidebarProjectGroupMember,
@@ -50,4 +50,15 @@ export function hasDefaultProjectIcon(
     icon.name === SCRATCH_PROJECT_ICON.name &&
     icon.color === SCRATCH_PROJECT_ICON.color
   );
+}
+
+/** The `bots` entry a T3_BOT edit writes. Patch entries replace, so unedited fields carry over. */
+export function nextBotSettings(
+  current: BotSettings | undefined,
+  edit: { readonly enabled: boolean } | { readonly role: string },
+): BotSettings | null {
+  if ("enabled" in edit) return edit.enabled ? (current ?? {}) : null;
+  const { role: _role, ...rest } = current ?? {};
+  const role = edit.role.trim();
+  return role === "" ? rest : { ...rest, role };
 }
