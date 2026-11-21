@@ -213,8 +213,8 @@ function RootRouteBranch() {
   );
   const appShell = (
     <CommandPalette>
-      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-      <AppSidebarLayout showSidebar={!isWelcome}>
+      {/* Setup starts with an empty workspace, so the Welcome page has no thread list; the bot window has its own. */}
+      <AppSidebarLayout showSidebar={!isWelcome && pathname !== "/bot"}>
         <Outlet />
       </AppSidebarLayout>
     </CommandPalette>
