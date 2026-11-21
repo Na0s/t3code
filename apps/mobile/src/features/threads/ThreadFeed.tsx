@@ -274,6 +274,7 @@ import {
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
+import { foldThreadFeedSections, threadFeedSectionFolds } from "./threadFeedSections";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
@@ -3037,26 +3038,39 @@ function useThreadFeedPresentation(
   const [feedCache] = useState(createThreadFeedCache);
   const messages = useMessages();
   const locale = useLocale();
+  const [sectionFoldRows] = useState(
+    () => new Map<RunId, Extract<ThreadFeedEntry, { type: "run-fold" }>>(),
+  );
   return appendPendingThreadMessages(
-    deriveThreadFeedPresentation(
-      props.feed,
-      props.latestRun,
-      expandedTurnIds,
-      new Set(
-        Object.entries(expandedWorkGroups)
-          .filter(([, expanded]) => expanded)
-          .map(([groupId]) => groupId),
+    foldThreadFeedSections(
+      deriveThreadFeedPresentation(
+        props.feed,
+        props.latestRun,
+        expandedTurnIds,
+        new Set(
+          Object.entries(expandedWorkGroups)
+            .filter(([, expanded]) => expanded)
+            .map(([groupId]) => groupId),
+        ),
+        props.activeWorkStartedAt,
+        props.runlessWorkActive ?? false,
+        feedCache,
+        { toolCallVisibility: props.toolCallVisibility ?? "showAll", revealedMessageId },
+        messages,
+        locale,
       ),
-      props.activeWorkStartedAt,
-      props.runlessWorkActive ?? false,
-      feedCache,
-      { toolCallVisibility: props.toolCallVisibility ?? "showAll", revealedMessageId },
-      messages,
-      locale,
+      props.feed,
+      threadFeedSectionFolds(props.feed, threadFeedIsWorking(props)),
+      expandedTurnIds,
+      sectionFoldRows,
     ),
     props.feed,
     props.queuedMessages,
   );
+}
+
+function threadFeedIsWorking(props: Pick<ThreadFeedProps, "activeWorkStartedAt" | "latestRun">) {
+  return props.activeWorkStartedAt !== null && props.latestRun?.status !== "preparing";
 }
 
 type DisclosureLayout = {
@@ -3920,6 +3934,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ...current,
       expandedTurnIds: new Set(current.expandedTurnIds).add(jumpRunId),
     }));
+  }
+  const jumpSection =
+    jumpReady && !presentedFeed.some((entry) => entry.id === jumpToMessageId)
+      ? threadFeedSectionFolds(props.feed, threadFeedIsWorking(props)).get(jumpToMessageId)
+      : undefined;
+  if (jumpSection && expandedTurnIds.has(jumpSection.key) === jumpSection.expandedByDefault) {
+    setInteractionState((current) => {
+      const next = new Set(current.expandedTurnIds);
+      if (jumpSection.expandedByDefault) next.delete(jumpSection.key);
+      else next.add(jumpSection.key);
+      return { ...current, expandedTurnIds: next };
+    });
   }
   const setupAnchorIndex = presentedFeed.findIndex(
     (entry) => entry.type === "message" && entry.message.role === "user",

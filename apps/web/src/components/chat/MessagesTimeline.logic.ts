@@ -16,6 +16,12 @@ import {
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 import { renderCodexDirectivesForCopy } from "~/markdown/markdownText";
 import {
+  deriveBotSectionSpans,
+  formatBotSectionLabel,
+  parseBotSectionMarkers,
+  type BotSectionMessageMarkers,
+} from "@t3tools/shared/botSections";
+import {
   commandDisplayText,
   commandProgramName,
 } from "@t3tools/client-runtime/work-log/command-label";
@@ -1575,6 +1581,71 @@ function timelineRowEntries(
   return withoutSubagentDelegationRows(settleSupersededReasoning(shown));
 }
 
+const botSectionMarkersByMessage = new WeakMap<ChatMessage, BotSectionMessageMarkers | null>();
+
+function messageBotSectionMarkers(message: ChatMessage): BotSectionMessageMarkers | null {
+  if (message.role !== "assistant") return null;
+  let markers = botSectionMarkersByMessage.get(message);
+  if (markers === undefined) {
+    markers = parseBotSectionMarkers(message.text);
+    botSectionMarkersByMessage.set(message, markers);
+  }
+  return markers;
+}
+
+function sameBotSectionMarkers(previous: ChatMessage, next: ChatMessage): boolean {
+  const before = messageBotSectionMarkers(previous);
+  const after = messageBotSectionMarkers(next);
+  return (
+    before === after ||
+    (before !== null &&
+      after !== null &&
+      before.end === after.end &&
+      before.start?.kind === after.start?.kind &&
+      before.start?.label === after.start?.label)
+  );
+}
+
+export interface TimelineSectionFold {
+  /** Toggled-from-default key in the expanded run set; open and closed sections use separate keys. */
+  readonly key: RunId;
+  readonly label: string;
+  readonly createdAt: string;
+  readonly expandedByDefault: boolean;
+}
+
+/** Bot section folds by member entry id. Pass unfiltered entries so zen cannot drop a marker. */
+export function timelineSectionFoldsByEntryId(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  isWorking: boolean,
+): ReadonlyMap<string, TimelineSectionFold> {
+  const byEntryId = new Map<string, TimelineSectionFold>();
+  const spans = deriveBotSectionSpans(timelineEntries, {
+    markers: (entry) => (entry.kind === "message" ? messageBotSectionMarkers(entry.message) : null),
+    startsTurn: timelineEntryStartsResponse,
+  });
+  if (spans.length === 0) return byEntryId;
+  const activeTurnStart = isWorking
+    ? lastResponseBoundaryIndex(timelineEntries)
+    : timelineEntries.length;
+  for (const span of spans) {
+    // A section ended inside the running turn stays open until that turn settles.
+    const open = !span.closed || span.endIndex >= activeTurnStart;
+    const markerEntry = timelineEntries[span.markerIndex]!;
+    const startEntry = timelineEntries[span.startIndex]!;
+    const fold: TimelineSectionFold = {
+      key: RunId.make(`${open ? "section-open" : "section"}:${markerEntry.id}`),
+      label: formatBotSectionLabel(span.marker, startEntry.createdAt),
+      createdAt: startEntry.createdAt,
+      expandedByDefault: open,
+    };
+    for (let index = span.startIndex; index <= span.endIndex; index += 1) {
+      byEntryId.set(timelineEntries[index]!.id, fold);
+    }
+  }
+  return byEntryId;
+}
+
 function deriveTimelineTurnFolds(
   input: Pick<
     MessagesTimelineRowsInput,
@@ -1630,10 +1701,17 @@ export function deriveMessagesTimelineRows(
     worktreeSetup?: WorktreeSetupSnapshot | null;
     toolCallVisibility?: ToolCallVisibility;
     revealedMessageId?: MessageId | null;
+    /** Thread find shows every bot section so its matches stay reachable. */
+    expandAllSections?: boolean;
   },
   resolve: MessageResolver = m,
 ): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input);
+  const sectionFoldsByEntryId = timelineSectionFoldsByEntryId(
+    input.timelineEntries,
+    input.isWorking,
+  );
+  const emittedSectionKeys = new Set<RunId>();
   const embeddedResultRunIds = new Set<RunId>();
   for (const entry of timelineEntries) {
     if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
@@ -1948,6 +2026,27 @@ export function deriveMessagesTimelineRows(
       appendActiveWorkRows();
     }
 
+    const sectionFold = sectionFoldsByEntryId.get(timelineEntry.id);
+    if (sectionFold) {
+      const expanded =
+        input.expandAllSections === true ||
+        sectionFold.expandedByDefault !== (input.expandedRunIds?.has(sectionFold.key) ?? false);
+      if (!emittedSectionKeys.has(sectionFold.key)) {
+        emittedSectionKeys.add(sectionFold.key);
+        nextRows.push({
+          kind: "turn-fold",
+          id: `turn-fold:${sectionFold.key}`,
+          createdAt: sectionFold.createdAt,
+          runId: sectionFold.key,
+          label: sectionFold.label,
+          expanded,
+        });
+      }
+      if (!expanded && !(timelineEntry.kind === "work" && isPendingApproval(timelineEntry.entry))) {
+        continue;
+      }
+    }
+
     // A stopped compaction's own divider already says it stopped.
     if (
       timelineEntry.kind === "event" &&
@@ -2103,7 +2202,8 @@ export function deriveMessagesTimelineRows(
           foldsByAnchorEntryId.has(nextEntry.id) ||
           supersededFoldsByAnchorEntryId.has(nextEntry.id) ||
           (nextEntry.entry.runId ?? null) !== (timelineEntry.entry.runId ?? null) ||
-          nextEntry.attempt?.id !== timelineEntry.attempt?.id
+          nextEntry.attempt?.id !== timelineEntry.attempt?.id ||
+          sectionFoldsByEntryId.get(nextEntry.id) !== sectionFold
         ) {
           break;
         }
@@ -2649,6 +2749,7 @@ function replaceStreamingMessageRows(
     )
       continue;
     if (!isStreamingMessageTextUpdate(previousEntry.message, entry.message)) return null;
+    if (!sameBotSectionMarkers(previousEntry.message, entry.message)) return null;
     replacements.set(previousEntry.message, entry);
   }
   if (replacements.size === 0 && thoughts.size === 0 && plans.size === 0) return previous.rows;

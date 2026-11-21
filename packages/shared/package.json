@@ -515,6 +515,10 @@
       "types": "./src/codexFileCitations.ts",
       "import": "./src/codexFileCitations.ts"
     },
+    "./botSections": {
+      "types": "./src/botSections.ts",
+      "import": "./src/botSections.ts"
+    },
     "./codexMarkdownDirectives": {
       "types": "./src/codexMarkdownDirectives.ts",
       "import": "./src/codexMarkdownDirectives.ts"
