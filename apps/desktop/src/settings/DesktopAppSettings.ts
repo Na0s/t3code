@@ -1,6 +1,8 @@
 import {
+  DesktopBotWindowSizeSchema,
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
+  type DesktopBotWindowSize,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
 } from "@t3tools/contracts";
@@ -27,7 +29,14 @@ import {
 import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
+export interface DesktopBotWindowSettings {
+  readonly bounds: DesktopBotWindowBounds | null;
+  readonly size: DesktopBotWindowSize;
+  readonly pinned: boolean;
+}
+
 export interface DesktopSettings {
+  readonly botWindow: DesktopBotWindowSettings;
   readonly localEnvironmentEnabled: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
@@ -68,7 +77,29 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
   height: 780,
 } as const;
 
+export const MIN_BOT_WINDOW_SIZE = {
+  width: 320,
+  height: 420,
+} as const;
+export const BOT_WINDOW_SIZES = {
+  narrow: { width: 380, height: 720 },
+  medium: { width: 900, height: 760 },
+} as const satisfies Record<DesktopBotWindowSize, { width: number; height: number }>;
+export const DesktopBotWindowBoundsSchema = Schema.Struct({
+  x: Schema.Int,
+  y: Schema.Int,
+  width: Schema.Int.check(Schema.isGreaterThanOrEqualTo(MIN_BOT_WINDOW_SIZE.width)),
+  height: Schema.Int.check(Schema.isGreaterThanOrEqualTo(MIN_BOT_WINDOW_SIZE.height)),
+});
+export type DesktopBotWindowBounds = typeof DesktopBotWindowBoundsSchema.Type;
+const DEFAULT_BOT_WINDOW_SETTINGS: DesktopBotWindowSettings = {
+  bounds: null,
+  size: "narrow",
+  pinned: false,
+};
+
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  botWindow: DEFAULT_BOT_WINDOW_SETTINGS,
   localEnvironmentEnabled: true,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
@@ -95,7 +126,14 @@ const DesktopWindowBoundsDocument = Schema.Struct({
 const optionalReadableKey = <S extends Schema.Top>(schema: S) =>
   Schema.optionalKey(schema.pipe(Schema.catchDecoding(() => Effect.succeedNone)));
 
+const DesktopBotWindowDocument = Schema.Struct({
+  bounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
+  size: optionalReadableKey(DesktopBotWindowSizeSchema),
+  pinned: optionalReadableKey(Schema.Boolean),
+});
+
 const DesktopSettingsDocument = Schema.Struct({
+  botWindow: optionalReadableKey(DesktopBotWindowDocument),
   localEnvironmentEnabled: optionalReadableKey(Schema.Boolean),
   linuxPasswordStore: optionalReadableKey(Schema.Unknown),
   mainWindowBounds: optionalReadableKey(Schema.NullOr(DesktopWindowBoundsDocument)),
@@ -119,6 +157,8 @@ const decodeDesktopSettingsJson = Schema.decodeEffect(DesktopSettingsJson);
 const encodeDesktopSettingsJson = Schema.encodeEffect(DesktopSettingsJson);
 const decodeDesktopWindowBounds = Schema.decodeUnknownOption(DesktopWindowBoundsSchema);
 const desktopWindowBoundsEquivalence = Schema.toEquivalence(DesktopWindowBoundsSchema);
+const decodeDesktopBotWindowBounds = Schema.decodeUnknownOption(DesktopBotWindowBoundsSchema);
+const desktopBotWindowBoundsEquivalence = Schema.toEquivalence(DesktopBotWindowBoundsSchema);
 
 const settingsChange = (settings: DesktopSettings, changed: boolean): DesktopSettingsChange => ({
   settings,
@@ -159,6 +199,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly setMainWindowBounds: (
       bounds: DesktopWindowBounds,
       isMaximized: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly updateBotWindow: (
+      update: Partial<DesktopBotWindowSettings>,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setServerExposureMode: (
       mode: DesktopServerExposureMode,
@@ -208,6 +251,10 @@ export function normalizeMainWindowBounds(value: unknown): DesktopWindowBounds |
   return Option.getOrNull(decodeDesktopWindowBounds(value));
 }
 
+export function normalizeBotWindowBounds(value: unknown): DesktopBotWindowBounds | null {
+  return Option.getOrNull(decodeDesktopBotWindowBounds(value));
+}
+
 function normalizeDesktopSettingsDocument(
   parsed: DesktopSettingsDocument,
   appVersion: string,
@@ -225,6 +272,11 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
+    botWindow: {
+      bounds: normalizeBotWindowBounds(parsed.botWindow?.bounds),
+      size: parsed.botWindow?.size ?? DEFAULT_BOT_WINDOW_SETTINGS.size,
+      pinned: parsed.botWindow?.pinned === true,
+    },
     localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
@@ -248,6 +300,16 @@ function toDesktopSettingsDocument(
   defaults: DesktopSettings,
 ): DesktopSettingsDocument {
   const document: Mutable<DesktopSettingsDocument> = {};
+
+  const { botWindow } = settings;
+  const botWindowDocument = {
+    ...(botWindow.bounds === null ? {} : { bounds: botWindow.bounds }),
+    ...(botWindow.size === DEFAULT_BOT_WINDOW_SETTINGS.size ? {} : { size: botWindow.size }),
+    ...(botWindow.pinned ? { pinned: true } : {}),
+  };
+  if (Object.keys(botWindowDocument).length > 0) {
+    document.botWindow = botWindowDocument;
+  }
 
   if (settings.localEnvironmentEnabled !== defaults.localEnvironmentEnabled) {
     document.localEnvironmentEnabled = settings.localEnvironmentEnabled;
@@ -316,6 +378,22 @@ function setMainWindowBounds(
         mainWindowBounds: bounds,
         mainWindowMaximized: isMaximized,
       };
+}
+
+function updateBotWindow(
+  settings: DesktopSettings,
+  update: Partial<DesktopBotWindowSettings>,
+): DesktopSettings {
+  const current = settings.botWindow;
+  const next = { ...current, ...update };
+  const boundsUnchanged =
+    next.bounds === current.bounds ||
+    (next.bounds !== null &&
+      current.bounds !== null &&
+      desktopBotWindowBoundsEquivalence(next.bounds, current.bounds));
+  return boundsUnchanged && next.size === current.size && next.pinned === current.pinned
+    ? settings
+    : { ...settings, botWindow: next };
 }
 
 function setTailscaleServe(
@@ -562,6 +640,9 @@ export const make = Effect.gen(function* () {
         return yield* persist((settings) => setMainWindowBounds(settings, bounds, isMaximized));
       },
     ),
+    updateBotWindow: Effect.fn("desktop.settings.updateBotWindow")(function* (patch) {
+      return yield* persist((settings) => updateBotWindow(settings, patch));
+    }),
     setServerExposureMode: Effect.fn("desktop.settings.setServerExposureMode")(function* (mode) {
       yield* Effect.annotateCurrentSpan({ mode });
 
@@ -635,6 +716,9 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
             return update((settings) => setMainWindowBounds(settings, bounds, isMaximized));
           },
         ),
+        updateBotWindow: Effect.fn("DesktopAppSettings.updateBotWindow")(function (patch) {
+          return update((settings) => updateBotWindow(settings, patch));
+        }),
         setServerExposureMode: Effect.fn("DesktopAppSettings.setServerExposureMode")(
           function (mode) {
             return update((settings) => setServerExposureMode(settings, mode));

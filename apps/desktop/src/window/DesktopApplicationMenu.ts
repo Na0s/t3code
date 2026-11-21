@@ -74,6 +74,10 @@ const trackLabel = (channel: DesktopUpdateChannel) =>
     ? m(msg("Nightly", { $context: "release track" }))
     : m(msg("Stable", { $context: "release track" }));
 
+const openBotWindow = Effect.gen(function* () {
+  yield* (yield* DesktopWindow.DesktopWindow).openBot;
+}).pipe(Effect.withSpan("desktop.menu.openBotWindow"));
+
 const checkForUpdatesFromMenu = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
@@ -402,6 +406,13 @@ export const make = Effect.gen(function* () {
             accelerator: "CmdOrCtrl+Alt+Shift+N",
             registerAccelerator: false,
             click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
+          },
+          {
+            label: m(msg("Open T3_BOT", { $context: "Window menu item" })),
+            // The renderer's bot.open keybinding owns the chord.
+            accelerator: "CmdOrCtrl+Alt+Shift+B",
+            registerAccelerator: false,
+            click: () => runMenuEffect("open-bot", openBotWindow),
           },
           { type: "separator" },
           { role: "minimize", label: m(msg("Minimize", { $context: "Window menu item" })) },

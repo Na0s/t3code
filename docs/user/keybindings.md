@@ -195,7 +195,8 @@ through the pages you have visited, like a browser's back and forward buttons.
 [new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`
 (`mod+alt+n`) starts a thread [without a project](./thread-sidebar.md#start-without-a-project).
 
-`window.new` (`mod+alt+shift+n`) opens another window in the desktop app. See
+`window.new` (`mod+alt+shift+n`) opens another window in the desktop app, and
+`bot.open` (`mod+alt+shift+b`) opens or brings forward the T3_BOT window. See
 [Multiple windows](./multiple-windows.md).
 
 ## Reserved shortcuts

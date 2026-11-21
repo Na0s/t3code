@@ -13,6 +13,20 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "./DesktopAppSettings.ts";
 
 const DesktopSettingsPatch = Schema.Struct({
+  botWindow: Schema.optionalKey(
+    Schema.Struct({
+      bounds: Schema.optionalKey(
+        Schema.Struct({
+          x: Schema.Number,
+          y: Schema.Number,
+          width: Schema.Number,
+          height: Schema.Number,
+        }),
+      ),
+      size: Schema.optionalKey(Schema.Literals(["narrow", "medium"])),
+      pinned: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
   linuxPasswordStore: Schema.optionalKey(
     Schema.Literals(["auto", "gnome-libsecret", "kwallet", "kwallet5", "kwallet6"]),
   ),
@@ -223,6 +237,7 @@ describe("DesktopSettings", () => {
         );
 
         assert.deepEqual(yield* settings.load, {
+          botWindow: { bounds: null, size: "narrow", pinned: false },
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
@@ -295,11 +310,16 @@ describe("DesktopSettings", () => {
 
         yield* settings.setMainWindowBounds({ x: -1200, y: 40, width: 400, height: 360 }, true);
         yield* settings.setServerExposureMode("network-accessible");
+        // Narrower than any main window may be.
+        yield* settings.updateBotWindow({ bounds: { x: 1500, y: 60, width: 380, height: 720 } });
+        yield* settings.updateBotWindow({ pinned: true });
+        assert.isFalse((yield* settings.updateBotWindow({ pinned: true })).changed);
 
         const persisted = yield* decodeDesktopSettingsPatch(
           yield* fileSystem.readFileString(environment.desktopSettingsPath),
         );
         assert.deepEqual(persisted, {
+          botWindow: { bounds: { x: 1500, y: 60, width: 380, height: 720 }, pinned: true },
           mainWindowBounds: { x: -1200, y: 40, width: 400, height: 360 },
           mainWindowMaximized: true,
           serverExposureMode: "network-accessible",
@@ -311,6 +331,11 @@ describe("DesktopSettings", () => {
         }).pipe(Effect.provide(DesktopAppSettings.layer));
         assert.deepEqual(restored.mainWindowBounds, persisted.mainWindowBounds);
         assert.isTrue(restored.mainWindowMaximized);
+        assert.deepEqual(restored.botWindow, {
+          bounds: { x: 1500, y: 60, width: 380, height: 720 },
+          size: "narrow",
+          pinned: true,
+        });
       }),
     ),
   );
@@ -376,6 +401,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          botWindow: { bounds: null, size: "narrow", pinned: false },
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
@@ -405,6 +431,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          botWindow: { bounds: null, size: "narrow", pinned: false },
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,

@@ -400,31 +400,37 @@ describe("thread navigation helpers", () => {
   });
 });
 
-describe("new window shortcut", () => {
-  it("opens a window only in the desktop app, apart from the no-project thread shortcut", () => {
-    const newWindow = event({ key: "n", ctrlKey: true, altKey: true, shiftKey: true });
-    assert.strictEqual(
-      resolveShortcutCommand(newWindow, DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "Linux",
-        context: { isDesktop: true },
-      }),
-      "window.new",
-    );
-    assert.isNull(
-      resolveShortcutCommand(newWindow, DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "Linux",
-        context: { isDesktop: false },
-      }),
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(
-        event({ key: "n", ctrlKey: true, altKey: true }),
-        DEFAULT_RESOLVED_KEYBINDINGS,
-        { platform: "Linux", context: { isDesktop: true } },
-      ),
-      "chat.newWithoutProject",
-    );
-  });
+describe("desktop window shortcuts", () => {
+  it.each([
+    { key: "n", command: "window.new", neighbour: "chat.newWithoutProject" },
+    { key: "b", command: "bot.open", neighbour: "rightPanel.toggle" },
+  ] as const)(
+    "$command opens a window only in the desktop app, apart from $neighbour",
+    ({ key, command, neighbour }) => {
+      const shortcut = event({ key, ctrlKey: true, altKey: true, shiftKey: true });
+      assert.strictEqual(
+        resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "Linux",
+          context: { isDesktop: true },
+        }),
+        command,
+      );
+      assert.isNull(
+        resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "Linux",
+          context: { isDesktop: false },
+        }),
+      );
+      assert.strictEqual(
+        resolveShortcutCommand(
+          event({ key, ctrlKey: true, altKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          { platform: "Linux", context: { isDesktop: true } },
+        ),
+        neighbour,
+      );
+    },
+  );
 });
 
 describe("model picker navigation helpers", () => {

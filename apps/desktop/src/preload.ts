@@ -148,6 +148,11 @@ const windows: DesktopWindowsBridge = {
   ),
   onHubReset: (listener) =>
     subscribe(IpcChannels.WINDOWS_HUB_RESET_CHANNEL, () => true)(() => listener()),
+  bot: {
+    open: () => ipcRenderer.invoke(IpcChannels.WINDOWS_BOT_OPEN_CHANNEL),
+    setSize: (size) => ipcRenderer.invoke(IpcChannels.WINDOWS_BOT_SET_SIZE_CHANNEL, size),
+    setPinned: (pinned) => ipcRenderer.invoke(IpcChannels.WINDOWS_BOT_SET_PINNED_CHANNEL, pinned),
+  },
 };
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {

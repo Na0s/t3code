@@ -12,10 +12,21 @@ export const DesktopWindowsStateSchema = Schema.Struct({
 });
 export type DesktopWindowsState = typeof DesktopWindowsStateSchema.Type;
 
+export const DesktopBotWindowSizeSchema = Schema.Literals(["narrow", "medium"]);
+export type DesktopBotWindowSize = typeof DesktopBotWindowSizeSchema.Type;
+
+export const DesktopBotWindowStateSchema = Schema.Struct({
+  size: DesktopBotWindowSizeSchema,
+  pinned: Schema.Boolean,
+});
+export type DesktopBotWindowState = typeof DesktopBotWindowStateSchema.Type;
+
 /** Read synchronously at preload time; a window keeps its id and role for its lifetime. */
 export const DesktopWindowContextSchema = Schema.Struct({
   windowId: Schema.Int,
   isMain: Schema.Boolean,
+  /** Only in the bot window: its size and pin state when the page loaded. */
+  bot: Schema.optional(DesktopBotWindowStateSchema),
 });
 export type DesktopWindowContext = typeof DesktopWindowContextSchema.Type;
 
@@ -29,8 +40,6 @@ export interface DesktopHubLinkMessage {
   /** The BrowserWindow id at the other end of the port. */
   readonly peerWindowId: number;
 }
-
-export type DesktopBotWindowSize = "narrow" | "medium";
 
 /** The single T3_BOT window: a floating, optionally always-on-top window showing the `/bot` route. */
 export interface DesktopBotWindowBridge {

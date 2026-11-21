@@ -110,6 +110,7 @@ const layerDesktopWindow = (selectedAction: Deferred.Deferred<string>) =>
     runFocusedContentsCommand: (command) =>
       Deferred.succeed(selectedAction, `main-${command}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
+    openBot: Deferred.succeed(selectedAction, "open-bot").pipe(Effect.asVoid),
   });
 
 const layerElectronMenu = (
@@ -347,7 +348,10 @@ describe("DesktopApplicationMenu", () => {
       assert.equal(yield* Deferred.await(selectedAction), "main-reload");
     }),
   );
-  it.effect("leads the Window menu with New Window and leaves its chord to the renderer", () =>
+  it.effect.each([
+    { index: 0, label: "New Window", accelerator: "CmdOrCtrl+Alt+Shift+N", action: "new-window" },
+    { index: 1, label: "Open T3_BOT", accelerator: "CmdOrCtrl+Alt+Shift+B", action: "open-bot" },
+  ])("leads the Window menu with $label and leaves its chord to the renderer", (expected) =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();
       const applicationMenuTemplate =
@@ -360,14 +364,14 @@ describe("DesktopApplicationMenu", () => {
       if (!Array.isArray(windowMenu?.submenu)) {
         throw new Error("Expected the Window menu submenu to be an array.");
       }
-      const [newWindow] = windowMenu.submenu;
+      const item = windowMenu.submenu[expected.index];
       assert.deepEqual(
-        { label: newWindow?.label, accelerator: newWindow?.accelerator },
-        { label: "New Window", accelerator: "CmdOrCtrl+Alt+Shift+N" },
+        { label: item?.label, accelerator: item?.accelerator },
+        { label: expected.label, accelerator: expected.accelerator },
       );
-      assert.equal(newWindow?.registerAccelerator, false);
-      newWindow?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
-      assert.equal(yield* Deferred.await(selectedAction), "new-window");
+      assert.equal(item?.registerAccelerator, false);
+      item?.click?.({} as Electron.MenuItem, undefined, {} as KeyboardEvent);
+      assert.equal(yield* Deferred.await(selectedAction), expected.action);
     }),
   );
 

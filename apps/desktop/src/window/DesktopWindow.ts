@@ -12,6 +12,8 @@ import * as Electron from "electron";
 import { msg } from "gt-i18n";
 
 import {
+  type DesktopBotWindowSize,
+  type DesktopBotWindowState,
   type DesktopSnapShotEvent,
   type DesktopWindowContext,
   type DesktopWindowsState,
@@ -57,7 +59,7 @@ import { copyContextMenuImage } from "./ContextMenuImage.ts";
 import { installMainWindowRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
 import { setUnthrottledHold } from "./BackgroundThrottling.ts";
 import { HubLinkBroker, type HubLinkPeer } from "./DesktopHubLinks.ts";
-import { cascadeWindowBounds } from "./DesktopWindowProfiles.ts";
+import { cascadeWindowBounds, resizeWithinDisplay } from "./DesktopWindowProfiles.ts";
 
 const TITLEBAR_HEIGHT = 40;
 
@@ -166,6 +168,15 @@ export class DesktopWindow extends Context.Service<
       window: Electron.BrowserWindow,
     ) => Effect.Effect<Option.Option<DesktopWindowContext>>;
     readonly openNewWindow: Effect.Effect<void, DesktopWindowError>;
+    /** Opens the single bot window, or brings it forward. */
+    readonly openBot: Effect.Effect<void, DesktopWindowError>;
+    /** No-ops unless `window` is the bot window. */
+    readonly setBotSize: (
+      window: Electron.BrowserWindow,
+      size: DesktopBotWindowSize,
+    ) => Effect.Effect<void>;
+    /** No-ops unless `window` is the bot window. */
+    readonly setBotPinned: (window: Electron.BrowserWindow, pinned: boolean) => Effect.Effect<void>;
     readonly registerHub: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly requestHubLink: (window: Electron.BrowserWindow) => Effect.Effect<void>;
   }
@@ -260,6 +271,14 @@ function readDisplayBoundsOrEmpty(): readonly DisplayBounds[] {
   }
 }
 
+function readDisplayWorkAreasOrEmpty(): readonly DisplayBounds[] {
+  try {
+    return Electron.screen.getAllDisplays().map((display) => display.workArea);
+  } catch {
+    return [];
+  }
+}
+
 function windowBoundsEqual(
   left: DesktopAppSettings.DesktopWindowBounds,
   right: DesktopAppSettings.DesktopWindowBounds,
@@ -272,17 +291,20 @@ function windowBoundsEqual(
   );
 }
 
+type WindowSize = { readonly width: number; readonly height: number };
+
 export function resolveInitialMainWindowBounds(
   persistedBounds: DesktopAppSettings.DesktopWindowBounds | null,
   displays: readonly DisplayBounds[],
-): DesktopAppSettings.DesktopWindowBounds | typeof DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE {
+  defaultSize: WindowSize = DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE,
+): DesktopAppSettings.DesktopWindowBounds | WindowSize {
   if (
     persistedBounds !== null &&
     displays.some((display) => windowFitsWithinDisplay(persistedBounds, display))
   ) {
     return persistedBounds;
   }
-  return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
+  return defaultSize;
 }
 
 function buildConnectingSplashDataUrl(shouldUseDarkColors: boolean): string {
@@ -404,12 +426,14 @@ function bindFirstRevealTrigger(
 
 type AppWindowSpec =
   | { readonly role: "main" }
-  | { readonly role: "secondary"; readonly anchorBounds: DisplayBounds | null };
+  | { readonly role: "secondary"; readonly anchorBounds: DisplayBounds | null }
+  | { readonly role: "bot" };
 
 interface AppWindowEntry {
   readonly window: Electron.BrowserWindow;
   readonly windowId: number;
   readonly isMain: boolean;
+  readonly isBot: boolean;
   rendererLive: boolean;
   hubUnthrottled: boolean;
 }
@@ -441,6 +465,12 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   const runSync = Effect.runSyncWith(context);
   const mainWindowMutex = yield* Semaphore.make(1);
+  const botWindowMutex = yield* Semaphore.make(1);
+  // The bot window's renderer reads this at load; settings may refuse writes.
+  let botState: DesktopBotWindowState = {
+    size: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.botWindow.size,
+    pinned: DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS.botWindow.pinned,
+  };
   const pendingMainReveals = new WeakMap<Electron.BrowserWindow, Effect.Effect<void>>();
   const revealMain = Effect.fn("desktop.window.revealMain")((window: Electron.BrowserWindow) =>
     Effect.suspend(() => pendingMainReveals.get(window) ?? electronWindow.reveal(window)),
@@ -448,6 +478,11 @@ export const make = Effect.gen(function* () {
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
   let remoteRequestHeaderOwner: Electron.BrowserWindow | null = null;
   const entries = new Map<number, AppWindowEntry>();
+  // macOS: float above other apps' windows, as the preview picture-in-picture window does.
+  const applyBotPinned = (window: Electron.BrowserWindow, pinned: boolean) => {
+    if (!pinned) window.setAlwaysOnTop(false);
+    else window.setAlwaysOnTop(true, environment.platform === "darwin" ? "floating" : "normal");
+  };
   let lastBroadcastState = "";
   const hubLinks = new HubLinkBroker<Electron.MessagePortMain>(
     () => new Electron.MessageChannelMain(),
@@ -456,6 +491,7 @@ export const make = Effect.gen(function* () {
   const liveEntries = () => [...entries.values()].filter((entry) => !entry.window.isDestroyed());
   const mainEntry = () => liveEntries().find((entry) => entry.isMain);
   const secondaryEntries = () => liveEntries().filter((entry) => !entry.isMain);
+  const botEntry = () => liveEntries().find((entry) => entry.isBot);
   const entryOf = (window: Electron.BrowserWindow) => {
     const entry = entries.get(window.id);
     return entry !== undefined && entry.window === window && !window.isDestroyed()
@@ -571,20 +607,33 @@ export const make = Effect.gen(function* () {
   ): Effect.fn.Return<Option.Option<Electron.BrowserWindow>, DesktopWindowError> {
     if (yield* Ref.get(desktopState.quitting)) return Option.none();
     const isMain = spec.role === "main";
+    const isBot = spec.role === "bot";
     yield* previewManager.getBrowserSession();
     const applicationUrl = getDesktopUrl(environment.isDevelopment);
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths, environment.platform);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
     const persistedSettings = yield* desktopSettings.get;
-    // Only the main window keeps its placement.
-    const persistedBounds = isMain ? persistedSettings.mainWindowBounds : null;
+    // Only the main and bot windows keep their placement.
+    const persistedBounds = isMain
+      ? persistedSettings.mainWindowBounds
+      : isBot
+        ? persistedSettings.botWindow.bounds
+        : null;
     const displayBounds = yield* readDisplayBounds;
-    const restorableBounds = resolveInitialMainWindowBounds(persistedBounds, displayBounds);
+    const restorableBounds = resolveInitialMainWindowBounds(
+      persistedBounds,
+      displayBounds,
+      isBot
+        ? DesktopAppSettings.BOT_WINDOW_SIZES[persistedSettings.botWindow.size]
+        : DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE,
+    );
     const restoredPersistedBounds =
       persistedBounds !== null && restorableBounds === persistedBounds;
     if (persistedBounds !== null && !restoredPersistedBounds) {
-      yield* logWindowWarning("saved main window bounds could not be restored; using defaults");
+      yield* logWindowWarning("saved window bounds could not be restored; using defaults", {
+        role: spec.role,
+      });
     }
     const initialBounds =
       spec.role === "secondary"
@@ -595,10 +644,15 @@ export const make = Effect.gen(function* () {
           })
         : restorableBounds;
     if (yield* Ref.get(desktopState.quitting)) return Option.none();
+    const minimumSize = isBot
+      ? DesktopAppSettings.MIN_BOT_WINDOW_SIZE
+      : DesktopAppSettings.MIN_MAIN_WINDOW_SIZE;
     const window = yield* electronWindow.create({
       ...initialBounds,
-      minWidth: DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width,
-      minHeight: DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height,
+      minWidth: minimumSize.width,
+      minHeight: minimumSize.height,
+      // The bot window stays compact; its sizes are presets.
+      ...(isBot ? { maximizable: false, fullscreenable: false } : {}),
       show: false,
       autoHideMenuBar: true,
       ...(environment.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
@@ -625,6 +679,13 @@ export const make = Effect.gen(function* () {
     }
 
     if (isMain) pendingMainReveals.set(window, Effect.void);
+    if (isBot) {
+      botState = {
+        size: persistedSettings.botWindow.size,
+        pinned: persistedSettings.botWindow.pinned,
+      };
+      if (botState.pinned) applyBotPinned(window, true);
+    }
     setUnthrottledHold(window, "first-reveal", true);
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
@@ -634,6 +695,7 @@ export const make = Effect.gen(function* () {
       window,
       windowId: window.id,
       isMain,
+      isBot,
       rendererLive: false,
       hubUnthrottled: false,
     };
@@ -662,7 +724,10 @@ export const make = Effect.gen(function* () {
               readDisplayBoundsOrEmpty(),
             )
           : window.getBounds();
-      const persistableBounds = DesktopAppSettings.normalizeMainWindowBounds({
+      const normalizeBounds = isBot
+        ? DesktopAppSettings.normalizeBotWindowBounds
+        : DesktopAppSettings.normalizeMainWindowBounds;
+      const persistableBounds = normalizeBounds({
         x: Math.round(bounds.x),
         y: Math.round(bounds.y),
         width: Math.round(bounds.width),
@@ -675,9 +740,9 @@ export const make = Effect.gen(function* () {
     const fallbackWindowBounds = boundsPersistenceEnabled
       ? null
       : (readPersistableState()?.bounds ?? null);
-    const fallbackWindowMaximized = persistedSettings.mainWindowMaximized;
+    const fallbackWindowMaximized = isMain && persistedSettings.mainWindowMaximized;
     const persistCurrentBounds = (): Fiber.Fiber<void, never> | undefined => {
-      if (!isMain || !boundsPersistenceEnabled) {
+      if ((!isMain && !isBot) || !boundsPersistenceEnabled) {
         return pendingBoundsPersistFiber;
       }
       const state = readPersistableState();
@@ -685,10 +750,14 @@ export const make = Effect.gen(function* () {
         return pendingBoundsPersistFiber;
       }
       pendingBoundsPersistFiber = runFork(
-        desktopSettings.setMainWindowBounds(state.bounds, state.isMaximized).pipe(
+        (isBot
+          ? desktopSettings.updateBotWindow({ bounds: state.bounds })
+          : desktopSettings.setMainWindowBounds(state.bounds, state.isMaximized)
+        ).pipe(
           Effect.asVoid,
           Effect.catch((error) =>
-            logWindowWarning("failed to persist main window bounds", {
+            logWindowWarning("failed to persist window bounds", {
+              role: spec.role,
               message: error.message,
             }),
           ),
@@ -1036,11 +1105,13 @@ export const make = Effect.gen(function* () {
       developmentLoadRetryFiber = undefined;
       runFork(Fiber.interrupt(retryFiber));
     };
+    // Electron renderers use hash history, so a route is the URL fragment.
+    const windowUrl = isBot ? `${applicationUrl}#/bot` : applicationUrl;
     const loadApplication = () => {
       if (window.isDestroyed()) {
         return;
       }
-      void window.loadURL(applicationUrl).catch(() => undefined);
+      void window.loadURL(windowUrl).catch(() => undefined);
     };
     const scheduleDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber !== undefined || window.isDestroyed()) {
@@ -1281,6 +1352,27 @@ export const make = Effect.gen(function* () {
     });
   }).pipe(Effect.withSpan("desktop.window.openSecondary"));
 
+  const openBot = Effect.gen(function* () {
+    const existing = botEntry();
+    if (existing !== undefined) {
+      yield* electronWindow.reveal(existing.window);
+      return;
+    }
+    // Like menu actions, wait for the backend rather than strand a new main window on auth.
+    if (Option.isNone(yield* electronWindow.main) && (yield* waitingForBackend)) return;
+    // The bot window reaches environments through the main window's renderer.
+    if (Option.isNone(yield* ensureMain)) return;
+    yield* buildAppWindow({ role: "bot" });
+  }).pipe(botWindowMutex.withPermits(1), Effect.withSpan("desktop.window.openBot"));
+
+  const persistBotWindow = (patch: Partial<DesktopAppSettings.DesktopBotWindowSettings>) =>
+    desktopSettings.updateBotWindow(patch).pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        logWindowWarning("failed to persist bot window settings", { message: error.message }),
+      ),
+    );
+
   const handleSecondaryClosed = Effect.gen(function* () {
     if (yield* Ref.get(desktopState.quitting)) return;
     const main = mainEntry();
@@ -1506,12 +1598,37 @@ export const make = Effect.gen(function* () {
     windowContext: Effect.fn("desktop.window.windowContext")(function (window) {
       return Effect.sync(() => {
         const entry = entryOf(window);
-        return entry === undefined
-          ? Option.none<DesktopWindowContext>()
-          : Option.some({ windowId: entry.windowId, isMain: entry.isMain });
+        if (entry === undefined) return Option.none<DesktopWindowContext>();
+        return Option.some({
+          windowId: entry.windowId,
+          isMain: entry.isMain,
+          ...(entry.isBot ? { bot: botState } : {}),
+        });
       });
     }),
     openNewWindow: openSecondary,
+    openBot,
+    setBotSize: Effect.fn("desktop.window.setBotSize")(function* (window, size) {
+      yield* Effect.annotateCurrentSpan({ size });
+      if (entryOf(window)?.isBot !== true) return;
+      botState = { ...botState, size };
+      if (window.isMinimized()) window.restore();
+      window.setBounds(
+        resizeWithinDisplay({
+          bounds: window.getBounds(),
+          size: DesktopAppSettings.BOT_WINDOW_SIZES[size],
+          displays: readDisplayWorkAreasOrEmpty(),
+        }),
+      );
+      yield* persistBotWindow({ size });
+    }),
+    setBotPinned: Effect.fn("desktop.window.setBotPinned")(function* (window, pinned) {
+      yield* Effect.annotateCurrentSpan({ pinned });
+      if (entryOf(window)?.isBot !== true) return;
+      botState = { ...botState, pinned };
+      applyBotPinned(window, pinned);
+      yield* persistBotWindow({ pinned });
+    }),
     registerHub: Effect.fn("desktop.window.registerHub")(function (window) {
       return Effect.sync(() => {
         const entry = entryOf(window);

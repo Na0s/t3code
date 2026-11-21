@@ -518,6 +518,7 @@ const USAGE_COMMAND_LABELS: Record<
 const LATE_COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "view.reopenClosed": msg("Reopen Closed Tab"),
   "window.new": msg("New Window"),
+  "bot.open": msg("Open T3_BOT"),
   "preview.focusUrl": msg("Preview: Focus URL"),
   "preview.find": msg("Preview: Find on Page"),
 };

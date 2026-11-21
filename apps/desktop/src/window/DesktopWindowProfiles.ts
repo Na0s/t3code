@@ -39,3 +39,32 @@ export function cascadeWindowBounds(input: {
     height,
   };
 }
+
+/** Resizes a window in place, moving it only as far as it takes to stay on its display. */
+export function resizeWithinDisplay(input: {
+  readonly bounds: Rectangle;
+  readonly size: { readonly width: number; readonly height: number };
+  readonly displays: readonly Rectangle[];
+}): Rectangle {
+  const { bounds } = input;
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  const display =
+    input.displays.find(
+      (candidate) =>
+        centerX >= candidate.x &&
+        centerY >= candidate.y &&
+        centerX < candidate.x + candidate.width &&
+        centerY < candidate.y + candidate.height,
+    ) ?? input.displays[0];
+  if (display === undefined) return { x: bounds.x, y: bounds.y, ...input.size };
+  const width = Math.min(input.size.width, display.width);
+  const height = Math.min(input.size.height, display.height);
+  const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+  return {
+    x: Math.round(clamp(bounds.x, display.x, display.x + display.width - width)),
+    y: Math.round(clamp(bounds.y, display.y, display.y + display.height - height)),
+    width,
+    height,
+  };
+}
