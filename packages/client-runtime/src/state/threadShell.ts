@@ -792,6 +792,27 @@ export function createEnvironmentThreadShellAtoms(input: {
     return next;
   }).pipe(Atom.withLabel("environment-quiet-thread-shell-list"));
 
+  // The bot window's list: the inverse of the bot filter above, still honouring the tag filter.
+  let previousBotQuietThreadShells: ReadonlyArray<EnvironmentThreadShell> = [];
+  const botQuietThreadShellsAtom = Atom.make((get) => {
+    const bots = get(botThreadKeysAtom);
+    if (bots.size === 0) {
+      previousBotQuietThreadShells = [];
+      return previousBotQuietThreadShells;
+    }
+    const hidden = get(hiddenThreadKeysAtom);
+    const next: EnvironmentThreadShell[] = [];
+    for (const ref of get(threadRefsAtom)) {
+      const key = threadKey(ref);
+      if (!bots.has(key) || hidden.has(key)) continue;
+      const shell = get(quietThreadShellAtomFamily(key));
+      if (shell !== null) next.push(shell);
+    }
+    if (arrayElementsEqual(previousBotQuietThreadShells, next)) return previousBotQuietThreadShells;
+    previousBotQuietThreadShells = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-bot-quiet-thread-shell-list"));
+
   let previousDelegatedUnderParent: ReadonlySet<string> = new Set();
   const delegatedUnderParentAtom = Atom.make((get) => {
     const environmentIds = new Set(enabledEnvironmentIds(get(input.catalogValueAtom)));
@@ -854,6 +875,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     hiddenThreadKeysAtom,
     anyEnvironmentHidingAtom,
     quietThreadShellsAtom,
+    botQuietThreadShellsAtom,
     navigationThreadShellsAtom,
     delegatedUnderParentAtom,
     pendingSubagentRequestsAtom,

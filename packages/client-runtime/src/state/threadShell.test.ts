@@ -708,6 +708,7 @@ describe("v2 thread shell lists", () => {
       threads.visibleThreadShellsAtom,
       threads.quietThreadShellsAtom,
       threads.navigationThreadShellsAtom,
+      threads.botQuietThreadShellsAtom,
     ].map((atom) => registry.mount(atom));
     try {
       const shownBefore = registry.get(threads.visibleThreadShellsAtom);
@@ -733,6 +734,11 @@ describe("v2 thread shell lists", () => {
         registry.get(threads.threadShellAtom({ environmentId, threadId: botThread.id })),
       ).not.toBeNull();
       expect(registry.get(threads.hiddenThreadKeysAtom).size).toBe(0);
+      expect(
+        registry
+          .get(threads.botQuietThreadShellsAtom)
+          .map((thread) => `${thread.environmentId}:${thread.id}`),
+      ).toEqual([`${environmentId}:${botThread.id}`]);
 
       const shown = registry.get(threads.visibleThreadShellsAtom);
       registry.set(harness.botProjectsAtom(environmentId), [otherProjectId]);
@@ -740,6 +746,7 @@ describe("v2 thread shell lists", () => {
 
       registry.set(harness.botProjectsAtom(environmentId), []);
       expect(ids(threads.navigationThreadShellsAtom)).toHaveLength(3);
+      expect(registry.get(threads.botQuietThreadShellsAtom)).toEqual([]);
     } finally {
       for (const dispose of disposers) dispose();
       registry.dispose();

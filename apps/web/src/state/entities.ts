@@ -173,7 +173,12 @@ export function useQuietThreadShell(ref: ScopedThreadRef | null): EnvironmentThr
   );
 }
 
-/** Every thread shell, held through streaming ticks; see quietThreadShellAtom. */
+/** T3_BOT threads only (the main lists leave them out), held through streaming ticks. */
+export function useBotQuietThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(environmentThreadShells.botQuietThreadShellsAtom);
+}
+
+/** Every listed thread shell, held through streaming ticks; see quietThreadShellAtom. */
 export function useQuietThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.quietThreadShellsAtom);
 }

@@ -10,14 +10,19 @@ import {
 } from "@t3tools/client-runtime/state/project-grouping";
 import { ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { useRef, useState } from "react";
 
 import { DraftId } from "../../composerDraftStore";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { m } from "../../i18n/messages";
 import { useClientSettings } from "../../hooks/useSettings";
-import { desktopWindowsBridge } from "../../multiWindow/windowContext";
-import { useAllEnvironmentProjectSnapshotsReady, useQuietThreadShells } from "../../state/entities";
+import { desktopWindowsBridge, readDesktopWindowContext } from "../../multiWindow/windowContext";
+import {
+  useAllEnvironmentProjectSnapshotsReady,
+  useBotQuietThreadShells,
+} from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
@@ -56,9 +61,11 @@ function reportWindowFailure(title: string, cause: unknown) {
 export function BotShell(props: { readonly search: BotRouteSearch }) {
   const { search } = props;
   const navigate = useNavigate();
+  const gt = useGT();
+  const messages = useMessages();
   const bots = useBots();
   const projectsReady = useAllEnvironmentProjectSnapshotsReady();
-  const shells = useQuietThreadShells();
+  const shells = useBotQuietThreadShells();
   const localLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const groupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -68,7 +75,9 @@ export function BotShell(props: { readonly search: BotRouteSearch }) {
   const [mediumListHidden, setMediumListHidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [newBotOpen, setNewBotOpen] = useState(false);
-  const [pinned, setPinned] = useState(false);
+  // Only the bot window carries bot state; elsewhere the route has no window controls.
+  const botWindowState = readDesktopWindowContext()?.bot ?? null;
+  const [pinned, setPinned] = useState(botWindowState?.pinned ?? false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const botKeys = new Set(bots.map((bot) => bot.key));
@@ -89,7 +98,10 @@ export function BotShell(props: { readonly search: BotRouteSearch }) {
     else threadsByBotKey.set(botKey, [thread]);
   }
   const activityByKey = new Map(
-    bots.map((bot) => [bot.key, resolveBotActivity(threadsByBotKey.get(bot.key) ?? EMPTY_THREADS)]),
+    bots.map((bot) => [
+      bot.key,
+      resolveBotActivity(threadsByBotKey.get(bot.key) ?? EMPTY_THREADS, messages),
+    ]),
   );
   const activeBot = bots.find((bot) => bot.key === search.bot) ?? bots[0] ?? null;
   const activeThreads = activeBot ? (threadsByBotKey.get(activeBot.key) ?? EMPTY_THREADS) : [];
@@ -129,7 +141,7 @@ export function BotShell(props: { readonly search: BotRouteSearch }) {
       scopeProjectRef(activeBot.project.environmentId, activeBot.project.id),
       { navigate: false },
     ).catch((cause: unknown) => {
-      reportWindowFailure("Could not start a conversation", cause);
+      reportWindowFailure(m(msg("Could not start a conversation")), cause);
       return null;
     });
     if (opened === null) return;
@@ -149,7 +161,7 @@ export function BotShell(props: { readonly search: BotRouteSearch }) {
     });
   };
 
-  const botWindow = desktopWindowsBridge()?.bot ?? null;
+  const botWindow = botWindowState === null ? null : (desktopWindowsBridge()?.bot ?? null);
   const windowControls: BotWindowControls | null =
     botWindow === null
       ? null
@@ -161,12 +173,15 @@ export function BotShell(props: { readonly search: BotRouteSearch }) {
             setPinned(next);
             botWindow.setPinned(next).catch((cause: unknown) => {
               setPinned(!next);
-              reportWindowFailure(next ? "Could not pin the window" : "Could not unpin", cause);
+              reportWindowFailure(
+                next ? m(msg("Could not pin the window")) : m(msg("Could not unpin the window")),
+                cause,
+              );
             });
           },
           onToggleExpanded: () => {
             botWindow.setSize(isMedium ? "narrow" : "medium").catch((cause: unknown) => {
-              reportWindowFailure("Could not resize the window", cause);
+              reportWindowFailure(m(msg("Could not resize the window")), cause);
             });
           },
         };
@@ -197,9 +212,9 @@ export function BotShell(props: { readonly search: BotRouteSearch }) {
       ? null
       : (activeThreads.find((thread) => thread.id === selectedThreadId) ?? null);
   const subtitle = narrowListShown
-    ? "Threads"
+    ? gt("Threads")
     : draftId !== null
-      ? "New conversation"
+      ? gt("New conversation")
       : (selectedThread?.title ?? "");
   const threadList = (showNav: boolean) => (
     <BotThreadList
@@ -266,15 +281,21 @@ function BotEmptyState(props: { readonly onCreate: () => void }) {
   return (
     <Empty>
       <EmptyHeader>
-        <EmptyTitle>No bots yet</EmptyTitle>
+        <EmptyTitle>
+          <T>No bots yet</T>
+        </EmptyTitle>
         <EmptyDescription>
-          A bot is a persistent assistant built on T3. It keeps its own folder for guidance and
-          memory, runs routines on a schedule, and every conversation with it is a thread you can
-          spin off, search, and come back to.
+          <T>
+            A bot is a persistent assistant built on T3. It keeps its own folder for guidance and
+            memory, runs routines on a schedule, and every conversation with it is a thread you can
+            spin off, search, and come back to.
+          </T>
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
-        <Button onClick={props.onCreate}>Create a bot</Button>
+        <Button onClick={props.onCreate}>
+          <T>Create a bot</T>
+        </Button>
       </EmptyContent>
     </Empty>
   );
