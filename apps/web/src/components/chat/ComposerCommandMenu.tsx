@@ -1,3 +1,4 @@
+import type { ComposerBotItem } from "@t3tools/client-runtime/composerThreadItems";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
@@ -29,6 +30,7 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
+import { BotMentionIcon } from "../BotContextChip";
 import { Badge } from "../ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -93,6 +95,7 @@ export type ComposerCommandItem =
       label: string;
       description: string;
     }
+  | ComposerBotItem
   | {
       id: string;
       type: "model";
@@ -249,6 +252,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           kind={props.item.machine}
           aria-hidden="true"
           className="size-4 shrink-0 text-secondary-label"
+        />
+      ) : null}
+      {props.item.type === "bot" ? (
+        <BotMentionIcon
+          environmentId={props.item.environmentId}
+          projectId={props.item.projectId}
+          className="size-4"
         />
       ) : null}
       {props.item.type === "model" ? (

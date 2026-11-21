@@ -1,5 +1,6 @@
-import { EnvironmentId, ScheduledTaskId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ScheduledTaskId, ThreadId } from "@t3tools/contracts";
 import {
+  botContextRecord,
   formatComposerContextReference,
   threadContextRecord,
 } from "@t3tools/shared/composerContextReferences";
@@ -106,7 +107,7 @@ describe("buildComposerPromptHistoryEntries", () => {
     ]);
   });
 
-  it("keeps thread and machine mentions with the records the draft needs to resolve them", () => {
+  it("keeps thread, machine and bot mentions with the records the draft needs to resolve them", () => {
     const environmentId = EnvironmentId.make("env-1");
     const thread = threadContextRecord(
       { environmentId, threadId: ThreadId.make("thread-1") },
@@ -119,18 +120,20 @@ describe("buildComposerPromptHistoryEntries", () => {
     const machine = environmentContextRecord(environmentId, "Build box");
     const threadChip = formatComposerContextReference(thread);
     const machineChip = formatComposerContextReference(machine);
+    const bot = botContextRecord({ environmentId, projectId: ProjectId.make("atlas") }, "Atlas");
+    const botChip = formatComposerContextReference(bot);
     const [entry] = buildComposerPromptHistoryEntries([
       {
         id: "m1",
         role: "user",
-        text: `Agent in ${threadChip} finished on ${machineChip}. See [Gone](t3-context://v1/thread/gone) ![shot](t3-context://v1/image/img-1)`,
-        context: { version: 1, records: [thread, unmentioned, machine] },
+        text: `${botChip} Agent in ${threadChip} finished on ${machineChip}. See [Gone](t3-context://v1/thread/gone) ![shot](t3-context://v1/image/img-1)`,
+        context: { version: 1, records: [thread, unmentioned, machine, bot] },
       },
     ]);
     expect(entry).toEqual({
       id: "m1",
-      prompt: `Agent in ${threadChip} finished on ${machineChip}. See`,
-      mentions: { threadContexts: [thread], environmentContexts: [machine] },
+      prompt: `${botChip} Agent in ${threadChip} finished on ${machineChip}. See`,
+      mentions: { threadContexts: [thread], environmentContexts: [machine], botContexts: [bot] },
     });
     const recalled = stepComposerPromptHistory({
       direction: "backward",
@@ -141,6 +144,7 @@ describe("buildComposerPromptHistoryEntries", () => {
     expect(recalled?.mentions).toEqual({
       threadContexts: [thread],
       environmentContexts: [machine],
+      botContexts: [bot],
     });
   });
 
@@ -176,7 +180,7 @@ describe("stepComposerPromptHistory", () => {
     expect(forward(newer!.position, "third")).toEqual({
       position: null,
       prompt: "",
-      mentions: { threadContexts: [], environmentContexts: [] },
+      mentions: { threadContexts: [], environmentContexts: [], botContexts: [] },
     });
   });
 

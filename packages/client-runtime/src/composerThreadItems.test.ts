@@ -1,7 +1,8 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  matchComposerBotItems,
   matchComposerEnvironmentItems,
   matchComposerThreadItems,
   type ComposerThreadCandidate,
@@ -178,5 +179,39 @@ describe("matchComposerEnvironmentItems", () => {
         query: "vps",
       }).map((item) => item.machine),
     ).toEqual(["cloud"]);
+  });
+});
+
+describe("matchComposerBotItems", () => {
+  const project = (id: string, title: string, overrides: Record<string, unknown> = {}) =>
+    ({
+      environmentId,
+      id: ProjectId.make(id),
+      title,
+      archivedAt: null,
+      ...overrides,
+    }) as unknown as Parameters<typeof matchComposerBotItems>[0]["projects"][number];
+  const projects = [
+    project("scout", "Scout"),
+    project("atlas", "Atlas"),
+    project("app", "App"),
+    project("old", "Archived bot", { archivedAt: "2026-10-01T00:00:00.000Z" }),
+    project("remote", "Atlas remote", { environmentId: EnvironmentId.make("env-other") }),
+  ];
+  const bots = { scout: { order: 1 }, atlas: { role: "Ops", order: 0 }, old: {}, remote: {} };
+
+  it("offers this environment's bots by name or role, in their order", () => {
+    const match = (query: string) =>
+      matchComposerBotItems({ projects, bots, environmentId, query }).map((item) => [
+        item.label,
+        item.description,
+      ]);
+    expect(match("bot")).toEqual([
+      ["Atlas", "Ops"],
+      ["Scout", "T3_BOT"],
+    ]);
+    expect(match("ops")).toEqual([["Atlas", "Ops"]]);
+    expect(match("app")).toEqual([]);
+    expect(match("")).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import type {
   ComposerContextId,
   ComposerContextRecord,
   EnvironmentContextRecord,
+  BotContextRecord,
   EnvironmentId,
   FileContextRecord,
   ImageContextRecord,
@@ -370,6 +371,11 @@ export function environmentContextReference(
   return { kind: "environment", contextId: record.contextId, label: record.label };
 }
 
+/** One record per bot: tagging the same bot twice reuses the chip. */
+export function botContextReference(record: BotContextRecord): ComposerContextReference {
+  return { kind: "bot", contextId: record.contextId, label: record.label };
+}
+
 export function environmentContextRecord(
   environmentId: EnvironmentId,
   label: string,
@@ -551,6 +557,7 @@ export function buildMessageContext(input: {
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   environmentContexts?: ReadonlyArray<EnvironmentContextRecord>;
+  botContexts?: ReadonlyArray<BotContextRecord>;
   replyTo?: ResponseContextRecord | null;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
 }): OrchestrationMessageContext | undefined {
@@ -564,6 +571,7 @@ export function buildMessageContext(input: {
     ...input.reviewComments.map(reviewCommentContextRecord),
     ...(input.threadContexts ?? []),
     ...(input.environmentContexts ?? []),
+    ...(input.botContexts ?? []),
     ...(input.replyTo ? [input.replyTo] : []),
     ...input.previewAnnotations.map((annotation) =>
       previewAnnotationContextRecord(annotation, {

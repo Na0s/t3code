@@ -104,7 +104,7 @@ import {
   environmentContextRecord,
   terminalContextReference,
 } from "./lib/composerContextRecords";
-import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
+import { botContextRecord, threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import {
   copiedComposerAttachmentFile,
   rememberCopiedComposerAttachments,
@@ -893,6 +893,32 @@ describe("composerDraftStore environment contexts", () => {
         environmentId: "environment-vps",
       },
     ]);
+  });
+
+  it("tags a bot once and keeps it through persistence into the sent context", () => {
+    const atlas = botContextRecord(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: ProjectId.make("project-atlas") },
+      "Atlas",
+    );
+    const store = useComposerDraftStore.getState();
+    store.addBotContexts(threadRef, [atlas]);
+    store.addBotContexts(threadRef, [{ ...atlas, label: "renamed" }]);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    const restored = merge(
+      JSON.parse(
+        JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+      ),
+      useComposerDraftStore.getInitialState(),
+    ).draftsByThreadKey[scopedThreadKey(threadRef)];
+    expect(restored?.prompt).toBe(`[Atlas](t3-context://v1/bot/${atlas.contextId}) `);
+    expect(
+      buildMessageContext({
+        terminalContexts: [],
+        reviewComments: [],
+        previewAnnotations: [],
+        botContexts: restored?.botContexts ?? [],
+      })?.records,
+    ).toEqual([atlas]);
   });
 
   it("drops the chip with the record and removes an otherwise empty draft", () => {

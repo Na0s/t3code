@@ -263,6 +263,9 @@ export async function rewindToMessage(input: {
     store.addEnvironmentContexts(draftTarget, mentions.environmentContexts, {
       appendReference: false,
     });
+    store.addBotContexts(draftTarget, mentions.botContexts, {
+      appendReference: false,
+    });
     const images: ComposerImageAttachment[] = [];
     const restoredFiles: ComposerFileAttachment[] = [];
     files.forEach((file, index) => {
@@ -340,6 +343,10 @@ export function restoreComposerDraft(
       snapshot.environmentContexts,
       (record) => record.contextId,
     ),
+  );
+  store.setBotContexts(
+    draftTarget,
+    withRestored(current?.botContexts, snapshot.botContexts, (record) => record.contextId),
   );
   return images;
 }

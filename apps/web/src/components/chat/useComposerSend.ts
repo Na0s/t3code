@@ -567,6 +567,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: draftAfterHold.reviewComments,
           threadContexts: draftAfterHold.threadContexts,
           environmentContexts: draftAfterHold.environmentContexts,
+          botContexts: draftAfterHold.botContexts,
         };
       }
     }
@@ -629,7 +630,8 @@ export function useComposerSend(input: ComposerSendInput) {
           sendCtx.previewAnnotations.length +
           sendCtx.reviewComments.length +
           sendCtx.threadContexts.length +
-          sendCtx.environmentContexts.length,
+          sendCtx.environmentContexts.length +
+          sendCtx.botContexts.length,
       });
       // An answer's text and attachments live in the question's draft, apart from this one.
       if (
@@ -641,7 +643,8 @@ export function useComposerSend(input: ComposerSendInput) {
           sendCtx.previewAnnotations.length > 0 ||
           sendCtx.reviewComments.length > 0 ||
           sendCtx.threadContexts.length > 0 ||
-          sendCtx.environmentContexts.length > 0)
+          sendCtx.environmentContexts.length > 0 ||
+          sendCtx.botContexts.length > 0)
       ) {
         toastManager.add(
           stackedThreadToast({
@@ -803,6 +806,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      botContexts: composerBotContexts,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -853,6 +857,7 @@ export function useComposerSend(input: ComposerSendInput) {
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
           environmentContexts: composerEnvironmentContexts,
+          botContexts: composerBotContexts,
           replyTo,
         },
         setThreadError,
@@ -873,7 +878,8 @@ export function useComposerSend(input: ComposerSendInput) {
         composerPreviewAnnotations.length +
         composerReviewComments.length +
         composerThreadContexts.length +
-        composerEnvironmentContexts.length,
+        composerEnvironmentContexts.length +
+        composerBotContexts.length,
     });
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
@@ -883,7 +889,8 @@ export function useComposerSend(input: ComposerSendInput) {
       composerPreviewAnnotations.length === 0 &&
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
-      composerEnvironmentContexts.length === 0
+      composerEnvironmentContexts.length === 0 &&
+      composerBotContexts.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
     if (feedbackCommand && multipleModelSelections === null) {
@@ -945,6 +952,7 @@ export function useComposerSend(input: ComposerSendInput) {
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0 &&
       composerEnvironmentContexts.length === 0 &&
+      composerBotContexts.length === 0 &&
       replyTo === null;
     if (freshSessionAvailable && composerHoldsOnlyText && isClearComposerCommand(trimmed)) {
       armFreshSession(routeThreadKey);
@@ -994,6 +1002,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       environmentContexts: composerEnvironmentContexts,
+      botContexts: composerBotContexts,
       replyTo,
     });
     const {
@@ -1004,6 +1013,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewCommentsSnapshot,
       threadContexts: composerThreadContextsSnapshot,
       environmentContexts: composerEnvironmentContextsSnapshot,
+      botContexts: composerBotContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
     const {
@@ -1046,6 +1056,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
         environmentContexts: composerEnvironmentContextsSnapshot,
+        botContexts: composerBotContextsSnapshot,
         replyTo,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,

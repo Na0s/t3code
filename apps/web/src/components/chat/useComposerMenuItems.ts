@@ -4,6 +4,7 @@ import {
   threadPullRequestKeyOf,
 } from "@t3tools/client-runtime/thread-pull-requests";
 import {
+  matchComposerBotItems,
   matchComposerEnvironmentItems,
   matchComposerThreadItems,
 } from "@t3tools/client-runtime/composerThreadItems";
@@ -34,7 +35,8 @@ import {
   getProviderSlashCommandsForSlashMenu,
 } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
-import { useVisibleThreadShells } from "~/state/entities";
+import { useProjects, useVisibleThreadShells } from "~/state/entities";
+import { serverEnvironment } from "~/state/server";
 import { useEnvironmentIdentities, useEnvironmentMachines } from "~/state/environments";
 import { offersLinkedEnvironmentsAtom } from "~/state/peerLinks";
 import {
@@ -141,6 +143,9 @@ export function useComposerMenuItems({
     ...identity,
     machine: environmentMachines.get(identity.environmentId) ?? ("server" as const),
   }));
+  // Tagged bots get the message from this environment's server.
+  const projects = useProjects();
+  const botSettings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId))?.bots;
   const workspaceEntries = useComposerPathSearch(
     {
       environmentId,
@@ -212,6 +217,15 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
+        // An answer to an agent's question goes to that agent alone.
+        ...(questionAttachmentTarget === null
+          ? matchComposerBotItems({
+              projects,
+              bots: botSettings,
+              environmentId,
+              query: composerTrigger.query,
+            })
+          : []),
         ...matchComposerThreadItems(
           {
             shells: environmentThreadShells,

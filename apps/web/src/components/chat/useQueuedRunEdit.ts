@@ -14,6 +14,7 @@ import {
   type ChatAttachment,
   type ComposerContextRecord,
   type EnvironmentContextRecord,
+  type BotContextRecord,
   type ResponseContextRecord,
   type EnvironmentId,
   type MessageId,
@@ -101,11 +102,12 @@ interface QueuedRunEditContent {
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
   readonly environmentContexts: ReadonlyArray<EnvironmentContextRecord>;
+  readonly botContexts: ReadonlyArray<BotContextRecord>;
   readonly replyTo?: ResponseContextRecord | null;
 }
 
 const isDraftOwnedRecord = (record: ComposerContextRecord) =>
-  record.kind === "thread" || record.kind === "environment";
+  record.kind === "thread" || record.kind === "environment" || record.kind === "bot";
 
 async function submitQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
@@ -165,6 +167,7 @@ async function submitQueuedRunEdit(input: {
         previewAnnotations: content.previewAnnotations,
         threadContexts: content.threadContexts,
         environmentContexts: content.environmentContexts,
+        botContexts: content.botContexts,
         replyTo: content.replyTo ?? null,
         attachments: newAttachments.map((attachment, index) => ({
           attachment,
@@ -301,6 +304,10 @@ export function useQueuedRunEdit(input: {
     store.setEnvironmentContexts(
       target,
       records.filter((record): record is EnvironmentContextRecord => record.kind === "environment"),
+    );
+    store.setBotContexts(
+      target,
+      records.filter((record): record is BotContextRecord => record.kind === "bot"),
     );
     if (reply) store.setReplyTo(target, reply);
     const threadRef = { environmentId, threadId: activeThreadId };

@@ -1,6 +1,7 @@
 import { threadPullRequestKeyOf } from "@t3tools/client-runtime/thread-pull-requests";
 import * as Dialog from "../../components/ui/Dialog";
 import type {
+  BotSettings,
   EnvironmentId,
   ProjectId,
   ServerProvider,
@@ -9,16 +10,22 @@ import type {
 } from "@t3tools/contracts";
 import {
   type ComposerEnvironmentCandidate,
+  matchComposerBotItems,
   matchComposerEnvironmentItems,
   matchComposerThreadItems,
 } from "@t3tools/client-runtime/composerThreadItems";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
 const EMPTY_ENVIRONMENTS: ReadonlyArray<ComposerEnvironmentCandidate> = [];
+const EMPTY_PROJECTS: ReadonlyArray<EnvironmentProject> = [];
 const NO_LINKED_ENVIRONMENTS: ReadonlyMap<EnvironmentId, string> = new Map();
 import { COMPOSER_CONTEXT_MAX_RECORDS } from "@t3tools/contracts";
 import {
+  botContextRecord,
   formatComposerContextReference,
   threadContextRecord,
 } from "@t3tools/shared/composerContextReferences";
@@ -254,6 +261,8 @@ export function useComposerCommandMenu({
   environmentId,
   threadShells = EMPTY_THREAD_SHELLS,
   environments = EMPTY_ENVIRONMENTS,
+  projects = EMPTY_PROJECTS,
+  bots = null,
   linkedEnvironments = NO_LINKED_ENVIRONMENTS,
   currentThreadId = null,
   projectCwd,
@@ -278,6 +287,9 @@ export function useComposerCommandMenu({
   readonly environmentId: EnvironmentId | null;
   readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
   readonly environments?: ReadonlyArray<ComposerEnvironmentCandidate>;
+  /** Projects and the `bots` setting of `environmentId`, whose T3_BOTs the picker offers. */
+  readonly projects?: ReadonlyArray<EnvironmentProject>;
+  readonly bots?: Readonly<Record<string, BotSettings | undefined>> | null;
   /** The machines `environmentId` links to, by name, whose threads the picker also offers. */
   readonly linkedEnvironments?: ReadonlyMap<EnvironmentId, string>;
   readonly currentThreadId?: ThreadId | null;
@@ -537,11 +549,15 @@ export function useComposerCommandMenu({
             messages,
           )
         : [];
+      const botItems = environmentId
+        ? matchComposerBotItems({ projects, bots, environmentId, query: trigger.query })
+        : [];
       const modelItems =
         modelOptions && modelProviders
           ? buildComposerModelItems(modelOptions, trigger.query, modelProviders)
           : [];
       return [
+        ...botItems,
         ...threadItems,
         ...environmentItems,
         ...modelItems,
@@ -564,9 +580,12 @@ export function useComposerCommandMenu({
 
   const onSelect = (item: ComposerCommandItem) => {
     if (!trigger) return;
-    if (item.type === "environment") {
+    if (item.type === "environment" || item.type === "bot") {
       if (!ownerKey || trigger.kind !== "path") return;
-      const record = environmentComposerContext(item.environmentId, item.label);
+      const record =
+        item.type === "bot"
+          ? botContextRecord(item, item.label)
+          : environmentComposerContext(item.environmentId, item.label);
       const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
       const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);
       if (!alreadyAttached && existing.length >= COMPOSER_CONTEXT_MAX_RECORDS) {

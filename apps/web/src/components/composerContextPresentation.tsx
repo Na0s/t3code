@@ -5,6 +5,7 @@ import type {
   ChatAttachment,
   ComposerContextId,
   EnvironmentContextRecord,
+  BotContextRecord,
   EnvironmentId,
   PreviewAnnotationPayload,
   ThreadContextRecord,
@@ -45,6 +46,7 @@ import type { TerminalContextDraft } from "~/lib/terminalContext";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { isQueuedFileAttachment, isQueuedImageAttachment } from "./chat/queuedMessageEdit";
 import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTerminalContexts";
+import { BotContextChip } from "./BotContextChip";
 import { EnvironmentContextChip } from "./EnvironmentContextChip";
 import { ThreadContextChip } from "./ThreadContextChip";
 import { useLinkedEnvironments } from "~/state/peerLinks";
@@ -90,7 +92,8 @@ export type ComposerDraftContextRecord =
       contextId?: ComposerContextId | undefined;
     }
   | { kind: "thread"; record: ThreadContextRecord }
-  | { kind: "environment"; record: EnvironmentContextRecord };
+  | { kind: "environment"; record: EnvironmentContextRecord }
+  | { kind: "bot"; record: BotContextRecord };
 
 export {
   ComposerContextActionsContext,
@@ -116,6 +119,7 @@ export function composerContextRecordsFromDraft(input: {
   previewAnnotations?: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
   environmentContexts?: ReadonlyArray<EnvironmentContextRecord>;
+  botContexts?: ReadonlyArray<BotContextRecord>;
   images?: ReadonlyArray<ComposerImageAttachment>;
   files?: ReadonlyArray<ComposerFileAttachment>;
   existingAttachments?:
@@ -189,6 +193,9 @@ export function composerContextRecordsFromDraft(input: {
   }
   for (const record of input.environmentContexts ?? []) {
     records.set(record.contextId, { kind: "environment", record });
+  }
+  for (const record of input.botContexts ?? []) {
+    records.set(record.contextId, { kind: "bot", record });
   }
   return records;
 }
@@ -531,6 +538,7 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
     "preview-annotation",
     "thread",
     "environment",
+    "bot",
   ],
   handlers: [
     {
@@ -623,6 +631,16 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
       render: (entry, context) =>
         entry.kind === "environment" ? (
           <EnvironmentContextChip record={entry.record} />
+        ) : (
+          <UnresolvedContextChip label={context.label} />
+        ),
+    },
+    {
+      kind: "bot",
+      canRender: (entry) => entry.kind === "bot",
+      render: (entry, context) =>
+        entry.kind === "bot" ? (
+          <BotContextChip record={entry.record} />
         ) : (
           <UnresolvedContextChip label={context.label} />
         ),

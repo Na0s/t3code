@@ -23,6 +23,7 @@ const CHIP_ACCENTS = [
         "skill",
         "thread",
         "environment",
+        "bot",
       ].map((kind) => contextChipPresentation(kind)),
       ...[
         { state: "open", isDraft: false },
