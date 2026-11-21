@@ -149,7 +149,8 @@ const make = Effect.gen(function* () {
       sourceLink: formatThreadLink({ environmentId, threadId: source.id }),
       text: composerContextPlainText(message.text, records),
     });
-    const provenance = { createdBy: "user", creationSource: "server" } as const;
+    // Sent by T3 Code for the user, as other server-sent messages are.
+    const provenance = { createdBy: "agent", creationSource: "server" } as const;
 
     const projectSettings = resolveProjectSettings(current, projectId, project.value).settings;
     const launch = launches

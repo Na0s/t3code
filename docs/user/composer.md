@@ -385,6 +385,12 @@ Type `@` and part of a model or provider name, such as `@opus`, to name that mod
 agent, for example when delegating. It does not change the thread's model. Join words with
 `:`, `/` or `-`, as in `@opus:opencode`.
 
+Type `@` and part of a T3_BOT's name or role, or `@bot` to list them all, to tag a bot on the
+same server. When you send, T3 Code posts your message to the bot's main conversation, else its
+most recent one, else a new conversation named "Main", headed "Tagged from" and a link back to
+your thread. Each bot gets one copy per message. The agent in your thread only reads that the
+bot was notified, and the sent chip shows a check.
+
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing
 the thumbnail asks first when the image is still mentioned in your text, then removes both. Files
