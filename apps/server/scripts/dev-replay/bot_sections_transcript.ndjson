@@ -1,0 +1,13 @@
+{"type": "transcript_start", "provider": "acpRegistry", "protocol": "acp.ndjson-jsonrpc", "version": "1", "scenario": "dev_replay_bot_sections", "metadata": {"generatedBy": "hand-written for the dev replay agent"}}
+{"type": "expect_outbound", "frame": {"kind": "request", "method": "session/prompt", "params": "<any>"}}
+{"type": "emit_inbound", "frame": {"kind": "notification", "method": "session/update", "params": {"sessionId": "dev-replay-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Launched a worker in Ryder App and linked it here. Watching it."}}}}}
+{"type": "emit_inbound", "frame": {"kind": "response", "method": "session/prompt", "result": {"stopReason": "end_turn"}}}
+{"type": "expect_outbound", "frame": {"kind": "request", "method": "session/prompt", "params": "<any>"}}
+{"type": "emit_inbound", "frame": {"kind": "notification", "method": "session/update", "params": {"sessionId": "dev-replay-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "<!-- t3bot:section kind=\"status-check\" -->\n**Ryder App › Fix Vivaldi embed origin:** running, 3 of 4 functions verified.\n\n**PR #214:** checks failed on lint; I sent the fix back to its thread.\n\nAnything you want me to change?"}}}}}
+{"type": "emit_inbound", "frame": {"kind": "response", "method": "session/prompt", "result": {"stopReason": "end_turn"}}}
+{"type": "expect_outbound", "frame": {"kind": "request", "method": "session/prompt", "params": "<any>"}}
+{"type": "emit_inbound", "frame": {"kind": "notification", "method": "session/update", "params": {"sessionId": "dev-replay-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done. I will merge #214 when checks are green and ping your phone.\n\n<!-- t3bot:section-end -->"}}}}}
+{"type": "emit_inbound", "frame": {"kind": "response", "method": "session/prompt", "result": {"stopReason": "end_turn"}}}
+{"type": "expect_outbound", "frame": {"kind": "request", "method": "session/prompt", "params": "<any>"}}
+{"type": "emit_inbound", "frame": {"kind": "notification", "method": "session/update", "params": {"sessionId": "dev-replay-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Noted. Nothing else is waiting on you."}}}}}
+{"type": "emit_inbound", "frame": {"kind": "response", "method": "session/prompt", "result": {"stopReason": "end_turn"}}}
