@@ -24,7 +24,7 @@ export function createEnvironmentProjectAtoms(input: {
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
   readonly serverConfigValueAtom?: (
     environmentId: EnvironmentId,
-  ) => Atom.Atom<Pick<ServerConfig, "scratchWorkspaceRoot"> | null>;
+  ) => Atom.Atom<Pick<ServerConfig, "scratchWorkspaceRoot" | "settings"> | null>;
 }) {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
@@ -62,28 +62,28 @@ export function createEnvironmentProjectAtoms(input: {
     const ref = parseProjectKey(key);
     let previousSource: OrchestrationProjectShell | null = null;
     let previousIsScratch = false;
+    let previousIsBot = false;
     let previousValue: EnvironmentProject | null = null;
     return Atom.make((get) => {
       const source = get(environmentProjectIndexAtom(ref.environmentId)).get(ref.projectId) ?? null;
-      const scratch =
-        source !== null &&
-        isScratchProject(
-          source,
-          input.serverConfigValueAtom
-            ? get(input.serverConfigValueAtom(ref.environmentId))?.scratchWorkspaceRoot
-            : null,
-        );
-      if (source === previousSource && scratch === previousIsScratch) {
+      const config = input.serverConfigValueAtom
+        ? get(input.serverConfigValueAtom(ref.environmentId))
+        : null;
+      const scratch = source !== null && isScratchProject(source, config?.scratchWorkspaceRoot);
+      const bot = source !== null && Object.hasOwn(config?.settings.bots ?? {}, source.id);
+      if (source === previousSource && scratch === previousIsScratch && bot === previousIsBot) {
         return previousValue;
       }
       previousSource = source;
       previousIsScratch = scratch;
+      previousIsBot = bot;
       previousValue =
         source === null
           ? null
           : {
               ...scopeProject(ref.environmentId, source),
               ...(scratch ? { isScratch: true as const } : {}),
+              ...(bot ? { isBot: true as const } : {}),
             };
       return previousValue;
     }).pipe(Atom.withLabel(`environment-project:${key}`));
