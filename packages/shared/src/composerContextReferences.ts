@@ -1,4 +1,5 @@
 import {
+  type BotContextRecord,
   COMPOSER_CONTEXT_LABEL_MAX_CHARS,
   type ComposerContextId,
   type ComposerContextKind,
@@ -6,12 +7,13 @@ import {
   type ElementContextDetails,
   type EnvironmentId,
   type KnownComposerContextRecord,
+  type ProjectId,
   type ScopedThreadRef,
   type ThreadContextRecord,
 } from "@t3tools/contracts";
 
 import { expandAssistantCitationsForProvider } from "./assistantCitations.ts";
-import { replaceThreadLinks, threadLinkCandidates } from "./threadLinks.ts";
+import { formatThreadLink, replaceThreadLinks, threadLinkCandidates } from "./threadLinks.ts";
 
 const CONTEXT_PROTOCOL = "t3-context:";
 const COMPOSER_CONTEXT_HREF_PREFIX = `${CONTEXT_PROTOCOL}//v1/`;
@@ -94,6 +96,62 @@ export function threadContextRecord(ref: ScopedThreadRef, title: string): Thread
     threadId: ref.threadId,
     title: label,
   };
+}
+
+/** One record per bot, so tagging the same bot twice reuses its chip. */
+export function botContextRecord(
+  ref: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+  name: string,
+): BotContextRecord {
+  return {
+    version: 1,
+    kind: "bot",
+    contextId: toKindScopedComposerContextId("bot", `${ref.environmentId}:${ref.projectId}`),
+    label: sanitizeComposerContextLabel(name, "bot"),
+    environmentId: ref.environmentId,
+    projectId: ref.projectId,
+  };
+}
+
+const isBotRecord = (record: ComposerContextRecord | undefined): record is BotContextRecord =>
+  record?.kind === "bot" && "projectId" in record;
+
+/** The bots a message tags: records its text still references, one per bot. */
+export function referencedBotMentions(
+  text: string,
+  records: ReadonlyArray<ComposerContextRecord>,
+): BotContextRecord[] {
+  const referenced = new Set(
+    collectComposerContextReferences(text).map((occurrence) => occurrence.contextId),
+  );
+  const bots = new Map<string, BotContextRecord>();
+  for (const record of records) {
+    if (!isBotRecord(record) || !referenced.has(record.contextId)) continue;
+    bots.set(`${record.environmentId}\u0000${record.projectId}`, record);
+  }
+  return [...bots.values()];
+}
+
+/**
+ * A message as plain Markdown for a reader without its records, such as a tagged bot: bots read
+ * as `@Name`, threads as thread links, and other chips as their labels.
+ */
+export function composerContextPlainText(
+  text: string,
+  records: ReadonlyArray<ComposerContextRecord>,
+): string {
+  const byId = new Map(records.map((record) => [record.contextId, record] as const));
+  return replaceComposerContextReferences(text, (occurrence) => {
+    const record = byId.get(occurrence.contextId);
+    if (isBotRecord(record)) return `@${record.label}`;
+    if (record?.kind === "thread" && "threadId" in record) {
+      return formatThreadLink(
+        { environmentId: record.environmentId, threadId: record.threadId },
+        record.title,
+      );
+    }
+    return occurrence.label;
+  });
 }
 
 /**
@@ -368,6 +426,8 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
       );
       return lines.join("\n");
     }
+    case "bot":
+      return `T3_BOT ${record.label} was notified of this message.`;
     case "environment":
       return [
         `label: ${record.label}`,
@@ -401,19 +461,27 @@ export function projectComposerContextForProvider(input: {
   for (const record of input.records) {
     recordsById.set(record.contextId, recordsById.has(record.contextId) ? undefined : record);
   }
+  // The server delivers a tagged bot its copy, so the agent only reads that it was told.
+  const botLabel = (occurrence: ComposerContextReferenceOccurrence) => {
+    const record = recordsById.get(occurrence.contextId);
+    return isBotRecord(record) ? record.label : undefined;
+  };
   const body = expandAssistantCitationsForProvider(
-    replaceComposerContextReferences(input.text, (occurrence) =>
-      formatComposerContextProviderMarker(
-        recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
-        occurrence.label,
-        occurrence.contextId,
-      ),
-    ),
+    replaceComposerContextReferences(input.text, (occurrence) => {
+      const bot = botLabel(occurrence);
+      return bot !== undefined
+        ? `@${bot} (T3_BOT, notified)`
+        : formatComposerContextProviderMarker(
+            recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
+            occurrence.label,
+            occurrence.contextId,
+          );
+    }),
   );
   const seen = new Set<ComposerContextId>();
   const entries: string[] = [];
   for (const occurrence of occurrences) {
-    if (seen.has(occurrence.contextId)) continue;
+    if (seen.has(occurrence.contextId) || botLabel(occurrence) !== undefined) continue;
     seen.add(occurrence.contextId);
     const record = recordsById.get(occurrence.contextId);
     const entry = formatEnvelopeEntry(

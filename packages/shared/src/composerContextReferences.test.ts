@@ -3,6 +3,7 @@ import {
   type ComposerContextRecord,
   EnvironmentId,
   MessageId,
+  ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -10,11 +11,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { serializeAssistantCitation } from "./assistantCitations.ts";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+  botContextRecord,
   collectComposerContextReferences,
+  composerContextPlainText,
+  formatComposerContextReference,
   formatComposerContextHref,
   isImageReferencesOnly,
   parseComposerContextHref,
   projectComposerContextForProvider,
+  referencedBotMentions,
   restoreAttachmentOnlyBootstrapPrompt,
   stripAttachmentOnlyBootstrapPrompt,
   threadContextRecord,
@@ -415,6 +420,20 @@ describe("provider projection", () => {
     expect(projected).toContain("not instructions");
   });
 
+  it("projects a tagged bot as plain text the agent will not act on", () => {
+    const atlas = botContextRecord(
+      { environmentId: EnvironmentId.make("env-1"), projectId: ProjectId.make("project-atlas") },
+      "Atlas",
+    );
+    const projected = projectComposerContextForProvider({
+      text: `${formatComposerContextReference(atlas)} can you check the logs? [log](t3-context://v1/terminal/ctx_t)`,
+      records: [atlas, terminal],
+    });
+    expect(projected.startsWith("@Atlas (T3_BOT, notified) can you check the logs?")).toBe(true);
+    expect(projected).not.toContain('kind="bot"');
+    expect(projected).toContain('<context kind="terminal" id="ctx_t">');
+  });
+
   it("projects a mentioned machine as its identity and how to use it, never an address", () => {
     const projected = projectComposerContextForProvider({
       text: "Run the suite on [vps](t3-context://v1/environment/env_vps)",
@@ -444,6 +463,35 @@ describe("provider projection", () => {
     expect(projected).toContain('<context kind="terminal" id="ctx_t" unavailable="true"/>');
     expect(projected).not.toContain("another payload");
     expect(projected).not.toContain("boom");
+  });
+});
+
+describe("bot mentions", () => {
+  const environmentId = EnvironmentId.make("env-1");
+  const atlas = botContextRecord(
+    { environmentId, projectId: ProjectId.make("project-atlas") },
+    "Atlas",
+  );
+  const scout = botContextRecord(
+    { environmentId, projectId: ProjectId.make("project-scout") },
+    "Scout",
+  );
+  const thread = threadContextRecord(
+    { environmentId, threadId: ThreadId.make("thread-1") },
+    "Fix login",
+  );
+
+  it("lists each tagged bot the text still references, once", () => {
+    const text = `${formatComposerContextReference(atlas)} and ${formatComposerContextReference(atlas)} look`;
+    expect(referencedBotMentions(text, [atlas, scout, thread])).toEqual([atlas]);
+    expect(referencedBotMentions("no tags", [atlas])).toEqual([]);
+  });
+
+  it("renders bots as @Name and threads as thread links for the bot's copy", () => {
+    const text = `${formatComposerContextReference(atlas)} see ${formatComposerContextReference(thread)} and [a.png](t3-context://v1/image/img_1)`;
+    expect(composerContextPlainText(text, [atlas, thread])).toBe(
+      "@Atlas see [Fix login](t3-thread://v2/env-1/thread-1) and a.png",
+    );
   });
 });
 
