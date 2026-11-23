@@ -39,8 +39,20 @@ const maxStdoutLineBytes = 16 * 1024 * 1024;
 const authPrefixBytes = new TextEncoder().encode(ANTIGRAVITY_AUTH_STDOUT_PREFIX);
 const decodeUrl = Schema.decodeUnknownEffect(Schema.URLFromString);
 const decodeBrowserHelperUrl = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.String));
+const AntigravityPermissions = Schema.Struct({
+  allow: Schema.optional(Schema.Array(Schema.String)),
+  ask: Schema.optional(Schema.Array(Schema.String)),
+  deny: Schema.optional(Schema.Array(Schema.String)),
+});
+const UserPermissionSettings = Schema.Struct({
+  permissions: Schema.optional(AntigravityPermissions),
+});
+const decodeUserPermissionSettings = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(UserPermissionSettings),
+);
 const ProfileSettingsFile = Schema.Struct({
   auth: Schema.Struct({ type: Schema.String }),
+  permissions: Schema.optional(AntigravityPermissions),
   gcp: Schema.optional(
     Schema.Struct({
       project: Schema.optional(Schema.String),
@@ -143,13 +155,17 @@ export function antigravityAuthConfigIssue(auth: AntigravityAuthConfig): string 
  * `auth.type` names the selected method so a native logout clears only that method's credentials
  * instead of every stored token. Never holds a credential.
  */
-function antigravityProfileSettings(auth: AntigravityAuthConfig): string {
+function antigravityProfileSettings(
+  auth: AntigravityAuthConfig,
+  permissions?: typeof AntigravityPermissions.Type,
+): string {
   const gcp = {
     ...(auth.gcpProject ? { project: auth.gcpProject } : {}),
     ...(auth.gcpLocation ? { location: auth.gcpLocation } : {}),
   };
   return `${encodeProfileSettings({
     auth: { type: auth.authMethod },
+    ...(permissions === undefined ? {} : { permissions }),
     ...(Object.keys(gcp).length > 0 ? { gcp } : {}),
   })}\n`;
 }
@@ -257,9 +273,15 @@ const antigravityUserConfigFiles = [
   ["AGENTS.md"],
   ["GEMINI.md"],
   ["config", "skills.json"],
+  ["config", "mcp_config.json"],
 ] as const;
 
-/** Private GEMINI_HOME isolates credentials/hooks/MCP; link global skills and rules from the real ~/.gemini. */
+async function isEmptyMcpPlaceholder(file: string): Promise<boolean> {
+  const info = await NodeFSP.lstat(file);
+  return info.isFile() && info.size === 0;
+}
+
+/** Keep credentials and hooks private; share the user's skills, rules and MCP registrations. */
 const linkAntigravityUserConfig = Effect.fn("linkAntigravityUserConfig")(function* (input: {
   readonly profileDirectory: string;
   readonly userHome: string;
@@ -303,7 +325,17 @@ const linkAntigravityUserConfig = Effect.fn("linkAntigravityUserConfig")(functio
         // rmdir refuses a non-empty folder, so content added meanwhile is never deleted.
         Effect.catch((error) =>
           Effect.tryPromise({
-            try: () => NodeFSP.rmdir(link),
+            try: async () => {
+              // agy creates an empty MCP file even when no servers are registered.
+              if (
+                link === path.join(input.profileDirectory, "config", "mcp_config.json") &&
+                (await isEmptyMcpPlaceholder(link))
+              ) {
+                await NodeFSP.unlink(link);
+                return;
+              }
+              await NodeFSP.rmdir(link);
+            },
             catch: (cause) => new AntigravitySkillLinkError({ link, cause }),
           }).pipe(
             Effect.as(undefined),
@@ -357,7 +389,14 @@ const copyAntigravityUserConfigFiles = Effect.fn("copyAntigravityUserConfigFiles
       const target = path.join(input.userHome, ".gemini", ...segments);
       yield* Effect.gen(function* () {
         const current = yield* readOptional(link);
-        if (current !== undefined && current !== copies[key]) {
+        const emptyMcpPlaceholder =
+          key === "config/mcp_config.json" &&
+          current === "" &&
+          (yield* Effect.tryPromise({
+            try: () => isEmptyMcpPlaceholder(link),
+            catch: (cause) => new AntigravitySkillLinkError({ link, cause }),
+          }));
+        if (current !== undefined && current !== copies[key] && !emptyMcpPlaceholder) {
           delete copies[key];
           return;
         }
@@ -529,8 +568,26 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
         );
     }
   }
+  // CLI permissions are authoritative on every launch, including removals. Never import
+  // authentication, hooks or a permission-bypass preset from the user's CLI settings.
+  const userSettings = yield* fs
+    .readFileString(path.join(userHome, ".gemini", "antigravity-cli", "settings.json"))
+    .pipe(
+      Effect.flatMap(decodeUserPermissionSettings),
+      Effect.catchReason("PlatformError", "NotFound", () =>
+        Effect.succeed({ permissions: undefined }),
+      ),
+      Effect.mapError(() =>
+        authSupportError(
+          "Cannot load Antigravity CLI permission rules. Fix the CLI settings.json and retry.",
+        ),
+      ),
+    );
   yield* fs
-    .writeFileString(path.join(acpDirectory, "settings.json"), antigravityProfileSettings(auth))
+    .writeFileString(
+      path.join(acpDirectory, "settings.json"),
+      antigravityProfileSettings(auth, userSettings.permissions),
+    )
     .pipe(
       Effect.mapError(() =>
         authSupportError("The Antigravity profile settings could not be written."),
