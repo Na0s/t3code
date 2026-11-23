@@ -1,6 +1,12 @@
-import type { DesktopWindowsState } from "@t3tools/contracts";
+import type {
+  DesktopOpenWindow,
+  DesktopWindowContext,
+  DesktopWindowProfile,
+  DesktopWindowsState,
+} from "@t3tools/contracts";
+import { useSyncExternalStore } from "react";
 
-import { desktopWindowsBridge } from "./windowContext";
+import { desktopWindowsBridge, readDesktopWindowContext } from "./windowContext";
 
 let state: DesktopWindowsState | null = null;
 let started = false;
@@ -43,4 +49,57 @@ export function subscribeDesktopWindowsState(listener: () => void): () => void {
   return () => {
     listeners.delete(listener);
   };
+}
+
+/** Null outside a desktop shell with multi-window support, and until the first state arrives. */
+export function useDesktopWindowsState(): DesktopWindowsState | null {
+  return useSyncExternalStore(subscribeDesktopWindowsState, readDesktopWindowsState, () => null);
+}
+
+export function selectCurrentWindow(
+  windowsState: DesktopWindowsState | null,
+  context: DesktopWindowContext | null,
+): DesktopOpenWindow | null {
+  if (windowsState === null || context === null) return null;
+  return windowsState.windows.find((window) => window.windowId === context.windowId) ?? null;
+}
+
+/** The window's live profile: saving or deleting it changes the profile after open. */
+export function selectCurrentWindowProfile(
+  windowsState: DesktopWindowsState | null,
+  context: DesktopWindowContext | null,
+): DesktopWindowProfile | null {
+  if (windowsState === null || context === null) return null;
+  const window = selectCurrentWindow(windowsState, context);
+  const profileId = window === null ? context.profileId : window.profileId;
+  if (profileId === null) return null;
+  return windowsState.profiles.find((profile) => profile.id === profileId) ?? null;
+}
+
+/**
+ * The theme preference id this window uses instead of the shared one, or null to follow it.
+ * Before the first state arrives, the preload's open-time theme avoids a flash.
+ */
+export function resolveWindowThemeOverride(
+  windowsState: DesktopWindowsState | null,
+  context: DesktopWindowContext | null,
+): string | null {
+  if (context === null || context.isMain) return null;
+  if (windowsState === null) return context.theme;
+  return selectCurrentWindowProfile(windowsState, context)?.theme ?? null;
+}
+
+export function isMiniMainWindow(
+  windowsState: DesktopWindowsState | null,
+  context: DesktopWindowContext | null,
+): boolean {
+  return context?.isMain === true && windowsState?.miniMode === true;
+}
+
+const readIsMiniMainWindow = () =>
+  isMiniMainWindow(readDesktopWindowsState(), readDesktopWindowContext());
+
+/** Re-renders only when mini mode flips, not for every focus change in the windows state. */
+export function useIsMiniMainWindow(): boolean {
+  return useSyncExternalStore(subscribeDesktopWindowsState, readIsMiniMainWindow, () => false);
 }

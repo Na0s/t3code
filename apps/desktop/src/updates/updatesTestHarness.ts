@@ -217,7 +217,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
           get: Effect.sync(() => testSettings),
           load: Effect.sync(() => testSettings),
-          setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
+          setWindowProfilePlacement: () => Effect.die("unexpected window bounds update"),
+          updateWindowProfiles: () => Effect.die("unexpected window profile update"),
           setServerExposureMode: () => Effect.die("unexpected server exposure update"),
           setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
           setUpdateChannel: (channel) =>
@@ -239,6 +240,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
           setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
           setWslDistro: () => Effect.die("unexpected WSL distro change"),
           setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
+          setMultiWindowEnabled: () => Effect.die("unexpected multi-window toggle"),
           setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
           applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
           applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),

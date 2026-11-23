@@ -46,6 +46,7 @@ import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as Electron from "electron";
 import { msg } from "gt-i18n";
 import * as MacPermissions from "../../permissions/MacPermissions.ts";
+import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import { m } from "../../i18n/messages.ts";
 import * as IpcChannels from "../channels.ts";
@@ -330,6 +331,13 @@ export const setTheme = DesktopIpc.makeIpcMethod({
   payload: DesktopThemeSchema,
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.window.setTheme")(function* (theme) {
+    const sender = yield* DesktopIpc.DesktopIpcSender;
+    // A secondary window can use another profile's theme, so it only restyles its own frame.
+    if (!sender.isMain) {
+      const desktopWindow = yield* DesktopWindow.DesktopWindow;
+      yield* desktopWindow.setWindowAppearance(sender.window, theme);
+      return;
+    }
     const electronTheme = yield* ElectronTheme.ElectronTheme;
     yield* electronTheme.setSource(theme);
   }),

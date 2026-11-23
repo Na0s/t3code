@@ -1,3 +1,55 @@
+type DesktopWindowCloseAction =
+  /** Let the window close. */
+  | "close"
+  /** Keep the main window's renderer running for the secondary windows it serves. */
+  | "hide"
+  /** Ask the renderer whether to save the unsaved window first. */
+  | "prompt"
+  /** A prompt is already open; the renderer's answer decides. */
+  | "keep-open";
+
+export interface DesktopWindowCloseInput {
+  readonly isMain: boolean;
+  readonly quitting: boolean;
+  readonly saved: boolean;
+  readonly secondaryWindowCount: number;
+  /** A save or discard decision already approved this close. */
+  readonly closeApproved: boolean;
+  /** Loaded, not crashed, responsive, and listening for close requests. */
+  readonly rendererCanPrompt: boolean;
+  readonly promptPending: boolean;
+}
+
+export function resolveWindowCloseAction(input: DesktopWindowCloseInput): DesktopWindowCloseAction {
+  if (input.quitting || input.closeApproved) return "close";
+  if (input.isMain) return input.secondaryWindowCount > 0 ? "hide" : "close";
+  if (input.saved || !input.rendererCanPrompt) return "close";
+  return input.promptPending ? "keep-open" : "prompt";
+}
+
+const UNSAVED_WINDOW_NAME_PREFIX = "Window ";
+
+/** The main window is the first window, so unsaved secondary windows count from 2. */
+export function nextUnsavedWindowName(usedNames: Iterable<string>): string {
+  const used = new Set(usedNames);
+  for (let index = 2; ; index++) {
+    const name = `${UNSAVED_WINDOW_NAME_PREFIX}${index}`;
+    if (!used.has(name)) return name;
+  }
+}
+
+export function composeWindowTitle(input: {
+  readonly rendererTitle: string;
+  readonly fallbackTitle: string;
+  readonly isMain: boolean;
+  readonly windowName: string;
+  readonly secondaryWindowCount: number;
+}): string {
+  const base = input.rendererTitle.trim() === "" ? input.fallbackTitle : input.rendererTitle;
+  const showName = !input.isMain || input.secondaryWindowCount > 0;
+  return showName ? `${base} - ${input.windowName}` : base;
+}
+
 interface Rectangle {
   readonly x: number;
   readonly y: number;

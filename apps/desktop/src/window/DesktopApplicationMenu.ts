@@ -4,7 +4,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type { DesktopUpdateChannel } from "@t3tools/contracts";
+import {
+  DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
+  type DesktopUpdateChannel,
+  type DesktopWindowsState,
+} from "@t3tools/contracts";
 import * as Electron from "electron";
 import { msg } from "gt-i18n";
 
@@ -73,6 +77,15 @@ const trackLabel = (channel: DesktopUpdateChannel) =>
   channel === "nightly"
     ? m(msg("Nightly", { $context: "release track" }))
     : m(msg("Stable", { $context: "release track" }));
+
+// Only what the Window menu shows; focus and title changes do not rebuild the menu.
+const windowMenuKey = (state: DesktopWindowsState) =>
+  JSON.stringify({
+    profiles: state.profiles.map((profile) => [profile.id, profile.name]),
+    open: state.windows.flatMap((window) => (window.profileId === null ? [] : [window.profileId])),
+    miniMode: state.miniMode,
+    multiWindowEnabled: state.multiWindowEnabled,
+  });
 
 const checkForUpdatesFromMenu = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
@@ -187,9 +200,11 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const electronApp = yield* ElectronApp.ElectronApp;
   const clientSettings = yield* Effect.serviceOption(DesktopClientSettings.DesktopClientSettings);
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const context = yield* Effect.context<DesktopApplicationMenuRuntimeServices>();
   const runPromise = Effect.runPromiseWith(context);
   const runFork = Effect.runForkWith(context);
+  let configuredWindowMenuKey: string | null = null;
 
   const runMenuEffect = <E>(
     action: string,
@@ -207,7 +222,24 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const configure = Effect.gen(function* () {
+  const configure: Effect.Effect<void> = Effect.gen(function* () {
+    const windowsState = yield* desktopWindow.windowsState;
+    configuredWindowMenuKey = windowMenuKey(windowsState);
+    // Electron flips a clicked checkbox itself; rebuilding restores the real open state.
+    const windowMenuClick =
+      (action: string, effect: Effect.Effect<void, unknown, DesktopWindow.DesktopWindow>) => () => {
+        runMenuEffect(action, effect.pipe(Effect.ensuring(configure)));
+      };
+    const openProfileClick = (profileId: string) =>
+      windowMenuClick(
+        "open-window-profile",
+        Effect.flatMap(DesktopWindow.DesktopWindow, (windows) => windows.openProfile(profileId)),
+      );
+    const openWindowProfileIds = new Set(
+      windowsState.windows.flatMap((window) =>
+        window.profileId === null ? [] : [window.profileId],
+      ),
+    );
     const checkForUpdatesClick = () => {
       runMenuEffect("check-for-updates", handleCheckForUpdatesMenuClick);
     };
@@ -396,12 +428,41 @@ export const make = Effect.gen(function* () {
         role: "windowMenu",
         label: m(msg("Window", { $context: "menu bar title" })),
         submenu: [
+          ...(windowsState.multiWindowEnabled
+            ? ([
+                {
+                  label: m(msg("New Window", { $context: "Window menu item" })),
+                  // The renderer's window.new keybinding owns the chord and adds its project filter.
+                  accelerator: "CmdOrCtrl+Alt+Shift+N",
+                  registerAccelerator: false,
+                  click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
+                },
+                { type: "separator" },
+                {
+                  label: m(msg("Main Window", { $context: "Window menu item" })),
+                  click: openProfileClick(DEFAULT_DESKTOP_WINDOW_PROFILE_ID),
+                },
+                ...windowsState.profiles
+                  .filter((profile) => !profile.isDefault)
+                  .map((profile): Electron.MenuItemConstructorOptions => ({
+                    label: profile.name,
+                    type: "checkbox",
+                    checked: openWindowProfileIds.has(profile.id),
+                    click: openProfileClick(profile.id),
+                  })),
+                { type: "separator" },
+              ] satisfies Electron.MenuItemConstructorOptions[])
+            : []),
           {
-            label: m(msg("New Window", { $context: "Window menu item" })),
-            // The renderer's window.new keybinding owns the chord.
-            accelerator: "CmdOrCtrl+Alt+Shift+N",
-            registerAccelerator: false,
-            click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
+            label: m(msg("Mini Mode", { $context: "Window menu item" })),
+            type: "checkbox",
+            checked: windowsState.miniMode,
+            click: windowMenuClick(
+              "mini-mode",
+              Effect.flatMap(DesktopWindow.DesktopWindow, (windows) =>
+                windows.setMiniMode(!windowsState.miniMode),
+              ),
+            ),
           },
           { type: "separator" },
           { role: "minimize", label: m(msg("Minimize", { $context: "Window menu item" })) },
@@ -444,6 +505,12 @@ export const make = Effect.gen(function* () {
   });
 
   let rebuildsOnLocaleChange = false;
+  yield* desktopWindow.subscribeWindowsState((state) => {
+    if (configuredWindowMenuKey === null || windowMenuKey(state) === configuredWindowMenuKey)
+      return;
+    void runPromise(configure);
+  });
+
   return DesktopApplicationMenu.of({
     configure: applySavedLanguage.pipe(
       Effect.andThen(configure),

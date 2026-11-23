@@ -934,6 +934,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["ask before delete stop process shell console history"],
   },
   {
+    id: "windows",
+    title: "Windows",
+    to: "/settings/general",
+    searchTerms: ["multiple windows saved window profile theme mini mode new window"],
+    desktopOnly: true,
+  },
+  {
     id: "quit-confirmation",
     title: msg("Quit shortcut"),
     to: "/settings/general",
