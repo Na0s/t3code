@@ -3,6 +3,7 @@ import {
   repositoryGroupingDisplayNameOf,
   repositoryGroupingKeyOf,
   type EnvironmentId,
+  type ProjectTrackedFolder,
   type ScopedProjectRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
@@ -280,6 +281,53 @@ export function deriveProjectGroupLabel(input: {
   return input.representative.title;
 }
 
+type CoveredFolderCandidate = Pick<
+  EnvironmentProject,
+  "environmentId" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+>;
+
+/**
+ * How `project` is a folder that a project on `environmentId` covers: the same folder on that
+ * environment, or the same repository on any environment.
+ */
+function coveredFolderMatch(
+  folder: Pick<ProjectTrackedFolder, "path" | "repositoryIdentity">,
+  environmentId: EnvironmentId,
+  project: CoveredFolderCandidate,
+): "folder" | "repository" | null {
+  if (project.isScratch) return null;
+  if (
+    project.environmentId === environmentId &&
+    normalizeProjectPathForComparison(project.workspaceRoot) ===
+      normalizeProjectPathForComparison(folder.path)
+  ) {
+    return "folder";
+  }
+  return folder.repositoryIdentity &&
+    project.repositoryIdentity &&
+    repositoryGroupingKeyOf(folder.repositoryIdentity) ===
+      repositoryGroupingKeyOf(project.repositoryIdentity)
+    ? "repository"
+    : null;
+}
+
+/** The project of a folder a project on `environmentId` covers, preferring the one in that folder. */
+export function findCoveredFolderProject<TProject extends CoveredFolderCandidate>(
+  folder: Pick<ProjectTrackedFolder, "path" | "repositoryIdentity">,
+  environmentId: EnvironmentId,
+  projects: ReadonlyArray<TProject>,
+): TProject | undefined {
+  return (
+    projects.find((project) => coveredFolderMatch(folder, environmentId, project) === "folder") ??
+    projects.find((project) => coveredFolderMatch(folder, environmentId, project) === "repository")
+  );
+}
+
+/** A project covering other folders: the repositories inside it, or ones someone added. */
+export function isCoveringProject(project: Pick<EnvironmentProject, "trackedFolders">): boolean {
+  return (project.trackedFolders?.length ?? 0) > 0;
+}
+
 export interface ProjectGroupMember<TProject extends EnvironmentProject = EnvironmentProject> {
   readonly physicalProjectKey: string;
   readonly project: TProject;
@@ -290,10 +338,19 @@ export interface ProjectGroup<TProject extends EnvironmentProject = EnvironmentP
   readonly label: string;
   readonly representative: TProject;
   readonly members: ReadonlyArray<ProjectGroupMember<TProject>>;
+  /** Includes the projects of `folded` groups, whose threads show with this group's. */
   readonly memberProjectRefs: ReadonlyArray<ScopedProjectRef>;
+  /** Groups folded in because a project here covers their folder, with that folder's name. */
+  readonly folded: ReadonlyArray<FoldedProjectGroup<TProject>>;
   /** Clients write every member together. When members still disagree, the project stays visible. */
   readonly pinned: boolean;
   readonly archived: boolean;
+}
+
+export interface FoldedProjectGroup<
+  TProject extends EnvironmentProject = EnvironmentProject,
+> extends ProjectGroup<TProject> {
+  readonly folderName: string;
 }
 
 /** The groups a project picker offers: archived groups left out, pinned ones first. */
@@ -354,6 +411,8 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(
     readonly settings: ProjectGroupingSettings;
     readonly preferredEnvironmentId?: EnvironmentId | null;
     readonly groupScratchProjects?: boolean;
+    /** Fold each group whose folder another group's project covers into that group. */
+    readonly foldCoveredProjects?: boolean;
   },
   resolve: MFunctionType = mFallback,
 ): ReadonlyArray<ProjectGroup<TProject>> {
@@ -411,7 +470,7 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(
   }
 
   const preferredEnvironmentId = input.preferredEnvironmentId ?? null;
-  return Array.from(groupedMembers, ([key, members]) => {
+  const groups = Array.from(groupedMembers, ([key, members]): ProjectGroup<TProject> => {
     const projects = members.map((member) => member.project);
     const representative =
       (preferredEnvironmentId
@@ -434,9 +493,79 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(
       representative,
       members,
       memberProjectRefs: projectRefsByLogicalKey.get(key) ?? [],
+      folded: [],
       pinned: members.some((member) => member.project.pinnedAt != null),
       archived: !members.some(({ project }) => isPickableProjectMember(project)),
     };
+  });
+  return input.foldCoveredProjects ? foldCoveredProjectGroups(groups, input.settings) : groups;
+}
+
+/**
+ * Moves each group whose project is a folder another open group's project covers into that
+ * group, matching by folder before repository. A covered folder's project may cover folders
+ * itself, so a fold follows the chain to its end; groups covering each other stay apart.
+ */
+function foldCoveredProjectGroups<TProject extends EnvironmentProject>(
+  groups: ReadonlyArray<ProjectGroup<TProject>>,
+  settings: ProjectGroupingSettings,
+): ReadonlyArray<ProjectGroup<TProject>> {
+  const covered = groups.flatMap((group) =>
+    group.archived
+      ? []
+      : group.members.flatMap(({ project }) =>
+          (project.trackedFolders ?? []).map((folder) => ({ group, project, folder })),
+        ),
+  );
+  if (covered.length === 0) return groups;
+  const coveredBy = new Map<ProjectGroup<TProject>, (typeof covered)[number]>();
+  for (const group of groups) {
+    if (resolveProjectGroupingMode(group.representative, settings) === "separate") continue;
+    const find = (match: "folder" | "repository") =>
+      covered.find(
+        (entry) =>
+          entry.group !== group &&
+          group.members.some(
+            ({ project }) =>
+              coveredFolderMatch(entry.folder, entry.project.environmentId, project) === match,
+          ),
+      );
+    const entry = find("folder") ?? find("repository");
+    if (entry) coveredBy.set(group, entry);
+  }
+  const foldTarget = (group: ProjectGroup<TProject>) => {
+    const seen = new Set([group]);
+    let target = coveredBy.get(group)?.group;
+    while (target !== undefined && coveredBy.has(target)) {
+      if (seen.has(target)) return undefined;
+      seen.add(target);
+      target = coveredBy.get(target)!.group;
+    }
+    return target;
+  };
+  const foldedInto = new Map<ProjectGroup<TProject>, FoldedProjectGroup<TProject>[]>();
+  for (const [group, entry] of coveredBy) {
+    const target = foldTarget(group);
+    if (target === undefined) continue;
+    const folded = foldedInto.get(target) ?? [];
+    folded.push({ ...group, folderName: entry.folder.name });
+    foldedInto.set(target, folded);
+  }
+  return groups.flatMap((group) => {
+    if (foldTarget(group) !== undefined) return [];
+    const folded = foldedInto.get(group);
+    return folded === undefined
+      ? [group]
+      : [
+          {
+            ...group,
+            memberProjectRefs: [
+              ...group.memberProjectRefs,
+              ...folded.flatMap((entry) => entry.memberProjectRefs),
+            ],
+            folded,
+          },
+        ];
   });
 }
 

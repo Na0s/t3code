@@ -25,8 +25,11 @@ import {
   readResponseSubagents,
   useAssistantMessageText,
   useProject,
+  useProjects,
   useQuietThreadShell,
 } from "../../state/entities";
+import { findCoveredFolderProject } from "@t3tools/client-runtime/state/project-grouping";
+import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantCitationSource } from "./AssistantCitationSource";
 import { resolveAssistantMessageCopyState } from "./MessagesTimeline.logic";
@@ -485,6 +488,7 @@ function AssistantChangedFilesSectionInner({
       ? { environmentId: thread.environmentId, projectId: thread.projectId }
       : null,
   );
+  const projects = useProjects();
   const onFileContextMenu = useFileContextMenuHandler(ctx.activeThreadEnvironmentId);
   const repositoryRoot = useAtomValue(
     ctx.workspaceRoot
@@ -512,16 +516,33 @@ function AssistantChangedFilesSectionInner({
                   relativePath: "",
                 },
               ]),
-          ...repositories.map((repository) => ({
-            key: repository.scopeId,
-            name: repository.name,
-            files: repository.files,
-            totals: changedFileTotals(repository),
-            relativePath: repository.relativePath,
-            ...(repository.baselineMissing
-              ? { note: gt("This turn's changes in this repository cannot be listed.") }
-              : {}),
-          })),
+          ...repositories.map((repository) => {
+            const path = normalizeProjectPathForComparison(repository.repositoryPath);
+            const project = activeProject
+              ? findCoveredFolderProject(
+                  activeProject.trackedFolders?.find(
+                    (folder) => normalizeProjectPathForComparison(folder.path) === path,
+                  ) ?? { path: repository.repositoryPath },
+                  activeProject.environmentId,
+                  projects.filter(
+                    (candidate) =>
+                      candidate.id !== activeProject.id ||
+                      candidate.environmentId !== activeProject.environmentId,
+                  ),
+                )
+              : undefined;
+            return {
+              key: repository.scopeId,
+              name: repository.name,
+              files: repository.files,
+              totals: changedFileTotals(repository),
+              relativePath: repository.relativePath,
+              ...(repository.baselineMissing
+                ? { note: gt("This turn's changes in this repository cannot be listed.") }
+                : {}),
+              ...(project ? { project } : {}),
+            };
+          }),
         ];
   const repositoryCwdByGroupKey = new Map(
     repositories?.map((repository) => [repository.scopeId as string, repository.cwd]),

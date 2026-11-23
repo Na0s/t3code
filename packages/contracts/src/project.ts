@@ -61,12 +61,17 @@ export const ProjectTrackedFolder = Schema.Struct({
    * the disk. Absent on a folder someone added.
    */
   discovered: Schema.optional(Schema.Boolean),
+  /**
+   * The repository at this folder, when the server has resolved it. Filled in on project shells
+   * and never stored; clients match projects for the same repository on other environments by it.
+   */
+  repositoryIdentity: Schema.optional(RepositoryIdentity),
 });
 export type ProjectTrackedFolder = typeof ProjectTrackedFolder.Type;
 
 /** The folders a caller adds to a project. Which repositories sit inside it is the server's to say. */
 export const ProjectAddedFolders = Schema.Array(
-  ProjectTrackedFolder.mapFields(Struct.omit(["discovered"])),
+  ProjectTrackedFolder.mapFields(Struct.omit(["discovered", "repositoryIdentity"])),
 ).check(Schema.isMaxLength(PROJECT_TRACKED_FOLDERS_MAX));
 
 export const ProjectTrackedFolders = Schema.Array(ProjectTrackedFolder).check(

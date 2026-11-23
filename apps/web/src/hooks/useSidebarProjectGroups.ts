@@ -39,6 +39,7 @@ export function useSidebarProjectGroups() {
     {
       projects: sortOrder === "manual" ? orderedProjects : projects,
       groupScratchProjects: true,
+      foldCoveredProjects: true,
       settings: groupingSettings,
       primaryEnvironmentId,
       resolveEnvironmentLabel: (environmentId) => labels.get(environmentId) ?? null,

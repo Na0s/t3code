@@ -257,6 +257,34 @@ describe("applyShellStreamEvent", () => {
     expect(next.projects[0]?.repositoryIdentity).toEqual(liveIdentity);
   });
 
+  it("takes tracked folder identities from a refresh and keeps them through later deltas", () => {
+    const folder = { path: "/work/shop/api", name: "api", discovered: true };
+    const shop = { ...v2Project, trackedFolders: [folder] };
+    const start = { ...v2ShellSnapshot, snapshotSequence: 5, projects: [shop] };
+    const refreshed = mergeShellSnapshotProjects(
+      start,
+      {
+        ...start,
+        snapshotSequence: 4,
+        projects: [{ ...shop, trackedFolders: [{ ...folder, repositoryIdentity }] }],
+      },
+      { resolvedRepositoryIdentityRoots: [folder.path] },
+    );
+    expect(refreshed.projects[0]?.trackedFolders).toEqual([{ ...folder, repositoryIdentity }]);
+    expect(
+      mergeShellSnapshotProjects(refreshed, refreshed, {
+        resolvedRepositoryIdentityRoots: [folder.path],
+      }),
+    ).toBe(refreshed);
+
+    const renamed = applyShellStreamEvent(refreshed, {
+      kind: "project.updated",
+      sequence: 6,
+      project: { ...shop, title: "Shop" },
+    });
+    expect(renamed.projects[0]?.trackedFolders).toEqual([{ ...folder, repositoryIdentity }]);
+  });
+
   it("keeps archive deltas out of the normal shell cache", () => {
     const archived = applyShellStreamEvent(v2ShellSnapshot, {
       kind: "thread.updated",

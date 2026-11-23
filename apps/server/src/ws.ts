@@ -898,13 +898,17 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
         projects,
         (project) =>
           projectEnrichment.getAvailable(project.workspaceRoot).pipe(
-            Effect.map((enrichment) => ({
-              project: {
-                ...project,
-                repositoryIdentity: enrichment.repositoryIdentity,
-              },
-              repositoryIdentityResolved: enrichment.repositoryIdentityResolved,
-            })),
+            Effect.flatMap((enrichment) =>
+              ProjectEnrichmentService.withTrackedFolderIdentities(
+                { ...project, repositoryIdentity: enrichment.repositoryIdentity },
+                (root) => projectEnrichment.getAvailableRepositoryIdentity(root),
+              ).pipe(
+                Effect.map((enriched) => ({
+                  project: enriched,
+                  repositoryIdentityResolved: enrichment.repositoryIdentityResolved,
+                })),
+              ),
+            ),
           ),
         { concurrency: 16 },
       ).pipe(
@@ -1308,10 +1312,26 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
             ]),
           );
           const snapshotSequence = yield* applicationEvents.latestApplicationSequence;
-          const changedProjects = (yield* projects.listShells()).flatMap((project) =>
-            identities.has(project.workspaceRoot)
-              ? [{ ...project, repositoryIdentity: identities.get(project.workspaceRoot) ?? null }]
-              : [],
+          // Peeks only: requesting here would re-resolve whatever expired on every refresh.
+          const identityOf = (root: string) =>
+            identities.has(root)
+              ? Effect.succeed(identities.get(root) ?? null)
+              : projectEnrichment.peek(root).pipe(Effect.map((known) => known.repositoryIdentity));
+          const changedProjects = yield* Effect.forEach(
+            (yield* projects.listShells()).filter(
+              (project) =>
+                identities.has(project.workspaceRoot) ||
+                project.trackedFolders?.some((folder) => identities.has(folder.path)) === true,
+            ),
+            (project) =>
+              identityOf(project.workspaceRoot).pipe(
+                Effect.flatMap((repositoryIdentity) =>
+                  ProjectEnrichmentService.withTrackedFolderIdentities(
+                    { ...project, repositoryIdentity },
+                    identityOf,
+                  ),
+                ),
+              ),
           );
           return shellStreamItemFromEnrichmentRefresh({
             snapshot: {

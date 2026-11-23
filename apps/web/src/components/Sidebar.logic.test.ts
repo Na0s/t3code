@@ -36,7 +36,9 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  gatherSidebarThreads,
   groupSidebarThreadsByProject,
+  sidebarRowShowsStatus,
   resolveSidebarFolderDot,
   sidebarFolderExpansionKeys,
   withoutRemovedCheckout,
@@ -1645,6 +1647,71 @@ describe("sidebarFolderExpansionKeys", () => {
     expect(resolveProjectExpanded({}, keys)).toBe(true);
     expect(resolveProjectExpanded({ [cwdKey]: false }, keys)).toBe(false);
     expect(resolveProjectExpanded({ [keys[0]!]: true, [cwdKey]: false }, keys)).toBe(true);
+  });
+});
+
+describe("gatherSidebarThreads", () => {
+  it("leads with status threads, then gathers each group's threads at its first one", () => {
+    const shop = ProjectId.make("shop");
+    const api = ProjectId.make("api");
+    const fleet = ProjectId.make("fleet");
+    const thread = (id: string, projectId: ProjectId, status = false) => ({
+      id,
+      environmentId: localEnvironmentId,
+      projectId,
+      status,
+    });
+    const group = {
+      projectKey: "shop",
+      memberProjectRefs: [
+        { environmentId: localEnvironmentId, projectId: shop },
+        { environmentId: localEnvironmentId, projectId: api },
+      ],
+    };
+    const runs = gatherSidebarThreads(
+      [group],
+      [
+        thread("fleet-1", fleet),
+        thread("api-1", api),
+        thread("shop-done", shop, true),
+        thread("fleet-2", fleet),
+        thread("shop-1", shop),
+      ],
+      (entry) => !entry.status,
+    );
+    expect(
+      runs.map((run) => [run.group?.projectKey ?? null, run.threads.map((entry) => entry.id)]),
+    ).toEqual([
+      [null, ["shop-done"]],
+      [null, ["fleet-1"]],
+      ["shop", ["api-1", "shop-1"]],
+      [null, ["fleet-2"]],
+    ]);
+  });
+});
+
+describe("sidebarRowShowsStatus", () => {
+  const idle = {
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    pendingSubagentRequest: null,
+    interactionMode: "default" as const,
+    latestRun: null,
+    runtime: null,
+    settledOverride: null,
+  };
+
+  it("is false for a quiet thread and true once it needs input or woke unseen", () => {
+    expect(sidebarRowShowsStatus(idle, null)).toBe(false);
+    expect(sidebarRowShowsStatus({ ...idle, hasPendingUserInput: true }, null)).toBe(true);
+    expect(sidebarRowShowsStatus(idle, "2026-07-01T00:00:00.000Z")).toBe(true);
+    expect(
+      sidebarRowShowsStatus(
+        { ...idle, lastVisitedAt: "2026-07-02T00:00:00.000Z" },
+        "2026-07-01T00:00:00.000Z",
+      ),
+    ).toBe(false);
   });
 });
 

@@ -136,3 +136,34 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
     </li>
   );
 });
+
+/** A project's name above the threads it gathers in the default sidebar's active list. */
+export const SidebarGatheredHeader = memo(function SidebarGatheredHeader(props: {
+  group: SidebarProjectSnapshot;
+  onContextMenu: (
+    group: SidebarProjectSnapshot,
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => void;
+}) {
+  const { group } = props;
+  return (
+    <li
+      data-testid="sidebar-gathered-header"
+      className="mt-1.5 flex h-7 list-none items-center gap-2 px-(--sidebar-row-content-inset) first:mt-0"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        props.onContextMenu(
+          group,
+          { x: event.clientX, y: event.clientY },
+          contextMenuSourceOf(event),
+        );
+      }}
+    >
+      <ProjectFavicon project={group} className="size-4 shrink-0" />
+      <span className="min-w-0 truncate text-xs font-medium text-sidebar-foreground/90">
+        {group.displayName}
+      </span>
+    </li>
+  );
+});

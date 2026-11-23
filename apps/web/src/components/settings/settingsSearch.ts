@@ -501,6 +501,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
   },
   {
+    id: "gather-project-threads",
+    title: msg("Gather multi-repo projects"),
+    to: "/settings/general",
+    searchTerms: [msg("group repositories status first sidebar fold projects threads")],
+  },
+  {
     id: "boring-sidebar",
     title: msg("Boring sidebar (group by project)"),
     to: "/settings/labs",

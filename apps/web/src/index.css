@@ -109,6 +109,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     var(--sidebar)
   );
   --sidebar-row-content-inset: 0.625rem;
+  /* How far a project shown as part of another sits in: gathered threads and the project menu. */
+  --sidebar-gathered-indent: 0.75rem;
   --command-shell-inset: 0.5rem;
   --command-content-inset: 1rem;
   --floating-content-inset: 0.75rem;

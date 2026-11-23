@@ -69,6 +69,7 @@ function group(
       environmentId: project.environmentId,
       projectId: project.id,
     })),
+    folded: [],
     groupedProjectCount: members.length,
     environmentPresence: "mixed",
     allRemoteMembersAreDesktopLocal: false,

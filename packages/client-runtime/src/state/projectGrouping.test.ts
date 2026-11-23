@@ -1,4 +1,6 @@
 import { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -8,6 +10,8 @@ import {
   deriveLogicalProjectKeyFromSettings,
   pickableProjectGroups,
   derivePhysicalProjectKey,
+  findCoveredFolderProject,
+  isCoveringProject,
   resolveGroupDefaultProject,
   resolveScratchProjectScopeKey,
   sortProjectsByGroupOrder,
@@ -541,5 +545,173 @@ describe("sortProjectsByGroupOrder", () => {
       ],
     );
     expect(sorted.map((entry) => entry.id)).toEqual(["pinned", "recent", "archived", "unlisted"]);
+  });
+});
+
+describe("folding covered projects", () => {
+  const remote = EnvironmentId.make("remote");
+  const identityOf = (name: string) => ({
+    ...repositoryIdentity,
+    canonicalKey: `github.com/acme/${name}`,
+    locator: { ...repositoryIdentity.locator, remoteUrl: `https://github.com/acme/${name}.git` },
+    name,
+    displayName: name,
+  });
+  const shop = makeProject("shop", "/work/shop", {
+    repositoryIdentity: null,
+    trackedFolders: [
+      {
+        path: "/work/shop/api",
+        name: "api",
+        discovered: true,
+        repositoryIdentity: identityOf("api"),
+      },
+      { path: "/work/shop/web", name: "web", discovered: true },
+    ],
+  });
+  const api = makeProject("api", "/work/shop/api", { repositoryIdentity: identityOf("api") });
+  const remoteApi = makeProject("api-remote", "/srv/api", {
+    environmentId: remote,
+    repositoryIdentity: identityOf("api"),
+  });
+  const web = makeProject("web", "/work/shop/web", { repositoryIdentity: identityOf("web") });
+  const other = makeProject("other", "/work/other", { repositoryIdentity: identityOf("other") });
+  const fold = (projects: EnvironmentProject[], groupingSettings = settings("repository")) =>
+    buildProjectGroups({ projects, settings: groupingSettings, foldCoveredProjects: true });
+  const refOf = (project: EnvironmentProject) => ({
+    environmentId: project.environmentId,
+    projectId: project.id,
+  });
+
+  it("folds the project in a covered folder, and the same repository on another environment", () => {
+    const groups = fold([shop, api, remoteApi, web, other]);
+    expect(groups.map((group) => group.label)).toEqual(["shop", "other"]);
+    const [shopGroup] = groups;
+    expect(shopGroup?.members.map((member) => member.project.id)).toEqual(["shop"]);
+    expect(shopGroup?.memberProjectRefs).toEqual([
+      refOf(shop),
+      refOf(api),
+      refOf(remoteApi),
+      refOf(web),
+    ]);
+    expect(shopGroup?.folded.map(({ key, folderName }) => ({ key, folderName }))).toEqual([
+      { key: "github.com/acme/api", folderName: "api" },
+      { key: "github.com/acme/web", folderName: "web" },
+    ]);
+  });
+
+  it("folds by folder only on the covering project's environment", () => {
+    const elsewhere = makeProject("web-remote", "/work/shop/web", {
+      environmentId: remote,
+      repositoryIdentity: null,
+    });
+    expect(fold([shop, elsewhere]).map((group) => group.label)).toEqual(["shop", "web-remote"]);
+  });
+
+  it("leaves groups as they are unless asked, and keeps projects set to stay separate", () => {
+    expect(
+      buildProjectGroups({ projects: [shop, api], settings: settings("repository") }),
+    ).toHaveLength(2);
+    expect(
+      fold([shop, api], settings("repository", { [derivePhysicalProjectKey(api)]: "separate" })),
+    ).toHaveLength(2);
+  });
+
+  it("does not fold into an archived project", () => {
+    expect(fold([{ ...shop, archivedAt: "2026-07-02T00:00:00.000Z" }, api])).toHaveLength(2);
+  });
+
+  it("follows a chain of covering projects to its end, and keeps a cycle apart", () => {
+    const workspace = makeProject("workspace", "/work", {
+      repositoryIdentity: null,
+      trackedFolders: [{ path: "/work/shop", name: "shop" }],
+    });
+    const groups = fold([workspace, shop, api]);
+    expect(groups.map((group) => group.label)).toEqual(["workspace"]);
+    expect(groups[0]?.folded.map((entry) => entry.folderName).toSorted()).toEqual(["api", "shop"]);
+
+    const a = makeProject("a", "/a", {
+      repositoryIdentity: null,
+      trackedFolders: [{ path: "/b", name: "b" }],
+    });
+    const b = makeProject("b", "/b", {
+      repositoryIdentity: null,
+      trackedFolders: [{ path: "/a", name: "a" }],
+    });
+    expect(fold([a, b]).map((group) => group.label)).toEqual(["a", "b"]);
+  });
+
+  effectIt.prop(
+    "keeps every project in exactly one group and every group key once",
+    {
+      projects: Schema.Array(
+        Schema.Struct({
+          remote: Schema.Boolean,
+          folder: Schema.Literals(["a", "b", "c", "d"]),
+          repository: Schema.NullOr(Schema.Literals(["x", "y"])),
+          covers: Schema.Array(
+            Schema.Struct({
+              folder: Schema.Literals(["a", "b", "c", "d"]),
+              repository: Schema.NullOr(Schema.Literals(["x", "y"])),
+            }),
+          ),
+          archived: Schema.Boolean,
+        }),
+      ),
+    },
+    ({ projects: specs }) => {
+      const projects = specs.map((spec, index) =>
+        makeProject(`p${index}`, `/${spec.folder}`, {
+          ...(spec.remote ? { environmentId: remote } : {}),
+          repositoryIdentity: spec.repository === null ? null : identityOf(spec.repository),
+          trackedFolders: spec.covers.map((folder) => ({
+            path: `/${folder.folder}`,
+            name: folder.folder,
+            ...(folder.repository === null
+              ? {}
+              : { repositoryIdentity: identityOf(folder.repository) }),
+          })),
+          ...(spec.archived ? { archivedAt: "2026-07-02T00:00:00.000Z" } : {}),
+        }),
+      );
+      const plain = buildProjectGroups({ projects, settings: settings("repository") });
+      const folded = fold(projects);
+      const refs = folded.flatMap((group) =>
+        group.memberProjectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`),
+      );
+      expect(refs.toSorted()).toEqual(
+        plain
+          .flatMap((group) => group.memberProjectRefs)
+          .map((ref) => `${ref.environmentId}:${ref.projectId}`)
+          .toSorted(),
+      );
+      const keys = folded.flatMap((group) => [
+        group.key,
+        ...group.folded.map((entry) => entry.key),
+      ]);
+      expect(keys.toSorted()).toEqual(plain.map((group) => group.key).toSorted());
+      for (const group of folded) {
+        if (group.folded.length > 0) {
+          expect(group.archived).toBe(false);
+          expect(group.members.some(({ project }) => isCoveringProject(project))).toBe(true);
+        }
+      }
+    },
+  );
+});
+
+describe("findCoveredFolderProject", () => {
+  const remote = EnvironmentId.make("remote");
+  it("prefers the project in the folder over another clone of its repository", () => {
+    const clone = makeProject("clone", "/clone", { environmentId: remote });
+    const inFolder = makeProject("in-folder", "/work/t3code", { repositoryIdentity: null });
+    const folder = { path: "/work/t3code", repositoryIdentity };
+    expect(findCoveredFolderProject(folder, environmentId, [clone, inFolder])?.id).toBe(
+      "in-folder",
+    );
+    expect(findCoveredFolderProject(folder, environmentId, [clone])?.id).toBe("clone");
+    expect(findCoveredFolderProject({ path: "/work/t3code" }, environmentId, [clone])).toBe(
+      undefined,
+    );
   });
 });

@@ -701,8 +701,12 @@ export function shellStreamItemFromEnrichmentRefresh(input: {
     kind: "snapshot",
     snapshot: {
       ...input.snapshot,
-      projects: input.snapshot.projects.filter((project) =>
-        resolvedRepositoryIdentityRoots.includes(project.workspaceRoot),
+      projects: input.snapshot.projects.filter(
+        (project) =>
+          resolvedRepositoryIdentityRoots.includes(project.workspaceRoot) ||
+          project.trackedFolders?.some((folder) =>
+            resolvedRepositoryIdentityRoots.includes(folder.path),
+          ) === true,
       ),
       threads: [],
       archivedThreads: [],

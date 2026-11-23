@@ -9,6 +9,7 @@ import {
   isPickableProjectMember,
   resolveScratchProjectScopeKey,
   selectGroupDefaultProject,
+  type ProjectGroup,
   type ProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { msg } from "gt-react";
@@ -49,9 +50,15 @@ export interface SidebarProjectSnapshot extends Project {
   allRemoteMembersAreWsl: boolean;
   memberProjects: readonly SidebarProjectGroupMember[];
   memberProjectRefs: readonly ScopedProjectRef[];
+  /** Projects shown as part of this one because it covers their folder. */
+  folded: readonly FoldedSidebarProjectSnapshot[];
   remoteEnvironmentLabels: readonly string[];
   pinned: boolean;
   archived: boolean;
+}
+
+export interface FoldedSidebarProjectSnapshot extends SidebarProjectSnapshot {
+  folderName: string;
 }
 
 export function projectGroupsSpanEnvironments(
@@ -147,6 +154,7 @@ export function buildSidebarProjectSnapshots(
     projects: ReadonlyArray<Project>;
     settings: ProjectGroupingSettings;
     groupScratchProjects?: boolean;
+    foldCoveredProjects?: boolean;
     primaryEnvironmentId: EnvironmentId | null;
     resolveEnvironmentLabel: (environmentId: EnvironmentId) => string | null;
     isDesktopLocalEnvironment?: (environmentId: EnvironmentId) => boolean;
@@ -154,15 +162,7 @@ export function buildSidebarProjectSnapshots(
   },
   resolve: MessageResolver = m,
 ): SidebarProjectSnapshot[] {
-  return buildProjectGroups(
-    {
-      projects: input.projects,
-      groupScratchProjects: input.groupScratchProjects ?? false,
-      settings: input.settings,
-      preferredEnvironmentId: input.primaryEnvironmentId,
-    },
-    resolve,
-  ).map((group): SidebarProjectSnapshot => {
+  const toSnapshot = (group: ProjectGroup<Project>): SidebarProjectSnapshot => {
     const members = group.members.map(
       ({ physicalProjectKey, project }): SidebarProjectGroupMember => ({
         ...project,
@@ -210,11 +210,25 @@ export function buildSidebarProjectSnapshots(
       allRemoteMembersAreWsl,
       memberProjects: members,
       memberProjectRefs: group.memberProjectRefs,
+      folded: group.folded.map((folded) => ({
+        ...toSnapshot(folded),
+        folderName: folded.folderName,
+      })),
       remoteEnvironmentLabels,
       pinned: group.pinned,
       archived: group.archived,
     };
-  });
+  };
+  return buildProjectGroups(
+    {
+      projects: input.projects,
+      groupScratchProjects: input.groupScratchProjects ?? false,
+      foldCoveredProjects: input.foldCoveredProjects ?? false,
+      settings: input.settings,
+      preferredEnvironmentId: input.primaryEnvironmentId,
+    },
+    resolve,
+  ).map(toSnapshot);
 }
 
 export function buildSidebarProjectPickerEntries(input: {

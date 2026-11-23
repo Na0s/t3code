@@ -1,4 +1,4 @@
-import type { RepositoryIdentity } from "@t3tools/contracts";
+import type { ProjectTrackedFolder, RepositoryIdentity } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -48,6 +48,10 @@ export class ProjectEnrichmentService extends Context.Service<
     readonly request: (workspaceRoot: string) => Effect.Effect<void>;
     readonly getAvailable: (workspaceRoot: string) => Effect.Effect<ProjectEnrichment>;
     readonly readRepositoryIdentity: (
+      workspaceRoot: string,
+    ) => Effect.Effect<RepositoryIdentity | null>;
+    /** The identity `peek` reports, requesting it when none is cached; favicons are left alone. */
+    readonly getAvailableRepositoryIdentity: (
       workspaceRoot: string,
     ) => Effect.Effect<RepositoryIdentity | null>;
     readonly invalidate: (workspaceRoots: Iterable<string>) => Effect.Effect<void>;
@@ -267,6 +271,14 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   });
 
   // peek/request/getAvailable run per project on every shell read, inside the caller's span; own spans were ~0ms noise.
+  const availableRepositoryIdentity = (
+    workspaceRoot: string,
+    cached: Option.Option<Exit.Exit<RepositoryIdentity | null, unknown>>,
+  ) =>
+    isSuccessfullyResolved(cached)
+      ? availableValue(cached)
+      : (lastRepositoryIdentities.get(workspaceRoot) ?? null);
+
   const peek: ProjectEnrichmentService["Service"]["peek"] = Effect.fnUntraced(
     function* (workspaceRoot) {
       const [repositoryIdentity, faviconPath] = yield* Effect.all(
@@ -276,16 +288,22 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
         ] as const,
         { concurrency: "unbounded" },
       );
-      const repositoryIdentityResolved = isSuccessfullyResolved(repositoryIdentity);
       return {
-        repositoryIdentity: repositoryIdentityResolved
-          ? availableValue(repositoryIdentity)
-          : (lastRepositoryIdentities.get(workspaceRoot) ?? null),
+        repositoryIdentity: availableRepositoryIdentity(workspaceRoot, repositoryIdentity),
         faviconPath: availableValue(faviconPath),
-        repositoryIdentityResolved,
+        repositoryIdentityResolved: isSuccessfullyResolved(repositoryIdentity),
       };
     },
   );
+
+  const getAvailableRepositoryIdentity: ProjectEnrichmentService["Service"]["getAvailableRepositoryIdentity"] =
+    Effect.fnUntraced(function* (workspaceRoot) {
+      const cached = yield* Cache.getSuccess(repositoryIdentityCache, workspaceRoot);
+      if (!(yield* Cache.has(repositoryIdentityCache, workspaceRoot))) {
+        yield* requestLane(repositoryIdentityLane, workspaceRoot, "repositoryIdentity");
+      }
+      return availableRepositoryIdentity(workspaceRoot, cached);
+    });
 
   const request: ProjectEnrichmentService["Service"]["request"] = Effect.fnUntraced(
     function* (workspaceRoot) {
@@ -358,10 +376,31 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     request,
     getAvailable,
     readRepositoryIdentity,
+    getAvailableRepositoryIdentity,
     invalidate,
     refreshRepositoryIdentity,
     subscribeChanges: PubSub.subscribe(changes),
   });
 });
+
+/**
+ * A project shell's tracked folders with the repository identities `identityOf` knows. A folder
+ * whose identity is unknown, or that is not a repository, stays as stored.
+ */
+export const withTrackedFolderIdentities = <
+  Project extends { readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder> | undefined },
+>(
+  project: Project,
+  identityOf: (workspaceRoot: string) => Effect.Effect<RepositoryIdentity | null>,
+): Effect.Effect<Project> =>
+  project.trackedFolders === undefined || project.trackedFolders.length === 0
+    ? Effect.succeed(project)
+    : Effect.forEach(project.trackedFolders, (folder) =>
+        identityOf(folder.path).pipe(
+          Effect.map((repositoryIdentity) =>
+            repositoryIdentity === null ? folder : { ...folder, repositoryIdentity },
+          ),
+        ),
+      ).pipe(Effect.map((trackedFolders) => ({ ...project, trackedFolders })));
 
 export const layer = Layer.effect(ProjectEnrichmentService, make());

@@ -695,3 +695,36 @@ describe("skipUnchangedThreadShells", () => {
     }),
   );
 });
+
+describe("shellStreamItemFromEnrichmentRefresh", () => {
+  it("carries a project whose tracked folder resolved, as well as one whose own root did", () => {
+    const project = (
+      id: string,
+      workspaceRoot: string,
+      trackedFolders: ReadonlyArray<{ path: string; name: string }> = [],
+    ) => ({
+      id: ProjectId.make(id),
+      title: id,
+      workspaceRoot,
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      trackedFolders,
+      createdAt: "2026-09-01T00:00:00Z",
+      updatedAt: "2026-09-01T00:00:00Z",
+    });
+    const item = shellStreamItemFromEnrichmentRefresh({
+      snapshot: {
+        ...emptyShellSnapshot,
+        projects: [
+          project("shop", "/work/shop", [{ path: "/work/shop/api", name: "api" }]),
+          project("api", "/work/shop/api"),
+          project("other", "/work/other"),
+        ],
+      } as OrchestrationV2ShellSnapshot,
+      changes: [{ workspaceRoot: "/work/shop/api" }],
+    });
+    expect(item.snapshot.projects.map((entry) => entry.id)).toEqual(["shop", "api"]);
+    expect(item.resolvedRepositoryIdentityRoots).toEqual(["/work/shop/api"]);
+  });
+});
