@@ -48,6 +48,7 @@ import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observabil
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { removeEmptyDirectory, type RemoveEmptyDirectoryError } from "./removeEmptyDirectory.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
+import { VcsNestedRepositories } from "./VcsNestedRepositories.ts";
 import { gitConfigEnv, serverGitConfigEnv, unsetInheritedRepositoryEnv } from "./VcsProcess.ts";
 import { makeWorktreeCheckoutCache } from "./worktreeCheckoutCache.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
@@ -1046,6 +1047,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const hostPlatform = yield* HostProcess.Platform;
   const serviceScope = yield* Effect.scope;
   const automaticFetchInterval = yield* VcsAutomaticFetchInterval;
+  const nestedRepositories = yield* VcsNestedRepositories;
   type StatusFetchState = {
     phase: "queued" | "running" | "claimed";
     claimed: Deferred.Deferred<void>;
@@ -1315,6 +1317,38 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         LANGUAGE: "C",
       },
     });
+
+  // Unexcluded, a repository the project covers inside this checkout shows as an untracked folder
+  // and `add -A` stages it as a gitlink. git add rejects a pathspec naming an ignored folder, and
+  // skips that folder anyway.
+  const nestedRepositoryExclusions = Effect.fn("GitVcsDriver.nestedRepositoryExclusions")(
+    function* (cwd: string, worktreeRoot: string) {
+      const nested = yield* nestedRepositories({ cwd, worktreeRoot });
+      if (nested.length === 0) return [];
+      const args = ["check-ignore", "--no-index", "-z", "--stdin"];
+      const checked = yield* executeGit(
+        "GitVcsDriver.nestedRepositoryExclusions",
+        worktreeRoot,
+        args,
+        { stdin: `${nested.join("\0")}\0`, allowNonZeroExit: true },
+      );
+      if (checked.exitCode !== 0 && checked.exitCode !== 1) {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.nestedRepositoryExclusions",
+            cwd: worktreeRoot,
+            args,
+          }),
+          detail: "Could not check which repositories inside the project Git ignores.",
+          ...(checked.exitCode === null ? {} : { exitCode: checked.exitCode }),
+        });
+      }
+      const ignored = new Set(splitNullSeparatedGitStdoutPaths(checked));
+      return nested
+        .filter((relativePath) => !ignored.has(relativePath))
+        .map((relativePath) => `:(top,exclude,literal)${relativePath}`);
+    },
+  );
 
   const runGit = (
     operation: string,
@@ -2829,10 +2863,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const statusCacheKey = repositoryPaths?.gitCommonDir;
     const refsGeneration =
       statusCacheKey === undefined ? undefined : currentListRefsGeneration(statusCacheKey);
+    const exclusions = repositoryPaths?.worktreeRoot
+      ? yield* nestedRepositoryExclusions(cwd, repositoryPaths.worktreeRoot)
+      : [];
     const readStatus = executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
       cwd,
-      statusArgs,
+      exclusions.length === 0 ? statusArgs : [...statusArgs, "--", ...exclusions],
       {
         allowNonZeroExit: true,
         maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
@@ -2848,7 +2885,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       executeGitWithStableDiagnostics(
         "GitVcsDriver.statusDetails.numstat",
         cwd,
-        ["diff-index", "-M", "--numstat", "-z", ref, "--"],
+        ["diff-index", "-M", "--numstat", "-z", ref, "--", ...exclusions],
         { allowNonZeroExit: true, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
       );
     // diff-index does not read status output, so both spawn together; a non-repository discards it.
@@ -3020,6 +3057,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         options?.includeBranchChanges
           ? readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName, {
               untrackedRoots,
+              exclusions,
               headOid,
               ...(index ? { indexPath: index } : {}),
             }).pipe(Effect.orElseSucceed(() => undefined))
@@ -3346,10 +3384,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           });
         }
       }
+      const worktreeRoot = (yield* resolveRepositoryPaths(cwd))?.worktreeRoot;
+      const exclusions = worktreeRoot ? yield* nestedRepositoryExclusions(cwd, worktreeRoot) : [];
       yield* runGit(
         "GitVcsDriver.commit.addAll",
         cwd,
-        [...config, "add", "-A"],
+        [...config, "add", "-A", ...(exclusions.length === 0 ? [] : ["--", ...exclusions])],
         env ? { env } : {},
       );
     }
@@ -4441,6 +4481,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     branch: string | null,
     options?: {
       readonly untrackedRoots: ReadonlyArray<string>;
+      readonly exclusions?: ReadonlyArray<string>;
       readonly headOid: string | null;
       readonly indexPath?: string;
     },
@@ -4467,11 +4508,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
     const roots = options?.untrackedRoots ?? [];
+    const exclusions = options?.exclusions ?? [];
     // Bound pathspec matching work and stay below Windows' command-line limit.
-    const pathspecs =
-      roots.length <= 128 && roots.reduce((length, root) => length + root.length + 16, 0) < 8_000
+    const pathspecs = [
+      ...(roots.length <= 128 &&
+      roots.reduce((length, root) => length + root.length + 16, 0) < 8_000
         ? roots.map((root) => `:(top,literal)${root}`)
-        : [];
+        : []),
+      ...exclusions,
+    ];
     // Changed untracked roots skip the backoff and scan again.
     const rootsKey = roots.join("\0");
     const remembered = untrackedTotalsFailures.get(cwd);
@@ -4526,7 +4571,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.readBranchChangeTotals",
         cwd,
         // Plumbing: porcelain diff refreshes and rewrites the real index, taking index.lock.
-        ["diff-index", "-M", "--numstat", "-z", ref, "--"],
+        ["diff-index", "-M", "--numstat", "-z", ref, "--", ...exclusions],
         {
           allowNonZeroExit: true,
           maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES,
@@ -4755,7 +4800,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const getReviewDiffPreview = Effect.fn("getReviewDiffPreview")(function* (
     input: ReviewDiffPreviewInput,
   ) {
-    const pathArgs = input.file
+    const filePathArgs = input.file
       ? [input.file.path, ...(input.file.previousPath ? [input.file.previousPath] : [])].map(
           (path) => `:(top,literal)${path}`,
         )
@@ -4829,7 +4874,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const stat = yield* executeGit(
         "GitVcsDriver.getReviewDiffPreview.commitStat",
         cwd,
-        [...diffArgs, "--raw", "--numstat", "-z", commit.parent, commit.sha, "--", ...pathArgs],
+        [...diffArgs, "--raw", "--numstat", "-z", commit.parent, commit.sha, "--", ...filePathArgs],
         { maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
       );
       const files = parseReviewNumstat(stat.stdout);
@@ -4839,7 +4884,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : yield* executeGit(
               "GitVcsDriver.getReviewDiffPreview.commitPatch",
               cwd,
-              [...diffArgs, "--patch", commit.parent, commit.sha, "--", ...pathArgs],
+              [...diffArgs, "--patch", commit.parent, commit.sha, "--", ...filePathArgs],
               { maxOutputBytes: patchLimit, appendTruncationMarker: true },
             );
       const diffHash = yield* hashDiff(patch.stdout, files);
@@ -4864,6 +4909,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
+    const pathArgs = input.file ? filePathArgs : yield* nestedRepositoryExclusions(input.cwd, cwd);
     const dirtyRef = sourceKind === "branch-range" ? null : "HEAD";
     const review =
       tracked?.review ??

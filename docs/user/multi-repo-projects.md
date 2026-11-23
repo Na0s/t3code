@@ -67,7 +67,8 @@ hand show up too.
 
 ## Commit, push, and open pull requests
 
-Git actions run in one repository at a time.
+Git actions run in one repository at a time. When the project folder is a repository itself, its
+uncommitted changes, diff, and commits leave out the repositories the project covers inside it.
 
 - **Web and desktop:** the thread details panel lists the repositories the thread changed, most
   recent first, each with its branch and uncommitted changes. Expand one to commit, push, or open a

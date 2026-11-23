@@ -13,6 +13,27 @@ import * as WorkspaceFolders from "./WorkspaceFolders.ts";
 
 const projectId = ProjectId.make("project:workspace-folders");
 
+const rowOf = (project: {
+  readonly workspaceRoot: string;
+  readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
+}) => ({
+  projectId,
+  title: "Project",
+  hasCustomTitle: false,
+  defaultModelSelection: null,
+  defaultThreadEnvMode: null,
+  autoPull: false,
+  faviconPath: null,
+  projectIcon: null,
+  scripts: [],
+  pinnedAt: null,
+  archivedAt: null,
+  createdAt: "2026-06-21T00:00:00.000Z",
+  updatedAt: "2026-06-21T00:00:00.000Z",
+  deletedAt: null,
+  ...project,
+});
+
 const layerFor = (project?: {
   readonly workspaceRoot: string;
   readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
@@ -21,25 +42,11 @@ const layerFor = (project?: {
     Layer.provide(
       Layer.mock(ProjectStore.ProjectStoreV2)({
         get: () =>
-          project === undefined
-            ? Effect.succeedNone
-            : Effect.succeedSome({
-                projectId,
-                title: "Project",
-                hasCustomTitle: false,
-                defaultModelSelection: null,
-                defaultThreadEnvMode: null,
-                autoPull: false,
-                faviconPath: null,
-                projectIcon: null,
-                scripts: [],
-                pinnedAt: null,
-                archivedAt: null,
-                createdAt: "2026-06-21T00:00:00.000Z",
-                updatedAt: "2026-06-21T00:00:00.000Z",
-                deletedAt: null,
-                ...project,
-              }),
+          project === undefined ? Effect.succeedNone : Effect.succeedSome(rowOf(project)),
+        findActiveByWorkspaceRoot: (workspaceRoot) =>
+          project?.workspaceRoot === workspaceRoot
+            ? Effect.succeedSome(rowOf(project))
+            : Effect.succeedNone,
       }),
     ),
     Layer.provideMerge(TaskFolderStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
@@ -189,6 +196,21 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
           ["web", repository("web")],
           ["Outside", outside],
         ]);
+        // What the project folder's own Git views leave out: the repositories it covers inside.
+        assert.deepEqual(
+          yield* workspaceFolders.nestedRepositories({
+            cwd: workspaceRoot,
+            worktreeRoot: workspaceRoot,
+          }),
+          ["docs", "src/web"],
+        );
+        assert.deepEqual(
+          yield* workspaceFolders.nestedRepositories({
+            cwd: path.join(workspaceRoot, "docs"),
+            worktreeRoot: path.join(workspaceRoot, "docs"),
+          }),
+          [],
+        );
       }).pipe(Effect.provide(layerFor({ workspaceRoot, trackedFolders })));
     }),
   );
@@ -458,6 +480,15 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
             worktreePath: path.join(worktrees, "x", "single"),
           }),
           { folders: [], extraRoots: [] },
+        );
+        // The thread's checkout of the project folder leaves out the worktree inside it, which
+        // Git names by its resolved path.
+        assert.deepEqual(
+          yield* workspaceFolders.nestedRepositories({
+            cwd: path.join(taskRoot, "ctx"),
+            worktreeRoot: path.join(realWorktrees, "x", "feature-0123", "ctx"),
+          }),
+          ["vendor/lib"],
         );
       }).pipe(Effect.provide(layerFor({ workspaceRoot: ctx, trackedFolders })));
     }),

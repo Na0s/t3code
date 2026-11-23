@@ -566,13 +566,15 @@ const layerWorkspaceFileSystem = WorkspaceFileSystem.layer.pipe(
   Layer.provide(layerKnownWorkspaces),
 );
 
+const layerWorkspaceFolders = WorkspaceFolders.layer.pipe(
+  Layer.provide(Layer.merge(ProjectStore.layer, TaskFolderStore.layer)),
+);
+
 const layerWorkspace = Layer.mergeAll(
   WorkspacePaths.layer,
   layerWorkspaceEntries,
   layerWorkspaceFileSystem,
-  WorkspaceFolders.layer.pipe(
-    Layer.provide(Layer.merge(ProjectStore.layer, TaskFolderStore.layer)),
-  ),
+  layerWorkspaceFolders,
 );
 
 const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
@@ -873,8 +875,15 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   // GitVcsDriver.layer is memoized and some of its build sites live outside this file, so the
-  // fetch interval goes in context here, before the first build captures it.
+  // fetch interval and the nested repositories go in context here, before the first build
+  // captures them.
   Layer.provideMerge(VcsAutomaticFetchInterval.layer.pipe(Layer.provide(layerServerSettings))),
+  Layer.provideMerge(
+    WorkspaceFolders.layerVcsNestedRepositories.pipe(
+      Layer.provide(layerWorkspaceFolders),
+      Layer.provide(layerPersistence),
+    ),
+  ),
   Layer.provide(NetService.layer),
 );
 
