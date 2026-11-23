@@ -154,3 +154,27 @@ export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-lo
 export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
 
 export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";
+
+export const CLIENT_SETTINGS_CHANGED_CHANNEL = "desktop:client-settings-changed";
+
+export const WINDOWS_GET_CONTEXT_CHANNEL = "desktop:windows-get-context";
+export const WINDOWS_GET_STATE_CHANNEL = "desktop:windows-get-state";
+export const WINDOWS_STATE_CHANNEL = "desktop:windows-state";
+export const WINDOWS_OPEN_NEW_CHANNEL = "desktop:windows-open-new";
+export const WINDOWS_OPEN_PROFILE_CHANNEL = "desktop:windows-open-profile";
+export const WINDOWS_FOCUS_CHANNEL = "desktop:windows-focus";
+export const WINDOWS_CREATE_PROFILE_CHANNEL = "desktop:windows-create-profile";
+export const WINDOWS_SAVE_AS_PROFILE_CHANNEL = "desktop:windows-save-as-profile";
+export const WINDOWS_UPDATE_PROFILE_CHANNEL = "desktop:windows-update-profile";
+export const WINDOWS_DELETE_PROFILE_CHANNEL = "desktop:windows-delete-profile";
+export const WINDOWS_SET_PROJECT_SCOPE_KEYS_CHANNEL = "desktop:windows-set-project-scope-keys";
+export const WINDOWS_CLOSE_REQUEST_CHANNEL = "desktop:windows-close-request";
+export const WINDOWS_CLOSE_REQUEST_LISTENING_CHANNEL = "desktop:windows-close-request-listening";
+export const WINDOWS_RESOLVE_CLOSE_REQUEST_CHANNEL = "desktop:windows-resolve-close-request";
+export const WINDOWS_SET_MINI_MODE_CHANNEL = "desktop:windows-set-mini-mode";
+export const WINDOWS_SET_MULTI_WINDOW_ENABLED_CHANNEL = "desktop:windows-set-multi-window-enabled";
+export const WINDOWS_REGISTER_HUB_CHANNEL = "desktop:windows-register-hub";
+export const WINDOWS_REQUEST_HUB_LINK_CHANNEL = "desktop:windows-request-hub-link";
+export const WINDOWS_HUB_LINK_CHANNEL = "desktop:windows-hub-link";
+export const WINDOWS_HUB_PEER_GONE_CHANNEL = "desktop:windows-hub-peer-gone";
+export const WINDOWS_HUB_RESET_CHANNEL = "desktop:windows-hub-reset";

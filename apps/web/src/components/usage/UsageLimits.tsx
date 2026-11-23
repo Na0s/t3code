@@ -23,6 +23,7 @@ import { Fragment, useLayoutEffect, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { observeResize } from "../../lib/observeResize";
+import { cn } from "../../lib/utils";
 import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { serverEnvironment } from "../../state/server";
@@ -125,10 +126,12 @@ function WindowBar({
   color,
   window,
   now,
+  className,
 }: {
   readonly color: string;
   readonly window: ServerProviderUsageWindow;
   readonly now: number;
+  readonly className?: string;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const gt = useGT();
@@ -168,7 +171,10 @@ function WindowBar({
             role="img"
             aria-label={summary}
             tabIndex={0}
-            className="relative h-6 cursor-default rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className={cn(
+              "relative h-6 cursor-default rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              className,
+            )}
           />
         }
       >
@@ -259,6 +265,35 @@ export function LimitWindows({
         );
       })}
     </div>
+  );
+}
+
+/** Two limits to a line, each a label, a bar and the percent left; the bar's tooltip says the rest. */
+export function LimitMeters({
+  driver,
+  accentColor,
+  windows,
+  now,
+}: {
+  readonly driver: ServerProvider["driver"];
+  readonly accentColor?: string | undefined;
+  readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
+  readonly now: number;
+}) {
+  const color = normalizeProviderAccentColor(accentColor) ?? barColor(driver);
+  return (
+    <ul className="grid grid-cols-2 gap-x-3">
+      {windows.map((window) => (
+        <li
+          key={window.id}
+          className="grid h-4 min-w-0 grid-cols-[minmax(0,auto)_minmax(1.5rem,1fr)_2rem] items-center gap-1.5 text-xs"
+        >
+          <span className="truncate text-muted-foreground">{window.label}</span>
+          <WindowBar className="h-4" color={color} window={window} now={now} />
+          <span className="text-right font-medium tabular-nums">{remainingPercent(window)}%</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

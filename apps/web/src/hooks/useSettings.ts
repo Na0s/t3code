@@ -157,9 +157,7 @@ async function hydrateClientSettings(): Promise<void> {
       if (persistedSettings) {
         replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
       }
-      unsubscribeOtherTabClientSettings ??= subscribeBrowserClientSettingsWrites(
-        refreshClientSettingsFromOtherTab,
-      );
+      unsubscribeOtherTabClientSettings ??= subscribeOtherWindowClientSettingsWrites();
       setClientSettingsHydrationStatus("ready");
     } catch (error) {
       if (hydrationGeneration === clientSettingsHydrationGeneration) {
@@ -181,6 +179,19 @@ async function hydrateClientSettings(): Promise<void> {
   clientSettingsHydrationPromise = hydrationPromise;
 
   return clientSettingsHydrationPromise;
+}
+
+/** Browser tabs share storage events; desktop windows hear of the desktop's settings file writes. */
+function subscribeOtherWindowClientSettingsWrites(): () => void {
+  const unsubscribeTabs = subscribeBrowserClientSettingsWrites(refreshClientSettingsFromOtherTab);
+  const unsubscribeWindows =
+    typeof window === "undefined"
+      ? undefined
+      : window.desktopBridge?.onClientSettingsChanged?.(refreshClientSettingsFromOtherTab);
+  return () => {
+    unsubscribeTabs();
+    unsubscribeWindows?.();
+  };
 }
 
 function refreshClientSettingsFromOtherTab(): void {

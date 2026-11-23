@@ -1,17 +1,31 @@
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
 import { msg } from "gt-i18n";
 
-import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import {
+  type DesktopCreateWindowProfileInput,
+  type DesktopOpenWindowInput,
+  type DesktopSnapShotEvent,
+  type DesktopTheme,
+  type DesktopUpdateWindowProfileInput,
+  type DesktopWindowCloseDecision,
+  type DesktopWindowContext,
+  type DesktopWindowProfile,
+  type DesktopWindowsState,
+  DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
+} from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopClerk from "../app/DesktopClerk.ts";
@@ -31,6 +45,11 @@ import {
   TRACKPAD_SCROLL_BEGIN_CHANNEL,
   TRACKPAD_SCROLL_END_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
+  WINDOWS_CLOSE_REQUEST_CHANNEL,
+  WINDOWS_HUB_LINK_CHANNEL,
+  WINDOWS_HUB_PEER_GONE_CHANNEL,
+  WINDOWS_HUB_RESET_CHANNEL,
+  WINDOWS_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import {
   PASSKEY_BRIDGE_ARGUMENT,
@@ -46,6 +65,14 @@ import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts"
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
 import { copyContextMenuImage } from "./ContextMenuImage.ts";
 import { installMainWindowRemoteRequestHeaderPolicy } from "./RemoteRequestHeaders.ts";
+import { setUnthrottledHold } from "./BackgroundThrottling.ts";
+import { HubLinkBroker, type HubLinkPeer } from "./DesktopHubLinks.ts";
+import {
+  cascadeWindowBounds,
+  composeWindowTitle,
+  nextUnsavedWindowName,
+  resolveWindowCloseAction,
+} from "./DesktopWindowProfiles.ts";
 
 const TITLEBAR_HEIGHT = 40;
 
@@ -96,6 +123,9 @@ const RENDERER_RECOVERY_RELOAD_DELAY_MS = 500;
 const RENDERER_RECOVERY_MAX_ATTEMPTS = 3;
 const RENDERER_RECOVERY_WINDOW_MS = 60_000;
 const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([-2, -7, -9, -102, -105, -106, -118]);
+const MINI_WINDOW_SIZE = { width: 320, height: 184 } as const;
+const MINI_WINDOW_MIN_SIZE = { width: 240, height: 160 } as const;
+const HUB_UNTHROTTLED_REASON = "hub-serving-windows";
 
 type WindowTitleBarOptions = Pick<
   Electron.BrowserWindowConstructorOptions,
@@ -120,6 +150,37 @@ export type DesktopWindowError =
   | ElectronWindow.ElectronWindowCreateError
   | PreviewManager.PreviewManagerError;
 
+export class DesktopWindowProfileError extends Schema.TaggedError<DesktopWindowProfileError>()(
+  "DesktopWindowProfileError",
+  {
+    reason: Schema.Literals([
+      "profile-not-found",
+      "default-profile",
+      "not-a-secondary-window",
+      "multi-window-disabled",
+    ]),
+    profileId: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "profile-not-found":
+        return `Window profile ${JSON.stringify(this.profileId)} does not exist.`;
+      case "default-profile":
+        return "The main window's profile cannot be deleted.";
+      case "not-a-secondary-window":
+        return "Only a secondary window can do this.";
+      case "multi-window-disabled":
+        return "Multiple windows are turned off in Settings.";
+    }
+  }
+}
+
+export type DesktopWindowsOperationError =
+  | DesktopWindowError
+  | DesktopAppSettings.DesktopSettingsWriteError
+  | DesktopWindowProfileError;
+
 export type MainWindowZoomDirection = "in" | "out" | "reset";
 export type MainWindowContentsCommand = "reload" | "forceReload" | "toggleDevTools";
 
@@ -134,7 +195,8 @@ export class DesktopWindow extends Context.Service<
     readonly showConnectingSplash: Effect.Effect<void>;
     readonly handleBackendReady: (httpBaseUrl: URL) => Effect.Effect<void, DesktopWindowError>;
     readonly handleBackendNotReady: Effect.Effect<void>;
-    readonly flushMainWindowBounds: Effect.Effect<void>;
+    /** Before quitting: saves every window's placement and which saved profiles to reopen. */
+    readonly flushWindowState: Effect.Effect<void>;
     readonly prepareCaptureReveal: Effect.Effect<void>;
     readonly dispatchMenuAction: (
       action: string,
@@ -143,10 +205,61 @@ export class DesktopWindow extends Context.Service<
     readonly dispatchSnapShotEvent: (
       event: DesktopSnapShotEvent,
     ) => Effect.Effect<void, DesktopWindowError>;
-    // Electron zoom roles target focused guests; zoomMain must always target the app.
-    readonly zoomMain: (direction: MainWindowZoomDirection) => Effect.Effect<void>;
+    // Electron zoom roles target focused guests; this must always target an app window.
+    readonly zoomFocused: (direction: MainWindowZoomDirection) => Effect.Effect<void>;
     readonly runMainContentsCommand: (command: MainWindowContentsCommand) => Effect.Effect<void>;
+    readonly runFocusedContentsCommand: (command: MainWindowContentsCommand) => Effect.Effect<void>;
     readonly syncAppearance: Effect.Effect<void>;
+    /** A secondary window's own light/dark frame, which can differ from the main window's. */
+    readonly setWindowAppearance: (
+      window: Electron.BrowserWindow,
+      theme: DesktopTheme,
+    ) => Effect.Effect<void>;
+    readonly windowsState: Effect.Effect<DesktopWindowsState>;
+    readonly subscribeWindowsState: (
+      listener: (state: DesktopWindowsState) => void,
+    ) => Effect.Effect<void, never, Scope.Scope>;
+    readonly windowContext: (
+      window: Electron.BrowserWindow,
+    ) => Effect.Effect<Option.Option<DesktopWindowContext>>;
+    readonly openNewWindow: (
+      input: DesktopOpenWindowInput,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly openProfile: (profileId: string) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly focusWindow: (windowId: number) => Effect.Effect<void>;
+    readonly createProfile: (
+      input: DesktopCreateWindowProfileInput,
+    ) => Effect.Effect<DesktopWindowProfile, DesktopWindowsOperationError>;
+    readonly saveWindowAsProfile: (
+      window: Electron.BrowserWindow,
+      name: string,
+    ) => Effect.Effect<DesktopWindowProfile, DesktopWindowsOperationError>;
+    readonly updateProfile: (
+      input: DesktopUpdateWindowProfileInput,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly deleteProfile: (
+      profileId: string,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly setWindowProjectScopeKeys: (
+      window: Electron.BrowserWindow,
+      projectScopeKeys: ReadonlyArray<string>,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly setCloseRequestListening: (
+      window: Electron.BrowserWindow,
+      listening: boolean,
+    ) => Effect.Effect<void>;
+    readonly resolveCloseRequest: (
+      window: Electron.BrowserWindow,
+      requestId: string,
+      decision: DesktopWindowCloseDecision,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly setMiniMode: (enabled: boolean) => Effect.Effect<void>;
+    /** Turning it off blocks new secondary windows and leaves open ones open. */
+    readonly setMultiWindowEnabled: (
+      enabled: boolean,
+    ) => Effect.Effect<void, DesktopWindowsOperationError>;
+    readonly registerHub: (window: Electron.BrowserWindow) => Effect.Effect<void>;
+    readonly requestHubLink: (window: Electron.BrowserWindow) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
 
@@ -346,7 +459,7 @@ function getWindowTitleBarOptions(
 }
 
 function syncWindowAppearance(
-  window: Electron.BrowserWindow,
+  window: Pick<Electron.BrowserWindow, "isDestroyed" | "setBackgroundColor" | "setTitleBarOverlay">,
   hasTitleBarOverlay: boolean,
   shouldUseDarkColors: boolean,
   platform: NodeJS.Platform,
@@ -381,6 +494,55 @@ function bindFirstRevealTrigger(
   }
 }
 
+type AppWindowSpec =
+  | { readonly role: "main" }
+  | {
+      readonly role: "secondary";
+      readonly profile: DesktopAppSettings.DesktopWindowProfileSettings | null;
+      readonly projectScopeKeys: ReadonlyArray<string>;
+      readonly unsavedName: string;
+      readonly anchorBounds: DisplayBounds | null;
+    };
+
+interface AppWindowEntry {
+  readonly window: Electron.BrowserWindow;
+  readonly windowId: number;
+  readonly isMain: boolean;
+  /** Null while a secondary window is unsaved; the main window holds the default profile. */
+  profileId: string | null;
+  unsavedName: string;
+  /** An unsaved window's filter, kept for saving it as a profile. */
+  projectScopeKeys: ReadonlyArray<string>;
+  name: string;
+  rendererTitle: string;
+  appliedTitle: string;
+  focused: boolean;
+  rendererLive: boolean;
+  responsive: boolean;
+  closeRequestListening: boolean;
+  pendingCloseRequestId: string | null;
+  closeApproved: boolean;
+  appearance: DesktopTheme | null;
+  hubUnthrottled: boolean;
+  readPlacement: () => {
+    readonly bounds: DesktopAppSettings.DesktopWindowBounds;
+    readonly isMaximized: boolean;
+  } | null;
+  flushPlacement: Effect.Effect<void>;
+}
+
+const serializeWindowsState = (state: DesktopWindowsState) => JSON.stringify(state);
+
+const toWindowProfile = (
+  profile: DesktopAppSettings.DesktopWindowProfileSettings,
+): DesktopWindowProfile => ({
+  id: profile.id,
+  name: profile.name,
+  projectScopeKeys: profile.projectScopeKeys,
+  theme: profile.theme,
+  isDefault: profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID,
+});
+
 /** @public */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -397,20 +559,43 @@ export const make = Effect.gen(function* () {
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
+  const random = yield* SecureRandom.SecureRandom;
   const backendReadyRef = yield* Ref.make(false);
   let backendHasStarted = false;
   let mainClosedDuringStartup = false;
+  let reopenedProfilesAtLaunch = false;
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  const runSync = Effect.runSyncWith(context);
   const mainWindowMutex = yield* Semaphore.make(1);
   const pendingMainReveals = new WeakMap<Electron.BrowserWindow, Effect.Effect<void>>();
   const revealMain = Effect.fn("desktop.window.revealMain")((window: Electron.BrowserWindow) =>
     Effect.suspend(() => pendingMainReveals.get(window) ?? electronWindow.reveal(window)),
   );
-  let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
   let remoteRequestHeaderOwner: Electron.BrowserWindow | null = null;
+  const entries = new Map<number, AppWindowEntry>();
+  // Placement writes still running for windows that already closed; quitting waits for them.
+  const closedPlacementWrites = new Set<Fiber.Fiber<void, never>>();
+  const stateListeners = new Set<(state: DesktopWindowsState) => void>();
+  let lastBroadcastState = "";
+  // The main window's placement before mini mode, restored when it ends and saved instead of the panel.
+  let miniPlacement: { readonly bounds: DisplayBounds; readonly isMaximized: boolean } | null =
+    null;
+  const hubLinks = new HubLinkBroker<Electron.MessagePortMain>(
+    () => new Electron.MessageChannelMain(),
+  );
+
+  const liveEntries = () => [...entries.values()].filter((entry) => !entry.window.isDestroyed());
+  const mainEntry = () => liveEntries().find((entry) => entry.isMain);
+  const secondaryEntries = () => liveEntries().filter((entry) => !entry.isMain);
+  const entryOf = (window: Electron.BrowserWindow) => {
+    const entry = entries.get(window.id);
+    return entry !== undefined && entry.window === window && !window.isDestroyed()
+      ? entry
+      : undefined;
+  };
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -444,18 +629,105 @@ export const make = Effect.gen(function* () {
     yield* previewManager.reapplyZoom();
   });
 
-  const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
-    Option.Option<Electron.BrowserWindow>,
-    DesktopWindowError
-  > {
-    if (yield* Ref.get(desktopState.quitting)) return Option.none();
-    yield* previewManager.getBrowserSession();
-    const applicationUrl = getDesktopUrl(environment.isDevelopment);
-    const iconPaths = yield* assets.iconPaths;
-    const iconOption = getIconOption(iconPaths, environment.platform);
-    const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
-    const persistedSettings = yield* desktopSettings.get;
-    const persistedBounds = persistedSettings.mainWindowBounds;
+  const nextUnsavedName = () =>
+    nextUnsavedWindowName(
+      liveEntries().flatMap((entry) => (entry.profileId === null ? [entry.unsavedName] : [])),
+    );
+
+  const titleFor = (entry: AppWindowEntry) =>
+    composeWindowTitle({
+      rendererTitle: entry.rendererTitle,
+      fallbackTitle: environment.displayName,
+      isMain: entry.isMain,
+      windowName: entry.name,
+      secondaryWindowCount: secondaryEntries().length,
+    });
+
+  const computeWindowsState = Effect.gen(function* () {
+    const settings = yield* desktopSettings.get;
+    const live = liveEntries().sort((left, right) => Number(right.isMain) - Number(left.isMain));
+    return {
+      profiles: settings.windowProfiles.map(toWindowProfile),
+      windows: live.map((entry) => ({
+        windowId: entry.windowId,
+        isMain: entry.isMain,
+        profileId: entry.profileId,
+        name: entry.name,
+        title: entry.appliedTitle,
+        focused: entry.focused,
+        projectScopeKeys: entry.projectScopeKeys,
+      })),
+      miniMode: miniPlacement !== null,
+      multiWindowEnabled: settings.multiWindowEnabled,
+    } satisfies DesktopWindowsState;
+  });
+
+  // The hub must keep serving secondary windows while it is hidden, minimized or a mini panel.
+  const syncHubThrottling = () => {
+    const main = mainEntry();
+    if (main === undefined) return;
+    const held = secondaryEntries().length > 0 || miniPlacement !== null;
+    if (held === main.hubUnthrottled) return;
+    main.hubUnthrottled = held;
+    setUnthrottledHold(main.window, HUB_UNTHROTTLED_REASON, held);
+  };
+
+  // Names, titles, renderers and menu listeners all follow from the open windows and profiles.
+  const syncWindows = Effect.fn("desktop.window.syncWindows")(function* () {
+    const settings = yield* desktopSettings.get;
+    for (const entry of liveEntries()) {
+      // The main window always holds the default profile, which cannot be deleted.
+      const profile = settings.windowProfiles.find((candidate) => candidate.id === entry.profileId);
+      entry.name = profile?.name ?? entry.unsavedName;
+      const title = titleFor(entry);
+      if (title !== entry.appliedTitle) {
+        entry.appliedTitle = title;
+        entry.window.setTitle(title);
+      }
+    }
+    syncHubThrottling();
+    const state = yield* computeWindowsState;
+    const serialized = serializeWindowsState(state);
+    if (serialized === lastBroadcastState) return;
+    lastBroadcastState = serialized;
+    for (const entry of liveEntries()) {
+      if (entry.rendererLive) entry.window.webContents.send(WINDOWS_STATE_CHANNEL, state);
+    }
+    for (const listener of stateListeners) listener(state);
+  });
+  const requestSync = () => {
+    runFork(syncWindows());
+  };
+
+  const notifyHubReset = () => {
+    if (!hubLinks.resetHub()) return;
+    for (const entry of secondaryEntries()) {
+      if (entry.rendererLive) entry.window.webContents.send(WINDOWS_HUB_RESET_CHANNEL);
+    }
+  };
+  const notifyHubPeerGone = (windowId: number) => {
+    if (!hubLinks.peerGone(windowId)) return;
+    const main = mainEntry();
+    if (main !== undefined) main.window.webContents.send(WINDOWS_HUB_PEER_GONE_CHANNEL, windowId);
+  };
+  const hubPeer = (entry: AppWindowEntry): HubLinkPeer<Electron.MessagePortMain> => ({
+    windowId: entry.windowId,
+    deliver: (port, peerWindowId) => {
+      if (entry.window.isDestroyed()) {
+        port.close();
+        return;
+      }
+      entry.window.webContents.postMessage(WINDOWS_HUB_LINK_CHANNEL, { peerWindowId }, [port]);
+    },
+  });
+
+  const updateProfiles = (
+    update: (
+      profiles: ReadonlyArray<DesktopAppSettings.DesktopWindowProfileSettings>,
+    ) => ReadonlyArray<DesktopAppSettings.DesktopWindowProfileSettings>,
+  ) => desktopSettings.updateWindowProfiles(update).pipe(Effect.andThen(syncWindows()));
+
+  const readDisplayBounds = Effect.gen(function* () {
     const displayBoundsResult = yield* Effect.sync(() => {
       try {
         return {
@@ -466,17 +738,47 @@ export const make = Effect.gen(function* () {
         return { _tag: "Failure" as const, cause };
       }
     });
-    const displayBounds =
-      displayBoundsResult._tag === "Success"
-        ? displayBoundsResult.bounds
-        : yield* logWindowWarning("failed to read connected displays; using defaults", {
-            cause: displayBoundsResult.cause,
-          }).pipe(Effect.as<readonly Electron.Rectangle[]>([]));
-    const initialBounds = resolveInitialMainWindowBounds(persistedBounds, displayBounds);
-    const restoredPersistedBounds = persistedBounds !== null && initialBounds === persistedBounds;
-    if (persistedBounds !== null && initialBounds === DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE) {
-      yield* logWindowWarning("saved main window bounds could not be restored; using defaults");
+    return displayBoundsResult._tag === "Success"
+      ? displayBoundsResult.bounds
+      : yield* logWindowWarning("failed to read connected displays; using defaults", {
+          cause: displayBoundsResult.cause,
+        }).pipe(Effect.as<readonly Electron.Rectangle[]>([]));
+  });
+
+  const buildAppWindow = Effect.fn("desktop.window.createWindow")(function* (
+    spec: AppWindowSpec,
+  ): Effect.fn.Return<Option.Option<Electron.BrowserWindow>, DesktopWindowError> {
+    if (yield* Ref.get(desktopState.quitting)) return Option.none();
+    const isMain = spec.role === "main";
+    yield* previewManager.getBrowserSession();
+    const applicationUrl = getDesktopUrl(environment.isDevelopment);
+    const iconPaths = yield* assets.iconPaths;
+    const iconOption = getIconOption(iconPaths, environment.platform);
+    const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
+    const persistedSettings = yield* desktopSettings.get;
+    const persistedProfile =
+      spec.role === "main"
+        ? DesktopAppSettings.defaultWindowProfile(persistedSettings)
+        : spec.profile;
+    const persistedBounds = persistedProfile?.bounds ?? null;
+    const persistedMaximized = persistedProfile?.maximized ?? false;
+    const displayBounds = yield* readDisplayBounds;
+    const restorableBounds = resolveInitialMainWindowBounds(persistedBounds, displayBounds);
+    const restoredPersistedBounds =
+      persistedBounds !== null && restorableBounds === persistedBounds;
+    if (persistedBounds !== null && !restoredPersistedBounds) {
+      yield* logWindowWarning("saved window bounds could not be restored; using defaults", {
+        role: spec.role,
+      });
     }
+    const initialBounds =
+      spec.role === "secondary" && !restoredPersistedBounds
+        ? cascadeWindowBounds({
+            anchor: spec.anchorBounds,
+            size: DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE,
+            displays: displayBounds,
+          })
+        : restorableBounds;
     if (yield* Ref.get(desktopState.quitting)) return Option.none();
     const window = yield* electronWindow.create({
       ...initialBounds,
@@ -507,11 +809,34 @@ export const make = Effect.gen(function* () {
       return Option.none();
     }
 
-    pendingMainReveals.set(window, Effect.void);
+    if (isMain) pendingMainReveals.set(window, Effect.void);
+    setUnthrottledHold(window, "first-reveal", true);
     yield* rendererHistory.register(window.webContents, { surface: "main" });
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
     }
+    const entry: AppWindowEntry = {
+      window,
+      windowId: window.id,
+      isMain,
+      profileId:
+        spec.role === "main" ? DEFAULT_DESKTOP_WINDOW_PROFILE_ID : (spec.profile?.id ?? null),
+      unsavedName: spec.role === "main" ? "" : spec.unsavedName,
+      projectScopeKeys: spec.role === "main" ? [] : spec.projectScopeKeys,
+      name: "",
+      rendererTitle: environment.displayName,
+      appliedTitle: environment.displayName,
+      focused: false,
+      rendererLive: false,
+      responsive: true,
+      closeRequestListening: false,
+      pendingCloseRequestId: null,
+      closeApproved: false,
+      appearance: null,
+      hubUnthrottled: false,
+      readPlacement: () => null,
+      flushPlacement: Effect.void,
+    };
     let boundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let pendingBoundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let boundsPersistenceEnabled = persistedBounds === null || restoredPersistedBounds;
@@ -522,6 +847,10 @@ export const make = Effect.gen(function* () {
     const readPersistableState = () => {
       if (window.isDestroyed()) {
         return null;
+      }
+      if (isMain && miniPlacement !== null) {
+        const bounds = DesktopAppSettings.normalizeMainWindowBounds(miniPlacement.bounds);
+        return bounds === null ? null : { bounds, isMaximized: miniPlacement.isMaximized };
       }
       // Minimized windows report stale state on some platforms (macOS: not maximized, the
       // pre-move normal frame; Windows: -32000), so they keep the state seen before minimizing.
@@ -547,12 +876,15 @@ export const make = Effect.gen(function* () {
         persistableBounds === null ? null : { bounds: persistableBounds, isMaximized };
       return lastPersistableState;
     };
+    entry.readPlacement = readPersistableState;
     const fallbackWindowBounds = boundsPersistenceEnabled
       ? null
       : (readPersistableState()?.bounds ?? null);
-    const fallbackWindowMaximized = persistedSettings.mainWindowMaximized;
+    const fallbackWindowMaximized = persistedMaximized;
     const persistCurrentBounds = (): Fiber.Fiber<void, never> | undefined => {
-      if (!boundsPersistenceEnabled) {
+      // Unsaved windows keep no placement until they are saved as a profile.
+      const profileId = entry.profileId;
+      if (!boundsPersistenceEnabled || profileId === null) {
         return pendingBoundsPersistFiber;
       }
       const state = readPersistableState();
@@ -560,10 +892,10 @@ export const make = Effect.gen(function* () {
         return pendingBoundsPersistFiber;
       }
       pendingBoundsPersistFiber = runFork(
-        desktopSettings.setMainWindowBounds(state.bounds, state.isMaximized).pipe(
+        desktopSettings.setWindowProfilePlacement(profileId, state.bounds, state.isMaximized).pipe(
           Effect.asVoid,
           Effect.catch((error) =>
-            logWindowWarning("failed to persist main window bounds", {
+            logWindowWarning("failed to persist window bounds", {
               message: error.message,
             }),
           ),
@@ -615,9 +947,13 @@ export const make = Effect.gen(function* () {
         fiber === undefined ? Effect.void : Fiber.join(fiber).pipe(Effect.asVoid),
       ),
     );
-    flushMainWindowBounds = flushBoundsPersist;
+    entry.flushPlacement = flushBoundsPersist;
 
-    yield* previewManager.setMainWindow(window);
+    if (isMain) {
+      yield* previewManager.setMainWindow(window);
+    } else {
+      yield* previewManager.registerSecondaryWindow(window);
+    }
     if (yield* Ref.get(desktopState.quitting)) {
       yield* electronWindow.destroyAll;
       return Option.none();
@@ -794,6 +1130,18 @@ export const make = Effect.gen(function* () {
         void runPromise(electronShell.openExternal(url));
       }
     });
+    // A new document drops the old renderer's hub links and close-request listener.
+    const rendererGone = () => {
+      entry.rendererLive = false;
+      entry.closeRequestListening = false;
+      entry.pendingCloseRequestId = null;
+      if (isMain) notifyHubReset();
+      else notifyHubPeerGone(entry.windowId);
+    };
+    window.webContents.on("did-start-navigation", (event) => {
+      if (event.isMainFrame && !event.isSameDocument) rendererGone();
+    });
+    window.webContents.on("destroyed", rendererGone);
 
     const quitShortcutHandler = makeQuitShortcutHandler({
       platform: environment.platform,
@@ -849,19 +1197,59 @@ export const make = Effect.gen(function* () {
       runFork(zoomWindow(window, direction));
     });
 
-    // The renderer titles the window after the open thread; only a blank title
-    // falls back to the app name.
+    // The renderer titles the window after the open thread; a blank title falls back to the
+    // app name, and the window's name is appended once several windows are open.
     window.on("page-title-updated", (event, title) => {
-      if (title.trim() !== "") return;
-      event.preventDefault();
-      window.setTitle(environment.displayName);
+      entry.rendererTitle = title;
+      const composed = titleFor(entry);
+      const changed = composed !== entry.appliedTitle;
+      entry.appliedTitle = composed;
+      if (composed !== title) {
+        event.preventDefault();
+        window.setTitle(composed);
+      }
+      if (changed && entries.size > 1) requestSync();
     });
     window.on("resize", scheduleBoundsPersist);
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
-      runFork(flushBoundsPersist);
+    // Focus only matters to the list of other windows.
+    window.on("focus", () => {
+      entry.focused = true;
+      if (entries.size > 1) requestSync();
+    });
+    window.on("blur", () => {
+      entry.focused = false;
+      if (entries.size > 1) requestSync();
+    });
+    window.on("unresponsive", () => {
+      entry.responsive = false;
+    });
+    window.on("responsive", () => {
+      entry.responsive = true;
+    });
+    window.on("close", (event) => {
+      const action = resolveWindowCloseAction({
+        isMain,
+        quitting: runSync(Ref.get(desktopState.quitting)),
+        saved: entry.profileId !== null,
+        secondaryWindowCount: secondaryEntries().length,
+        closeApproved: entry.closeApproved,
+        rendererCanPrompt: entry.rendererLive && entry.responsive && entry.closeRequestListening,
+        promptPending: entry.pendingCloseRequestId !== null,
+      });
+      if (action === "close") {
+        runFork(flushBoundsPersist);
+        return;
+      }
+      event.preventDefault();
+      if (action === "hide") {
+        window.hide();
+        requestSync();
+      } else if (action === "prompt") {
+        runFork(requestClose(entry));
+      }
     });
 
     if (environment.platform === "darwin") {
@@ -936,6 +1324,11 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       if (environment.platform === "darwin") syncMacosWindowButtons(window);
+      entry.rendererLive = true;
+      if (entries.size > 1 || !isMain) {
+        lastBroadcastState = "";
+        requestSync();
+      }
     });
     window.webContents.on(
       "did-fail-load",
@@ -954,7 +1347,8 @@ export const make = Effect.gen(function* () {
             ? scheduleDevelopmentLoadRetry()
             : undefined;
         void runPromise(
-          logWindowWarning("main window failed to load", {
+          logWindowWarning("app window failed to load", {
+            role: spec.role,
             errorCode,
             errorDescription,
             url: validatedURL,
@@ -964,6 +1358,7 @@ export const make = Effect.gen(function* () {
       },
     );
     window.webContents.on("render-process-gone", (_event, details) => {
+      rendererGone();
       const recoverable =
         details.reason === "crashed" ||
         details.reason === "oom" ||
@@ -992,7 +1387,8 @@ export const make = Effect.gen(function* () {
                   RENDERER_RECOVERY_RELOAD_DELAY_MS,
                   oldestAttempt + RENDERER_RECOVERY_WINDOW_MS - now,
                 );
-          yield* logWindowWarning("main window render process gone", {
+          yield* logWindowWarning("app window render process gone", {
+            role: spec.role,
             reason: details.reason,
             exitCode: details.exitCode,
             recovering: shouldRecover,
@@ -1026,61 +1422,93 @@ export const make = Effect.gen(function* () {
         return;
       firstRevealComplete = true;
       pendingMainReveals.delete(window);
-      window.webContents.setBackgroundThrottling(true);
-      if (persistedSettings.mainWindowMaximized) window.maximize();
+      setUnthrottledHold(window, "first-reveal", false);
+      if (persistedMaximized && (isMain || restoredPersistedBounds)) window.maximize();
       yield* electronWindow.reveal(window);
-      yield* dismissConnectingSplash;
+      if (isMain) yield* dismissConnectingSplash;
     });
-    pendingMainReveals.set(window, revealWhenReady);
+    if (isMain) pendingMainReveals.set(window, revealWhenReady);
     bindFirstRevealTrigger(revealSubscribers, () => {
       rendererReady = true;
       void runPromise(revealWhenReady);
     });
 
-    // Desktop IPC only answers the main window, so register it before its renderer can call in.
-    yield* electronWindow.setMain(window);
-    remoteRequestHeaderOwner = window;
-    const detachRemoteRequestHeaders = installMainWindowRemoteRequestHeaderPolicy(
-      window.webContents.session,
-      {
-        desktopOrigin: getDesktopOrigin(environment.isDevelopment),
-        mainWebContentsId: window.webContents.id,
-        clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
-        devServerOrigin: Option.getOrUndefined(
-          Option.map(environment.devServerUrl, (url) => url.origin),
-        ),
-        isDevelopment: environment.isDevelopment,
-      },
-    );
+    entries.set(window.id, entry);
+    // Desktop IPC only answers app windows, so register this one before its renderer can call in.
+    let detachRemoteRequestHeaders = () => {};
+    if (isMain) {
+      yield* electronWindow.setMain(window);
+      // App windows share one session, whose single header listener follows the main window.
+      remoteRequestHeaderOwner = window;
+      detachRemoteRequestHeaders = installMainWindowRemoteRequestHeaderPolicy(
+        window.webContents.session,
+        {
+          desktopOrigin: getDesktopOrigin(environment.isDevelopment),
+          mainWebContentsId: window.webContents.id,
+          clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,
+          devServerOrigin: Option.getOrUndefined(
+            Option.map(environment.devServerUrl, (url) => url.origin),
+          ),
+          isDevelopment: environment.isDevelopment,
+        },
+      );
+    } else {
+      yield* electronWindow.registerApp(window);
+    }
+    yield* syncWindows();
     loadApplication();
-    if (environment.isDevelopment) {
+    if (isMain && environment.isDevelopment) {
       window.webContents.openDevTools({ mode: "detach" });
     }
 
     window.on("closed", () => {
-      if (!backendHasStarted) mainClosedDuringStartup = true;
+      if (entries.get(window.id) === entry) entries.delete(window.id);
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
       if (remoteRequestHeaderOwner === window) {
         remoteRequestHeaderOwner = null;
         detachRemoteRequestHeaders();
       }
-      void runPromise(electronWindow.clearMain(Option.some(window)));
+      if (pendingBoundsPersistFiber !== undefined) {
+        const write = pendingBoundsPersistFiber;
+        closedPlacementWrites.add(write);
+        write.addObserver(() => closedPlacementWrites.delete(write));
+      }
+      if (isMain) {
+        if (!backendHasStarted) mainClosedDuringStartup = true;
+        miniPlacement = null;
+        notifyHubReset();
+        void runPromise(electronWindow.clearMain(Option.some(window)));
+      } else {
+        notifyHubPeerGone(entry.windowId);
+        runFork(handleSecondaryClosed(entry));
+      }
+      requestSync();
     });
 
     return Option.some(window);
   });
 
-  const createMain = Effect.gen(function* () {
-    const window = yield* createWindow();
+  const createMain: Effect.Effect<
+    Option.Option<Electron.BrowserWindow>,
+    DesktopWindowError
+  > = Effect.gen(function* () {
+    const window = yield* buildAppWindow({ role: "main" });
     if (Option.isSome(window)) {
       mainClosedDuringStartup = false;
       yield* logWindowInfo("main window created");
+      if (!reopenedProfilesAtLaunch) {
+        reopenedProfilesAtLaunch = true;
+        yield* Effect.forkDetach(reopenProfilesOpenAtQuit);
+      }
     }
     return window;
   }).pipe(Effect.withSpan("desktop.window.createMain"));
 
-  const ensureMain = Effect.gen(function* () {
+  const ensureMain: Effect.Effect<
+    Option.Option<Electron.BrowserWindow>,
+    DesktopWindowError
+  > = Effect.gen(function* () {
     if (yield* Ref.get(desktopState.quitting)) return Option.none<Electron.BrowserWindow>();
     const existingWindow = yield* electronWindow.main;
     if (Option.isSome(existingWindow)) {
@@ -1100,6 +1528,162 @@ export const make = Effect.gen(function* () {
     yield* revealMain(window);
     return window;
   }).pipe(Effect.withSpan("desktop.window.revealOrCreateMain"));
+
+  const openSecondary = Effect.fn("desktop.window.openSecondary")(function* (input: {
+    readonly profile: DesktopAppSettings.DesktopWindowProfileSettings | null;
+    readonly projectScopeKeys: ReadonlyArray<string>;
+  }): Effect.fn.Return<void, DesktopWindowError> {
+    // Secondary windows reach environments through the main window's renderer.
+    if (Option.isNone(yield* ensureMain)) return;
+    const anchor = yield* electronWindow.focusedApp;
+    yield* buildAppWindow({
+      role: "secondary",
+      profile: input.profile,
+      projectScopeKeys: input.projectScopeKeys,
+      unsavedName: nextUnsavedName(),
+      anchorBounds:
+        Option.isSome(anchor) && !anchor.value.isDestroyed() ? anchor.value.getBounds() : null,
+    });
+  });
+
+  const reopenProfilesOpenAtQuit: Effect.Effect<void> = Effect.gen(function* () {
+    const settings = yield* desktopSettings.get;
+    if (!settings.multiWindowEnabled) return;
+    for (const profile of settings.windowProfiles) {
+      if (!profile.openAtQuit || profile.id === DEFAULT_DESKTOP_WINDOW_PROFILE_ID) continue;
+      yield* openSecondary({ profile, projectScopeKeys: profile.projectScopeKeys });
+    }
+  }).pipe(
+    Effect.catchCause((cause) => logWindowWarning("failed to reopen saved windows", { cause })),
+    Effect.withSpan("desktop.window.reopenProfilesOpenAtQuit"),
+  );
+
+  const handleSecondaryClosed = Effect.fn("desktop.window.handleSecondaryClosed")(function* (
+    entry: AppWindowEntry,
+  ) {
+    if (yield* Ref.get(desktopState.quitting)) return;
+    const profileId = entry.profileId;
+    if (profileId !== null) {
+      yield* updateProfiles((profiles) =>
+        profiles.map((profile) =>
+          profile.id === profileId ? { ...profile, openAtQuit: false } : profile,
+        ),
+      ).pipe(
+        Effect.catch((error) =>
+          logWindowWarning("failed to save a closed window's profile", { message: error.message }),
+        ),
+      );
+    }
+    const main = mainEntry();
+    if (secondaryEntries().length > 0 || main === undefined || main.window.isVisible()) return;
+    // The hidden main window kept the app alive for its secondary windows; without them, quit
+    // as closing the last window always has. macOS apps outlive their windows.
+    if (environment.platform !== "darwin") main.window.close();
+  });
+
+  const newId = Effect.map(random.uuidV4(), (uuid) => uuid.replace(/-/g, ""));
+
+  /** Saves a new profile, as normalized; fails if normalizing dropped it. */
+  const addProfile = Effect.fn("desktop.window.addProfile")(function* (
+    profile: Omit<DesktopAppSettings.DesktopWindowProfileSettings, "id" | "openAtQuit">,
+  ) {
+    const id = yield* newId;
+    const { settings } = yield* desktopSettings.updateWindowProfiles((profiles) => [
+      ...profiles,
+      { ...profile, id, name: profile.name.trim(), openAtQuit: false },
+    ]);
+    const saved = settings.windowProfiles.find((candidate) => candidate.id === id);
+    if (saved === undefined) {
+      return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId: id });
+    }
+    return saved;
+  });
+
+  const createProfileFor = Effect.fn("desktop.window.createProfileFor")(function* (
+    entry: AppWindowEntry,
+    name: string,
+  ) {
+    const placement = entry.readPlacement();
+    const saved = yield* addProfile({
+      name,
+      projectScopeKeys: entry.projectScopeKeys,
+      theme: null,
+      bounds: placement?.bounds ?? null,
+      maximized: placement?.isMaximized ?? false,
+    });
+    entry.profileId = saved.id;
+    yield* syncWindows();
+    return saved;
+  });
+
+  const requestClose = Effect.fn("desktop.window.requestClose")(function* (entry: AppWindowEntry) {
+    const requestId = yield* newId;
+    entry.pendingCloseRequestId = requestId;
+    if (entry.window.isDestroyed()) return;
+    entry.window.webContents.send(WINDOWS_CLOSE_REQUEST_CHANNEL, {
+      requestId,
+      suggestedName: entry.unsavedName,
+    });
+    yield* electronWindow.reveal(entry.window);
+  });
+
+  const requireMultiWindowEnabled = Effect.gen(function* () {
+    if ((yield* desktopSettings.get).multiWindowEnabled) return;
+    return yield* new DesktopWindowProfileError({
+      reason: "multi-window-disabled",
+      profileId: null,
+    });
+  });
+
+  const requireSecondary = (window: Electron.BrowserWindow) => {
+    const entry = entryOf(window);
+    return entry === undefined || entry.isMain
+      ? Effect.fail(
+          new DesktopWindowProfileError({ reason: "not-a-secondary-window", profileId: null }),
+        )
+      : Effect.succeed(entry);
+  };
+
+  const setMiniMode = Effect.fn("desktop.window.setMiniMode")(function* (enabled: boolean) {
+    yield* Effect.annotateCurrentSpan({ enabled });
+    const main = mainEntry();
+    if (main === undefined || enabled === (miniPlacement !== null)) return;
+    const window = main.window;
+    if (enabled) {
+      const isMaximized = window.isMaximized();
+      const bounds =
+        isMaximized || window.isFullScreen() ? window.getNormalBounds() : window.getBounds();
+      miniPlacement = { bounds, isMaximized };
+      if (window.isFullScreen()) window.setFullScreen(false);
+      if (isMaximized) window.unmaximize();
+      window.setMinimumSize(MINI_WINDOW_MIN_SIZE.width, MINI_WINDOW_MIN_SIZE.height);
+      window.setBounds({
+        x: bounds.x + Math.max(0, bounds.width - MINI_WINDOW_SIZE.width),
+        y: bounds.y,
+        ...MINI_WINDOW_SIZE,
+      });
+    } else {
+      const previous = miniPlacement;
+      miniPlacement = null;
+      window.setMinimumSize(
+        DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width,
+        DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height,
+      );
+      if (previous !== null) {
+        window.setBounds(previous.bounds);
+        if (previous.isMaximized) window.maximize();
+      }
+    }
+    // The panel's top bar stands in for the traffic lights. Windows and Linux keep the title bar
+    // overlay, which Electron cannot take off a created window, so the panel keeps only Close.
+    if (environment.platform === "darwin") window.setWindowButtonVisibility(!enabled);
+    else {
+      window.setMinimizable(!enabled);
+      window.setMaximizable(!enabled);
+    }
+    yield* electronWindow.reveal(window);
+    yield* syncWindows();
+  });
 
   const waitingForBackend = Effect.gen(function* () {
     if (yield* Ref.get(backendReadyRef)) return false;
@@ -1166,14 +1750,22 @@ export const make = Effect.gen(function* () {
   const dispatchRendererEvent = Effect.fn("desktop.window.dispatchRendererEvent")(function* (
     channel: string,
     payload: unknown,
-    { reveal = true }: { readonly reveal?: boolean } = {},
-  ) {
-    if (yield* Ref.get(desktopState.quitting)) return;
-    // Only the main renderer loads the app preload that listens on these channels.
-    const existingWindow = yield* electronWindow.main;
-    if (Option.isNone(existingWindow) && (!reveal || (yield* waitingForBackend))) return;
+    {
+      reveal = true,
+      target,
+    }: { readonly reveal?: boolean; readonly target?: Electron.BrowserWindow } = {},
+  ): Effect.fn.Return<Option.Option<Electron.BrowserWindow>, DesktopWindowError> {
+    if (yield* Ref.get(desktopState.quitting)) return Option.none();
+    // Only app renderers load the preload that listens on these channels; the focused one acts.
+    const existingWindow =
+      target !== undefined && !target.isDestroyed()
+        ? Option.some(target)
+        : yield* electronWindow.focusedApp;
+    if (Option.isNone(existingWindow) && (!reveal || (yield* waitingForBackend))) {
+      return Option.none();
+    }
     const window = Option.isSome(existingWindow) ? existingWindow : yield* ensureMain;
-    if (Option.isNone(window) || window.value.isDestroyed()) return;
+    if (Option.isNone(window) || window.value.isDestroyed()) return Option.none();
     const targetWindow = window.value;
     const send = Effect.sync(() => {
       if (!targetWindow.isDestroyed()) targetWindow.webContents.send(channel, payload);
@@ -1184,17 +1776,38 @@ export const make = Effect.gen(function* () {
       : send;
     if (targetWindow.webContents.isLoadingMainFrame()) {
       targetWindow.webContents.once("did-finish-load", () => void runPromise(dispatch));
-      return;
+      return window;
     }
     yield* dispatch;
+    return window;
   });
+  // A capture finishes in the window it started in, even if focus moved meanwhile.
+  const captureWindows = new Map<string, Electron.BrowserWindow>();
+
+  const runContentsCommand = (
+    window: Electron.BrowserWindow,
+    command: MainWindowContentsCommand,
+  ) => {
+    if (window.isDestroyed()) return;
+    const webContents = window.webContents;
+    if (command === "reload") webContents.reload();
+    else if (command === "forceReload") webContents.reloadIgnoringCache();
+    else webContents.toggleDevTools();
+  };
+
+  const appearanceDark = (theme: DesktopTheme, systemDark: boolean) =>
+    theme === "system" ? systemDark : theme === "dark";
 
   return DesktopWindow.of({
     createMain: createMain.pipe(Effect.flatMap(requireWindow)),
     ensureMain: ensureMain.pipe(Effect.flatMap(requireWindow)),
     revealOrCreateMain,
     prepareCaptureReveal: Effect.gen(function* () {
-      const existingWindow = yield* currentMainWindow;
+      // The capture lands in the focused app window, so that is the one to bring forward.
+      const focusedWindow = yield* electronWindow.focusedApp;
+      const existingWindow = Option.isSome(focusedWindow)
+        ? focusedWindow
+        : yield* currentMainWindow;
       if (Option.isSome(existingWindow) && !pendingMainReveals.has(existingWindow.value)) {
         yield* electronWindow.prepareReveal(existingWindow.value);
       }
@@ -1231,9 +1844,22 @@ export const make = Effect.gen(function* () {
     handleBackendNotReady: Ref.set(backendReadyRef, false).pipe(
       Effect.withSpan("desktop.window.handleBackendNotReady"),
     ),
-    flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
-      Effect.withSpan("desktop.window.flushMainWindowBounds"),
-    ),
+    flushWindowState: Effect.gen(function* () {
+      const openProfileIds = new Set(
+        secondaryEntries().flatMap((entry) => (entry.profileId === null ? [] : [entry.profileId])),
+      );
+      yield* desktopSettings
+        .updateWindowProfiles((profiles) =>
+          profiles.map((profile) => ({ ...profile, openAtQuit: openProfileIds.has(profile.id) })),
+        )
+        .pipe(
+          Effect.catch((error) =>
+            logWindowWarning("failed to save which windows to reopen", { message: error.message }),
+          ),
+        );
+      yield* Effect.forEach(entries.values(), (entry) => entry.flushPlacement, { discard: true });
+      yield* Fiber.joinAll([...closedPlacementWrites]);
+    }).pipe(Effect.withSpan("desktop.window.flushWindowState")),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action, options) {
       yield* Effect.annotateCurrentSpan({ action });
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);
@@ -1243,13 +1869,26 @@ export const make = Effect.gen(function* () {
         event: event.type,
         captureId: "id" in event ? (event.id ?? null) : null,
       });
-      yield* dispatchRendererEvent(SNAP_SHOT_EVENT_CHANNEL, event, {
+      if (event.type === "shortcut-changed") {
+        for (const entry of entries.values()) {
+          if (!entry.window.isDestroyed())
+            entry.window.webContents.send(SNAP_SHOT_EVENT_CHANNEL, event);
+        }
+        return;
+      }
+      const id = event.id;
+      const started = id === undefined ? undefined : captureWindows.get(id);
+      const delivered = yield* dispatchRendererEvent(SNAP_SHOT_EVENT_CHANNEL, event, {
         reveal: event.type === "started",
+        ...(started === undefined ? {} : { target: started }),
       });
+      if (id === undefined) return;
+      if (event.type === "ready" || event.type === "failed") captureWindows.delete(id);
+      else if (Option.isSome(delivered)) captureWindows.set(id, delivered.value);
     }),
-    zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
+    zoomFocused: Effect.fn("desktop.window.zoomFocused")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
-      const window = yield* electronWindow.main;
+      const window = yield* electronWindow.focusedApp;
       if (Option.isNone(window) || window.value.isDestroyed()) {
         return;
       }
@@ -1257,20 +1896,212 @@ export const make = Effect.gen(function* () {
     }),
     runMainContentsCommand: Effect.fn("desktop.window.runMainContentsCommand")(function* (command) {
       yield* Effect.annotateCurrentSpan({ command });
-      // A focused OAuth popup must not receive the app's Reload command.
       const window = yield* electronWindow.main;
-      if (Option.isNone(window) || window.value.isDestroyed()) return;
-      const webContents = window.value.webContents;
-      if (command === "reload") webContents.reload();
-      else if (command === "forceReload") webContents.reloadIgnoringCache();
-      else webContents.toggleDevTools();
+      if (Option.isSome(window)) runContentsCommand(window.value, command);
     }),
+    runFocusedContentsCommand: Effect.fn("desktop.window.runFocusedContentsCommand")(
+      function* (command) {
+        yield* Effect.annotateCurrentSpan({ command });
+        // A focused OAuth popup must not receive the app's Reload command.
+        const window = yield* electronWindow.focusedApp;
+        if (Option.isSome(window)) runContentsCommand(window.value, command);
+      },
+    ),
     syncAppearance: Effect.gen(function* () {
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
-      yield* electronWindow.syncAllAppearance((window, { titleBarOverlay }) =>
-        syncWindowAppearance(window, titleBarOverlay, shouldUseDarkColors, environment.platform),
-      );
+      yield* electronWindow.syncAllAppearance((window, { titleBarOverlay }) => {
+        const appearance = entries.get(window.id)?.appearance ?? null;
+        return syncWindowAppearance(
+          window,
+          titleBarOverlay,
+          appearance === null
+            ? shouldUseDarkColors
+            : appearanceDark(appearance, shouldUseDarkColors),
+          environment.platform,
+        );
+      });
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    setWindowAppearance: Effect.fn("desktop.window.setWindowAppearance")(function* (window, theme) {
+      const entry = entryOf(window);
+      if (entry === undefined) return;
+      entry.appearance = theme;
+      yield* syncWindowAppearance(
+        window,
+        environment.platform !== "darwin",
+        appearanceDark(theme, yield* electronTheme.shouldUseDarkColors),
+        environment.platform,
+      );
+    }),
+    windowsState: computeWindowsState,
+    subscribeWindowsState: Effect.fn("desktop.window.subscribeWindowsState")(function* (listener) {
+      yield* Effect.acquireRelease(
+        Effect.sync(() => void stateListeners.add(listener)),
+        () => Effect.sync(() => void stateListeners.delete(listener)),
+      );
+    }),
+    windowContext: Effect.fn("desktop.window.windowContext")(function* (window) {
+      const entry = entryOf(window);
+      if (entry === undefined) return Option.none<DesktopWindowContext>();
+      // A reloaded secondary window resumes its live filter and profile, not its opening ones.
+      const profile = (yield* desktopSettings.get).windowProfiles.find(
+        (candidate) => candidate.id === entry.profileId,
+      );
+      return Option.some<DesktopWindowContext>({
+        windowId: entry.windowId,
+        isMain: entry.isMain,
+        profileId: entry.profileId,
+        projectScopeKeys: entry.projectScopeKeys,
+        theme: profile?.theme ?? null,
+      });
+    }),
+    openNewWindow: Effect.fn("desktop.window.openNewWindow")(function* (input) {
+      yield* requireMultiWindowEnabled;
+      yield* openSecondary({
+        profile: null,
+        projectScopeKeys: DesktopAppSettings.normalizeProjectScopeKeys(
+          input.projectScopeKeys ?? [],
+        ),
+      });
+    }),
+    openProfile: Effect.fn("desktop.window.openProfile")(function* (profileId) {
+      yield* Effect.annotateCurrentSpan({ profileId });
+      if (profileId === DEFAULT_DESKTOP_WINDOW_PROFILE_ID) {
+        yield* revealOrCreateMain;
+        return;
+      }
+      const open = secondaryEntries().find((entry) => entry.profileId === profileId);
+      if (open !== undefined) {
+        yield* electronWindow.reveal(open.window);
+        return;
+      }
+      const profile = (yield* desktopSettings.get).windowProfiles.find(
+        (candidate) => candidate.id === profileId,
+      );
+      if (profile === undefined) {
+        return yield* new DesktopWindowProfileError({ reason: "profile-not-found", profileId });
+      }
+      yield* requireMultiWindowEnabled;
+      yield* openSecondary({ profile, projectScopeKeys: profile.projectScopeKeys });
+    }),
+    focusWindow: Effect.fn("desktop.window.focusWindow")(function* (windowId) {
+      const entry = liveEntries().find((candidate) => candidate.windowId === windowId);
+      if (entry !== undefined) yield* electronWindow.reveal(entry.window);
+    }),
+    saveWindowAsProfile: Effect.fn("desktop.window.saveWindowAsProfile")(function* (window, name) {
+      const entry = yield* requireSecondary(window);
+      if (entry.profileId !== null) {
+        const current = (yield* desktopSettings.get).windowProfiles.find(
+          (profile) => profile.id === entry.profileId,
+        );
+        // Saving a saved window as another profile starts from its current filter.
+        if (current !== undefined) entry.projectScopeKeys = current.projectScopeKeys;
+      }
+      return toWindowProfile(yield* createProfileFor(entry, name));
+    }),
+    createProfile: Effect.fn("desktop.window.createProfile")(function* (input) {
+      const saved = yield* addProfile({
+        name: input.name,
+        projectScopeKeys: input.projectScopeKeys,
+        theme: input.theme,
+        bounds: null,
+        maximized: false,
+      });
+      yield* syncWindows();
+      return toWindowProfile(saved);
+    }),
+    updateProfile: Effect.fn("desktop.window.updateProfile")(function* (input) {
+      yield* Effect.annotateCurrentSpan({ profileId: input.profileId });
+      const settings = yield* desktopSettings.get;
+      if (!settings.windowProfiles.some((profile) => profile.id === input.profileId)) {
+        return yield* new DesktopWindowProfileError({
+          reason: "profile-not-found",
+          profileId: input.profileId,
+        });
+      }
+      yield* updateProfiles((profiles) =>
+        profiles.map((profile) =>
+          profile.id === input.profileId
+            ? {
+                ...profile,
+                ...(input.name === undefined ? {} : { name: input.name.trim() }),
+                ...(input.theme === undefined ? {} : { theme: input.theme }),
+              }
+            : profile,
+        ),
+      );
+    }),
+    deleteProfile: Effect.fn("desktop.window.deleteProfile")(function* (profileId) {
+      yield* Effect.annotateCurrentSpan({ profileId });
+      if (profileId === DEFAULT_DESKTOP_WINDOW_PROFILE_ID) {
+        return yield* new DesktopWindowProfileError({ reason: "default-profile", profileId });
+      }
+      const profile = (yield* desktopSettings.get).windowProfiles.find(
+        (candidate) => candidate.id === profileId,
+      );
+      if (profile === undefined) return;
+      // Its open window stays open as an unsaved window with the same filter.
+      for (const entry of secondaryEntries()) {
+        if (entry.profileId !== profileId) continue;
+        entry.profileId = null;
+        entry.projectScopeKeys = profile.projectScopeKeys;
+        entry.unsavedName = nextUnsavedName();
+      }
+      yield* updateProfiles((profiles) =>
+        profiles.filter((candidate) => candidate.id !== profileId),
+      );
+    }),
+    setWindowProjectScopeKeys: Effect.fn("desktop.window.setWindowProjectScopeKeys")(
+      function* (window, projectScopeKeys) {
+        const entry = entryOf(window);
+        if (entry === undefined || entry.isMain) return;
+        const keys = DesktopAppSettings.normalizeProjectScopeKeys(projectScopeKeys);
+        entry.projectScopeKeys = keys;
+        const profileId = entry.profileId;
+        if (profileId === null) return yield* syncWindows();
+        yield* updateProfiles((profiles) =>
+          profiles.map((profile) =>
+            profile.id === profileId ? { ...profile, projectScopeKeys: keys } : profile,
+          ),
+        );
+      },
+    ),
+    setCloseRequestListening: Effect.fn("desktop.window.setCloseRequestListening")(
+      function (window, listening) {
+        return Effect.sync(() => {
+          const entry = entryOf(window);
+          if (entry !== undefined) entry.closeRequestListening = listening;
+        });
+      },
+    ),
+    resolveCloseRequest: Effect.fn("desktop.window.resolveCloseRequest")(
+      function* (window, requestId, decision) {
+        const entry = entryOf(window);
+        if (entry === undefined || entry.pendingCloseRequestId !== requestId) return;
+        entry.pendingCloseRequestId = null;
+        if (decision.action === "cancel") return;
+        if (decision.action === "save") yield* createProfileFor(entry, decision.name);
+        entry.closeApproved = true;
+        window.close();
+      },
+    ),
+    setMiniMode,
+    setMultiWindowEnabled: Effect.fn("desktop.window.setMultiWindowEnabled")(function* (enabled) {
+      yield* Effect.annotateCurrentSpan({ enabled });
+      yield* desktopSettings.setMultiWindowEnabled(enabled);
+      yield* syncWindows();
+    }),
+    registerHub: Effect.fn("desktop.window.registerHub")(function (window) {
+      return Effect.sync(() => {
+        const entry = entryOf(window);
+        if (entry !== undefined && entry.isMain) hubLinks.registerHub(hubPeer(entry));
+      });
+    }),
+    requestHubLink: Effect.fn("desktop.window.requestHubLink")(function (window) {
+      return Effect.sync(() => {
+        const entry = entryOf(window);
+        if (entry !== undefined && !entry.isMain) hubLinks.request(hubPeer(entry));
+      });
+    }),
   });
 });
 

@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Electron from "electron";
@@ -47,7 +48,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
+import { SNAP_SHOT_EVENT_CHANNEL, WINDOWS_CLOSE_REQUEST_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import {
@@ -68,6 +69,8 @@ const environmentInput = {
   resourcesPath: "/repo/resources",
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
+
+let nextFakeWindowId = 1;
 
 function makeFakeBrowserWindow() {
   const windowListeners = new Map<string, (...args: readonly unknown[]) => void>();
@@ -112,7 +115,9 @@ function makeFakeBrowserWindow() {
   };
 
   const window = {
+    id: nextFakeWindowId++,
     close: vi.fn(),
+    hide: vi.fn(),
     focus: vi.fn(),
     getBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
     getNormalBounds: vi.fn(() => ({ x: 0, y: 0, width: 1100, height: 780 })),
@@ -167,6 +172,8 @@ function makeFakeBrowserWindow() {
     webContentsListeners,
     webContentsOnce: webContents.once,
     windowListeners,
+    close: window.close,
+    hide: window.hide,
   };
 }
 
@@ -233,6 +240,21 @@ const desktopWindowBoundsEquivalence = Schema.toEquivalence(
   DesktopAppSettings.DesktopWindowBoundsSchema,
 );
 
+function withMainPlacement(
+  settings: DesktopAppSettings.DesktopSettings,
+  bounds: DesktopAppSettings.DesktopWindowBounds | null,
+  maximized: boolean,
+): DesktopAppSettings.DesktopSettings {
+  const [main, ...others] = settings.windowProfiles;
+  return { ...settings, windowProfiles: [{ ...main!, bounds, maximized }, ...others] };
+}
+
+let randomByte = 0;
+const layerSecureRandom = Layer.succeed(
+  SecureRandom.SecureRandom,
+  SecureRandom.make((size) => new Uint8Array(size).fill(++randomByte % 256)),
+);
+
 function layerTest(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
@@ -252,6 +274,8 @@ function layerTest(input: {
   readonly onPopupTemplate?: (input: ElectronMenu.ElectronMenuTemplateInput) => Effect.Effect<void>;
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
+  /** Windows to hand out in creation order; `window` once these run out. */
+  readonly createdWindows?: Electron.BrowserWindow[];
   readonly focusedWindow?: Electron.BrowserWindow;
   readonly fallbackWindow?: Electron.BrowserWindow;
   readonly platform?: NodeJS.Platform;
@@ -266,25 +290,33 @@ function layerTest(input: {
   const layerDesktopAppSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
     get: Effect.sync(() => desktopSettings),
     load: Effect.sync(() => desktopSettings),
-    setMainWindowBounds: (bounds, isMaximized) =>
+    setWindowProfilePlacement: (profileId, bounds, isMaximized) =>
       Effect.gen(function* () {
         if (input.beforeMainWindowBoundsUpdate) {
           yield* input.beforeMainWindowBoundsUpdate(bounds);
         }
+        const main = DesktopAppSettings.defaultWindowProfile(desktopSettings);
         const changed =
-          desktopSettings.mainWindowBounds === null ||
-          !desktopWindowBoundsEquivalence(desktopSettings.mainWindowBounds, bounds) ||
-          desktopSettings.mainWindowMaximized !== isMaximized;
+          profileId === main.id &&
+          (main.bounds === null ||
+            !desktopWindowBoundsEquivalence(main.bounds, bounds) ||
+            main.maximized !== isMaximized);
         if (changed) {
-          desktopSettings = {
-            ...desktopSettings,
-            mainWindowBounds: bounds,
-            mainWindowMaximized: isMaximized,
-          };
+          desktopSettings = withMainPlacement(desktopSettings, bounds, isMaximized);
           input.mainWindowBoundsUpdates?.push(bounds);
           input.mainWindowMaximizedUpdates?.push(isMaximized);
         }
         return { settings: desktopSettings, changed };
+      }),
+    updateWindowProfiles: (update) =>
+      Effect.sync(() => {
+        desktopSettings = {
+          ...desktopSettings,
+          windowProfiles: DesktopAppSettings.normalizeWindowProfiles(
+            update(desktopSettings.windowProfiles),
+          ),
+        };
+        return { settings: desktopSettings, changed: true };
       }),
     setServerExposureMode: () => Effect.die("unexpected server exposure update"),
     setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
@@ -293,6 +325,12 @@ function layerTest(input: {
     setWslDistro: () => Effect.die("unexpected WSL distro change"),
     setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
     setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
+    setMultiWindowEnabled: (enabled) =>
+      Effect.sync(() => {
+        const changed = desktopSettings.multiWindowEnabled !== enabled;
+        desktopSettings = { ...desktopSettings, multiWindowEnabled: enabled };
+        return { settings: desktopSettings, changed };
+      }),
     applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
     applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
@@ -304,16 +342,20 @@ function layerTest(input: {
       }).pipe(
         Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
         Effect.andThen(input.onWindowCreate ?? Effect.void),
-        Effect.as(input.window),
+        Effect.map(() => input.createdWindows?.shift() ?? input.window),
       ),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow).pipe(
       Effect.map(Option.orElse(() => Option.fromNullishOr(input.fallbackWindow ?? null))),
     ),
-    focusedMainOrFirst:
-      input.focusedWindow === undefined
-        ? Ref.get(input.mainWindow)
-        : Effect.succeedSome(input.focusedWindow),
+    apps: Effect.map(Ref.get(input.mainWindow), Option.toArray),
+    // Popups and auxiliary windows are never app windows, so focus falls back to main.
+    focusedApp: Effect.map(Ref.get(input.mainWindow), (main) =>
+      input.focusedWindow !== undefined && Option.contains(main, input.focusedWindow)
+        ? Option.some(input.focusedWindow)
+        : main,
+    ),
+    registerApp: () => Effect.void,
     setMain: (window) => Ref.set(input.mainWindow, Option.some(window)),
     clearMain: () => Ref.set(input.mainWindow, Option.none()),
     prepareReveal: () => Effect.succeed(false),
@@ -362,6 +404,7 @@ function layerTest(input: {
           copyText: input.onCopyText ?? (() => Effect.void),
         } satisfies ElectronShell.ElectronShell["Service"]),
         layerElectronTheme,
+        layerSecureRandom,
         layerElectronWindow,
         Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, {
           enabled: input.primaryPasteEnabled ?? true,
@@ -374,6 +417,7 @@ function layerTest(input: {
         Layer.mock(PreviewManager.PreviewManager)({
           getBrowserSession: () => Effect.succeed({} as Electron.Session),
           setMainWindow: input.setPreviewMainWindow ?? (() => Effect.void),
+          registerSecondaryWindow: () => Effect.void,
           prepareWebview: () => Effect.void,
           isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
           getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
@@ -443,7 +487,9 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
         }),
       main: Ref.get(mainWindow),
       currentMainOrFirst,
-      focusedMainOrFirst: currentMainOrFirst,
+      apps: Effect.map(Ref.get(mainWindow), Option.toArray),
+      focusedApp: Ref.get(mainWindow),
+      registerApp: () => Effect.void,
       setMain: (window) => Ref.set(mainWindow, Option.some(window)),
       clearMain: () => Ref.set(mainWindow, Option.none()),
       prepareReveal: () => Effect.succeed(false),
@@ -476,6 +522,7 @@ const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | n
             copyText: () => Effect.void,
           } satisfies ElectronShell.ElectronShell["Service"]),
           layerElectronTheme,
+          layerSecureRandom,
           Layer.succeed(ElectronWindow.ElectronWindow, electronWindowShape),
           Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
           Layer.mock(PreviewPasskeys.PreviewPasskeys)({
@@ -807,10 +854,10 @@ describe("DesktopWindow", () => {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
-        yield* desktopWindow.zoomMain("out");
-        yield* desktopWindow.zoomMain("out");
-        yield* desktopWindow.zoomMain("in");
-        yield* desktopWindow.zoomMain("reset");
+        yield* desktopWindow.zoomFocused("out");
+        yield* desktopWindow.zoomFocused("out");
+        yield* desktopWindow.zoomFocused("in");
+        yield* desktopWindow.zoomFocused("reset");
 
         assert.deepEqual(
           fakeWindow.setZoomLevel.mock.calls.map(([level]) => level),
@@ -1241,10 +1288,11 @@ describe("DesktopWindow", () => {
         createCount,
         mainWindow,
         mainWindowBoundsUpdates,
-        desktopSettings: {
-          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
-          mainWindowBounds: { x: 2040, y: 80, width: 1320, height: 880 },
-        },
+        desktopSettings: withMainPlacement(
+          DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          { x: 2040, y: 80, width: 1320, height: 880 },
+          false,
+        ),
       });
 
       yield* Effect.gen(function* () {
@@ -1298,7 +1346,7 @@ describe("DesktopWindow", () => {
         fakeWindow.isMinimized.mockReturnValue(true);
         fakeWindow.getBounds.mockReturnValue({ x: -32_000, y: -32_000, width: 160, height: 28 });
 
-        yield* desktopWindow.flushMainWindowBounds;
+        yield* desktopWindow.flushWindowState;
         resize();
         yield* TestClock.adjust(500);
         yield* Effect.promise(() => Promise.resolve());
@@ -1422,7 +1470,7 @@ describe("DesktopWindow", () => {
           yield* TestClock.adjust(250);
           yield* Effect.promise(() => Promise.resolve());
         }
-        yield* desktopWindow.flushMainWindowBounds;
+        yield* desktopWindow.flushWindowState;
 
         assert.deepEqual(mainWindowBoundsUpdates, [
           maximized
@@ -1470,6 +1518,125 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("asks before closing an unsaved window and saves it as a profile", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const secondary = makeFakeBrowserWindow();
+      secondary.getBounds.mockReturnValue({ x: 60, y: 50, width: 1000, height: 700 });
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const promptRevealed = yield* Deferred.make<void>();
+      const layer = layerTest({
+        window: main.window,
+        createdWindows: [main.window, secondary.window],
+        createCount,
+        mainWindow,
+        onReveal: (window) => {
+          if (window === secondary.window) Deferred.doneUnsafe(promptRevealed, Exit.void);
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const windows = yield* DesktopWindow.DesktopWindow;
+        yield* windows.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* windows.openNewWindow({ projectScopeKeys: ["env:/repo"] });
+        assert.equal(yield* Ref.get(createCount), 2);
+        secondary.webContentsListeners.get("did-finish-load")?.();
+        yield* windows.setCloseRequestListening(secondary.window, true);
+        yield* windows.setWindowProjectScopeKeys(secondary.window, ["env:/hobby"]);
+        const reloadedContext = Option.getOrThrow(yield* windows.windowContext(secondary.window));
+        assert.deepEqual(reloadedContext.projectScopeKeys, ["env:/hobby"]);
+        assert.equal(reloadedContext.profileId, null);
+
+        const preventSecondaryClose = vi.fn();
+        secondary.windowListeners.get("close")?.({ preventDefault: preventSecondaryClose });
+        yield* Deferred.await(promptRevealed);
+        assert.equal(preventSecondaryClose.mock.calls.length, 1);
+        const request = secondary.send.mock.calls.find(
+          ([channel]) => channel === WINDOWS_CLOSE_REQUEST_CHANNEL,
+        )?.[1] as { readonly requestId: string; readonly suggestedName: string };
+        assert.equal(request.suggestedName, "Window 2");
+
+        // The main window keeps serving the secondary window, so closing it only hides it.
+        const preventMainClose = vi.fn();
+        main.windowListeners.get("close")?.({ preventDefault: preventMainClose });
+        assert.equal(preventMainClose.mock.calls.length, 1);
+        assert.equal(main.hide.mock.calls.length, 1);
+
+        yield* windows.resolveCloseRequest(secondary.window, "stale", { action: "discard" });
+        assert.equal(secondary.close.mock.calls.length, 0);
+        yield* windows.resolveCloseRequest(secondary.window, request.requestId, {
+          action: "save",
+          name: "  Work  ",
+        });
+        assert.equal(secondary.close.mock.calls.length, 1);
+        const state = yield* windows.windowsState;
+        const saved = state.profiles.find((profile) => profile.name === "Work");
+        assert.deepEqual(saved?.projectScopeKeys, ["env:/hobby"]);
+        const savedContext = Option.getOrThrow(yield* windows.windowContext(secondary.window));
+        assert.equal(savedContext.profileId, saved?.id);
+        assert.deepEqual(
+          state.windows.map(({ isMain, profileId, name }) => ({ isMain, profileId, name })),
+          [
+            { isMain: true, profileId: "main", name: "Main" },
+            { isMain: false, profileId: saved?.id ?? null, name: "Work" },
+          ],
+        );
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("opens no secondary window while multi-window is off and saves new profiles", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const secondary = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({
+        window: main.window,
+        createdWindows: [main.window, secondary.window],
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const windows = yield* DesktopWindow.DesktopWindow;
+        yield* windows.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const saved = yield* windows.createProfile({
+          name: " Hobby ",
+          projectScopeKeys: ["env:/hobby", "env:/hobby"],
+          theme: null,
+        });
+        assert.deepEqual(
+          {
+            name: saved.name,
+            projectScopeKeys: saved.projectScopeKeys,
+            isDefault: saved.isDefault,
+          },
+          { name: "Hobby", projectScopeKeys: ["env:/hobby"], isDefault: false },
+        );
+
+        yield* windows.setMultiWindowEnabled(false);
+        assert.isFalse((yield* windows.windowsState).multiWindowEnabled);
+        const blocked = [
+          yield* Effect.flip(windows.openNewWindow({})),
+          yield* Effect.flip(windows.openProfile(saved.id)),
+        ];
+        assert.deepEqual(
+          blocked.map((error) => error._tag === "DesktopWindowProfileError" && error.reason),
+          ["multi-window-disabled", "multi-window-disabled"],
+        );
+        // The main window still opens from its own profile.
+        yield* windows.openProfile("main");
+        assert.equal(yield* Ref.get(createCount), 1);
+
+        yield* windows.setMultiWindowEnabled(true);
+        yield* windows.openProfile(saved.id);
+        assert.equal(yield* Ref.get(createCount), 2);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("persists the current main window bounds before the window closes", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
@@ -1504,7 +1671,7 @@ describe("DesktopWindow", () => {
         yield* Deferred.await(writeStarted);
         fakeWindow.isDestroyed.mockReturnValue(true);
 
-        const flushFiber = yield* desktopWindow.flushMainWindowBounds.pipe(
+        const flushFiber = yield* desktopWindow.flushWindowState.pipe(
           Effect.andThen(Deferred.succeed(flushCompleted, undefined)),
           Effect.forkChild({ startImmediately: true }),
         );

@@ -97,6 +97,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { useShallow } from "zustand/react/shallow";
 import { draftModelSelectionApplies } from "./lib/chatThreadActions";
 import { createDeferredStorage, createMemoryStorage } from "./lib/storage";
+import { readDesktopWindowContext } from "./multiWindow/windowContext";
 import { getDefaultServerModel } from "./providerModels";
 import {
   replaceComposerContextReferences,
@@ -4579,6 +4580,145 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
 composerDraftLoadedState = partializeComposerDraftStoreState(composerDraftStore.getState());
 
 export const useComposerDraftStore = composerDraftStore;
+
+type DraftRecordKey =
+  | "draftsByThreadKey"
+  | "draftThreadsByThreadKey"
+  | "logicalProjectDraftThreadKeyByLogicalProjectKey";
+const DRAFT_RECORD_KEYS: ReadonlyArray<DraftRecordKey> = [
+  "draftsByThreadKey",
+  "draftThreadsByThreadKey",
+  "logicalProjectDraftThreadKeyByLogicalProjectKey",
+];
+const DRAFT_STICKY_KEYS = [
+  "stickyModelSelectionByProvider",
+  "stickyOptionsByModelByProvider",
+  "stickyActiveProvider",
+] as const;
+
+interface AdoptedComposerDrafts {
+  /** Entries another window saved that this window had not changed; undefined removes one. */
+  readonly records: { readonly [K in DraftRecordKey]: Record<string, unknown> };
+  readonly sticky: Partial<
+    Pick<PersistedComposerDraftStoreState, (typeof DRAFT_STICKY_KEYS)[number]>
+  >;
+  /** The baseline the next write merges against, now including the adopted entries. */
+  readonly baseline: PersistedComposerDraftStoreState;
+  readonly changed: boolean;
+}
+
+/**
+ * The read side of `mergeComposerDraftStates`: what another window saved since `baseline`
+ * replaces this window's entry only where this window has not changed it since.
+ */
+function adoptStoredComposerDrafts(
+  stored: PersistedComposerDraftStoreState,
+  local: PersistedComposerDraftStoreState,
+  baseline: PersistedComposerDraftStoreState,
+): AdoptedComposerDrafts {
+  let changed = false;
+  const nextBaseline: Record<string, unknown> = { ...baseline };
+  const records = {} as Record<DraftRecordKey, Record<string, unknown>>;
+  for (const field of DRAFT_RECORD_KEYS) {
+    const storedRecord: Readonly<Record<string, unknown>> = stored[field];
+    const localRecord: Readonly<Record<string, unknown>> = local[field];
+    const baselineRecord: Readonly<Record<string, unknown>> = baseline[field];
+    const adopted: Record<string, unknown> = {};
+    const nextBaselineRecord: Record<string, unknown> = { ...baselineRecord };
+    for (const key of new Set([...Object.keys(storedRecord), ...Object.keys(baselineRecord)])) {
+      if (Equal.equals(storedRecord[key], baselineRecord[key])) continue;
+      if (!Equal.equals(localRecord[key], baselineRecord[key])) continue;
+      adopted[key] = storedRecord[key];
+      if (storedRecord[key] === undefined) delete nextBaselineRecord[key];
+      else nextBaselineRecord[key] = storedRecord[key];
+      changed = true;
+    }
+    records[field] = adopted;
+    nextBaseline[field] = nextBaselineRecord;
+  }
+  const sticky: Record<string, unknown> = {};
+  for (const field of DRAFT_STICKY_KEYS) {
+    if (Equal.equals(stored[field], baseline[field])) continue;
+    if (!Equal.equals(local[field], baseline[field])) continue;
+    sticky[field] = stored[field];
+    nextBaseline[field] = stored[field];
+    changed = true;
+  }
+  return {
+    records,
+    sticky,
+    baseline: nextBaseline as PersistedComposerDraftStoreState,
+    changed,
+  };
+}
+
+function applyRecordChanges<V>(
+  current: Readonly<Record<string, V>>,
+  adopted: Readonly<Record<string, unknown>>,
+  hydrate: (value: never) => V,
+): Record<string, V> {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(adopted)) {
+    if (value === undefined) delete next[key];
+    else next[key] = hydrate(value as never);
+  }
+  return next;
+}
+
+function adoptOtherWindowDrafts(text: string): void {
+  let parsed: StorageValue<unknown>;
+  try {
+    parsed = JSON.parse(text) as StorageValue<unknown>;
+  } catch {
+    return;
+  }
+  if (parsed.version !== COMPOSER_DRAFT_STORAGE_VERSION) return;
+  const baseline = composerDraftLastWrite?.local ?? composerDraftLoadedState;
+  if (baseline === null) return;
+  const stored = normalizeCurrentPersistedComposerDraftStoreState(parsed.state);
+  const adopted = adoptStoredComposerDrafts(
+    stored,
+    partializeComposerDraftStoreState(composerDraftStore.getState()),
+    baseline,
+  );
+  composerDraftLastWrite = { text, local: adopted.baseline, merged: stored };
+  if (!adopted.changed) return;
+  composerDraftStore.setState((state) => ({
+    draftsByThreadKey: applyRecordChanges(
+      state.draftsByThreadKey,
+      adopted.records.draftsByThreadKey,
+      toHydratedThreadDraft,
+    ),
+    draftThreadsByThreadKey: applyRecordChanges(
+      state.draftThreadsByThreadKey,
+      adopted.records.draftThreadsByThreadKey,
+      toHydratedDraftThreadState,
+    ) as Record<string, DraftThreadState>,
+    logicalProjectDraftThreadKeyByLogicalProjectKey: applyRecordChanges(
+      state.logicalProjectDraftThreadKeyByLogicalProjectKey,
+      adopted.records.logicalProjectDraftThreadKeyByLogicalProjectKey,
+      (value: string) => value,
+    ),
+    ...("stickyModelSelectionByProvider" in adopted.sticky
+      ? { stickyModelSelectionByProvider: adopted.sticky.stickyModelSelectionByProvider ?? {} }
+      : {}),
+    ...("stickyOptionsByModelByProvider" in adopted.sticky
+      ? { stickyOptionsByModelByProvider: adopted.sticky.stickyOptionsByModelByProvider ?? {} }
+      : {}),
+    ...("stickyActiveProvider" in adopted.sticky
+      ? { stickyActiveProvider: adopted.sticky.stickyActiveProvider ?? null }
+      : {}),
+  }));
+}
+
+// Desktop windows share drafts through storage; each picks up what the others save.
+if (readDesktopWindowContext() !== null && typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === COMPOSER_DRAFT_STORAGE_KEY && event.newValue !== null) {
+      adoptOtherWindowDrafts(event.newValue);
+    }
+  });
+}
 
 export function subscribeComposerDraftModelReconciliation(input: {
   readonly registry: AtomRegistry.AtomRegistry;

@@ -124,3 +124,8 @@ const PROJECT_ICON_COLOR_CLASSES = Object.fromEntries(
 export function projectIconColorClassName(color: ProjectIconColor): string {
   return PROJECT_ICON_COLOR_CLASSES[color];
 }
+
+/** The swatch class's colour as a CSS value, for code that computes with it. */
+export function projectIconSwatch(color: ProjectIconColor): string {
+  return `var(--color-${color}-500)`;
+}
