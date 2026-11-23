@@ -107,15 +107,6 @@ on its own; to share a folder like that one, list it in `~/.gemini/config/skills
 (or a project's `.agents/skills.json`), and T3 Code shows the skills it declares,
 honoring `inherits`, `include_only`, and `exclude`.
 
-T3 sessions also use your global MCP registrations from
-`~/.gemini/config/mcp_config.json` and the `permissions.allow`, `permissions.ask`
-and `permissions.deny` rules in `~/.gemini/antigravity-cli/settings.json`.
-Permission rules are refreshed when T3 prepares the provider profile, including
-removed grants. For example, `mcp(t3-code/*)` allows T3 MCP calls without changing
-the thread to Full Access; explicit Ask and Deny rules still take precedence.
-T3 keeps its selected authentication method and runtime mode separate from CLI
-settings and does not import CLI authentication, hooks or bypass presets.
-
 Antigravity receives images and audio directly, and reads PDFs and text files as
 documents. Other attachments, including videos, are passed as a saved file path for
 the agent to inspect with its tools.

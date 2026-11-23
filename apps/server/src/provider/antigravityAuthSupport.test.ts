@@ -580,7 +580,6 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       const directory = yield* fs.makeTempDirectoryScoped();
       const profile = yield* prepareAntigravityProfile({
         profileDirectory: path.join(directory, "profile"),
-        userHome: path.join(directory, "home"),
         baseEnv: { PATH: path.dirname(process.execPath) },
       });
       expect(profile.browserCommand).not.toContain("/packaged/t3");
@@ -622,7 +621,6 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       const temporaryDirectory = yield* fs.makeTempDirectoryScoped();
       const profile = yield* prepareAntigravityProfile({
         profileDirectory: path.join(temporaryDirectory, "profile"),
-        userHome: path.join(temporaryDirectory, "home"),
       });
 
       expect(profile.geminiHome).toBe(path.join(temporaryDirectory, "profile"));
@@ -634,10 +632,7 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       }
 
       yield* fs.writeFileString(profile.tokenPath, "synthetic-token-fixture");
-      yield* prepareAntigravityProfile({
-        profileDirectory: profile.geminiHome,
-        userHome: path.join(temporaryDirectory, "home"),
-      });
+      yield* prepareAntigravityProfile({ profileDirectory: profile.geminiHome });
       expect(yield* fs.readFileString(profile.tokenPath)).toBe("synthetic-token-fixture");
     }),
   );
@@ -749,149 +744,31 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       const profileGemini = path.join(profileDirectory, "GEMINI.md");
       const profileSkillsJson = path.join(profileDirectory, "config", "skills.json");
       const userSkillsJson = path.join(userGemini, "config", "skills.json");
-      const userMcp = path.join(userGemini, "config", "mcp_config.json");
-      const profileMcp = path.join(profileDirectory, "config", "mcp_config.json");
-      yield* fs.makeDirectory(path.dirname(profileMcp), { recursive: true });
-      yield* fs.writeFileString(profileMcp, "");
       yield* fs.makeDirectory(path.join(userGemini, "config"), { recursive: true });
       yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "global agents rule");
       yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
       yield* fs.writeFileString(userSkillsJson, '{"entries":[]}');
-      yield* fs.writeFileString(
-        userMcp,
-        '{"mcpServers":{"fixture":{"command":"synthetic-server"}}}',
-      );
 
       yield* prepare;
       expect(yield* fs.readFileString(profileAgents)).toBe("global agents rule");
       expect(yield* fs.readFileString(profileGemini)).toBe("global gemini rule");
       expect(yield* fs.readFileString(profileSkillsJson)).toBe('{"entries":[]}');
-      expect(yield* fs.readFileString(profileMcp)).toBe(yield* fs.readFileString(userMcp));
 
       yield* fs.writeFileString(path.join(userGemini, "AGENTS.md"), "edited agents rule");
       yield* fs.remove(path.join(userGemini, "GEMINI.md"));
       yield* fs.writeFileString(userSkillsJson, '{"entries":[{"path":"/skills"}]}');
-      yield* fs.writeFileString(userMcp, '{"mcpServers":{}}');
       yield* prepare;
       expect(yield* fs.readFileString(profileAgents)).toBe("edited agents rule");
       expect(yield* fs.exists(profileGemini)).toBe(false);
       expect(yield* fs.readFileString(profileSkillsJson)).toBe('{"entries":[{"path":"/skills"}]}');
-      expect(yield* fs.readFileString(profileMcp)).toBe('{"mcpServers":{}}');
 
       yield* fs.writeFileString(profileGemini, "profile's own rule");
       yield* fs.writeFileString(path.join(userGemini, "GEMINI.md"), "global gemini rule");
       yield* fs.remove(userSkillsJson);
-      yield* fs.remove(userMcp);
       yield* prepare;
       expect(yield* fs.readFileString(profileGemini)).toBe("profile's own rule");
       expect(yield* fs.exists(profileSkillsJson)).toBe(false);
-      expect(yield* fs.exists(profileMcp)).toBe(false);
     }),
-  );
-
-  it.effect("refreshes CLI permission rules without importing auth, hooks or bypass settings", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped();
-      const userHome = path.join(directory, "home");
-      const profileDirectory = path.join(directory, "profile");
-      const cli = path.join(userHome, ".gemini", "antigravity-cli");
-      yield* fs.makeDirectory(cli, { recursive: true });
-      const source = path.join(cli, "settings.json");
-      const permissions = {
-        allow: ["mcp(t3-code/*)", "command(/usr/lib/fleet/account-run fleet test-environment)"],
-        ask: ["mcp(t3-code/t3_thread_organize)"],
-        deny: ["command(rm)"],
-      };
-      yield* fs.writeFileString(
-        source,
-        encodeUnknownJson({
-          permissions,
-          auth: { type: "gemini-api-key", apiKey: "synthetic-private-value" },
-          hooks: { beforeTool: "do-not-run" },
-          toolPermission: "always-proceed",
-        }),
-      );
-      const profile = yield* prepareAntigravityProfile({ profileDirectory, userHome });
-      const target = path.join(profile.acpDirectory, "settings.json");
-      expect(decodeJson(yield* fs.readFileString(target))).toEqual({
-        auth: { type: "oauth-personal" },
-        permissions,
-      });
-      yield* fs.writeFileString(
-        source,
-        encodeUnknownJson({ permissions: { deny: ["mcp(t3-code/*)"] } }),
-      );
-      yield* prepareAntigravityProfile({ profileDirectory, userHome });
-      expect(decodeJson(yield* fs.readFileString(target))).toEqual({
-        auth: { type: "oauth-personal" },
-        permissions: { deny: ["mcp(t3-code/*)"] },
-      });
-      yield* fs.remove(source);
-      yield* prepareAntigravityProfile({ profileDirectory, userHome });
-      expect(decodeJson(yield* fs.readFileString(target))).toEqual({
-        auth: { type: "oauth-personal" },
-      });
-    }),
-  );
-
-  it.effect("refuses malformed CLI permissions without exposing settings content", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped();
-      const userHome = path.join(directory, "home");
-      const cli = path.join(userHome, ".gemini", "antigravity-cli");
-      yield* fs.makeDirectory(cli, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(cli, "settings.json"),
-        '{"permissions":{"allow":"synthetic-private-value"}}',
-      );
-      const result = yield* prepareAntigravityProfile({
-        profileDirectory: path.join(directory, "profile"),
-        userHome,
-      }).pipe(Effect.result);
-      expect(Result.isFailure(result)).toBe(true);
-      if (Result.isFailure(result)) {
-        expect(result.failure.detail).toContain("permission rules");
-        expect(JSON.stringify(result.failure)).not.toContain("synthetic-private-value");
-      }
-    }),
-  );
-
-  it.effect.skipIf(!symlinksSupported)(
-    "shares user MCP registrations and follows later updates and removal",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fs.makeTempDirectoryScoped();
-        const userHome = path.join(directory, "home");
-        const profileDirectory = path.join(directory, "profile");
-        const config = path.join(userHome, ".gemini", "config");
-        yield* fs.makeDirectory(config, { recursive: true });
-        const source = path.join(config, "mcp_config.json");
-        const first = '{"mcpServers":{"fixture":{"command":"synthetic-server"}}}';
-        yield* fs.writeFileString(source, first);
-        yield* fs.makeDirectory(path.join(profileDirectory, "config"), { recursive: true });
-        yield* fs.writeFileString(path.join(profileDirectory, "config", "mcp_config.json"), "");
-        yield* prepareAntigravityProfile({ profileDirectory, userHome });
-        const target = path.join(profileDirectory, "config", "mcp_config.json");
-        expect(yield* fs.readLink(target)).toBe(source);
-        expect(yield* fs.readFileString(target)).toBe(first);
-        yield* fs.writeFileString(source, '{"mcpServers":{}}');
-        expect(yield* fs.readFileString(target)).toBe('{"mcpServers":{}}');
-        yield* fs.remove(source);
-        yield* prepareAntigravityProfile({ profileDirectory, userHome });
-        expect(yield* fs.exists(target)).toBe(false);
-        yield* fs.writeFileString(source, first);
-        yield* fs.writeFileString(target, '{"mcpServers":{"private":{"command":"keep"}}}');
-        yield* prepareAntigravityProfile({ profileDirectory, userHome });
-        expect(yield* fs.readFileString(target)).toBe(
-          '{"mcpServers":{"private":{"command":"keep"}}}',
-        );
-      }),
   );
 
   it.effect("rewrites the GCP block on every launch and never stores the API key", () =>
@@ -901,7 +778,6 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       const temporaryDirectory = yield* fs.makeTempDirectoryScoped();
       const profile = yield* prepareAntigravityProfile({
         profileDirectory: temporaryDirectory,
-        userHome: path.join(temporaryDirectory, "home"),
         auth: {
           authMethod: "agent-platform",
           apiKey: "vertex-secret",
@@ -917,10 +793,7 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
       });
       expect(first).not.toContain("vertex-secret");
 
-      yield* prepareAntigravityProfile({
-        profileDirectory: temporaryDirectory,
-        userHome: path.join(temporaryDirectory, "home"),
-      });
+      yield* prepareAntigravityProfile({ profileDirectory: temporaryDirectory });
       expect(decodeJson(yield* fs.readFileString(settingsPath))).toEqual({
         auth: { type: "oauth-personal" },
       });
