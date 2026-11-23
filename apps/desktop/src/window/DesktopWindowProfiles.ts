@@ -1,3 +1,7 @@
+import { msg } from "gt-i18n";
+
+import { m } from "../i18n/messages.ts";
+
 type DesktopWindowCloseAction =
   /** Let the window close. */
   | "close"
@@ -27,13 +31,16 @@ export function resolveWindowCloseAction(input: DesktopWindowCloseInput): Deskto
   return input.promptPending ? "keep-open" : "prompt";
 }
 
-const UNSAVED_WINDOW_NAME_PREFIX = "Window ";
-
 /** The main window is the first window, so unsaved secondary windows count from 2. */
 export function nextUnsavedWindowName(usedNames: Iterable<string>): string {
   const used = new Set(usedNames);
   for (let index = 2; ; index++) {
-    const name = `${UNSAVED_WINDOW_NAME_PREFIX}${index}`;
+    const name = m(
+      msg("Window {number}", {
+        $context: "name of an unsaved app window",
+        number: String(index),
+      }),
+    );
     if (!used.has(name)) return name;
   }
 }

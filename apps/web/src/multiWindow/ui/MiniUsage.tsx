@@ -1,11 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
-import {
-  collectExternalUsageLinks,
-  collectLimitAccounts,
-  collectLimitNotices,
-  type LimitPresentations,
-} from "@t3tools/shared/usageLimits";
+import { collectLimitAccounts, type LimitPresentations } from "@t3tools/shared/usageLimits";
+import { collectExternalUsageLinks, collectLimitNotices } from "@t3tools/shared/usageLimitsCopy";
+import { T, useGT, useMessages } from "gt-react";
 import { ExternalLinkIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
 
@@ -55,10 +52,19 @@ export function MiniUsageSection({
   readonly presentations: LimitPresentations;
   readonly now: number;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const accounts = collectLimitAccounts(presentations);
   return (
-    <section aria-label="Usage" className="flex flex-col gap-2 p-(--sidebar-content-inset)">
-      {accounts.length === 0 ? <p className="font-medium text-sm">Usage unavailable</p> : null}
+    <section
+      aria-label={gt("Usage", { $context: "Mini Mode tab showing usage limits" })}
+      className="flex flex-col gap-2 p-(--sidebar-content-inset)"
+    >
+      {accounts.length === 0 ? (
+        <p className="font-medium text-sm">
+          <T>Usage unavailable</T>
+        </p>
+      ) : null}
       {accounts.map((account) => (
         <div key={account.key} className="flex flex-col gap-0.5">
           <h3 className="truncate font-medium text-xs">
@@ -73,7 +79,7 @@ export function MiniUsageSection({
           />
         </div>
       ))}
-      {collectExternalUsageLinks(presentations).map((link) => (
+      {collectExternalUsageLinks(presentations, m).map((link) => (
         <Button
           key={link.url}
           size="compact"
@@ -85,7 +91,7 @@ export function MiniUsageSection({
           <ExternalLinkIcon aria-hidden />
         </Button>
       ))}
-      {collectLimitNotices(presentations).map((notice) => (
+      {collectLimitNotices(presentations, m).map((notice) => (
         <p key={notice} className="text-muted-foreground text-xs">
           {notice}
         </p>

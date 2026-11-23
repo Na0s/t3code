@@ -935,9 +935,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "windows",
-    title: "Windows",
+    title: msg("Windows", { $context: "settings section about the app's windows" }),
     to: "/settings/general",
-    searchTerms: ["multiple windows saved window profile theme mini mode new window"],
+    searchTerms: [msg("multiple windows saved window profile theme mini mode new window")],
     desktopOnly: true,
   },
   {

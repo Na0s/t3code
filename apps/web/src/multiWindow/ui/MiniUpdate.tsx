@@ -1,4 +1,5 @@
-import { managedUpdatesDenial } from "@t3tools/contracts";
+import { managedUpdatesDenial } from "@t3tools/client-runtime/contract-labels";
+import { useGT, useMessages } from "gt-react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
 import {
@@ -16,20 +17,27 @@ import { usePrimaryManagedPolicy } from "../../state/managedPolicy";
 
 /** The Update tab: the running version, where its update stands, and the sidebar's own update controls. */
 export function MiniUpdate() {
+  const gt = useGT();
+  const messages = useMessages();
   const state = useDesktopUpdateState();
   const disabledReason = getDesktopUpdateDisabledReason(
     state,
-    managedUpdatesDenial(usePrimaryManagedPolicy()),
+    managedUpdatesDenial(usePrimaryManagedPolicy(), messages),
+    messages,
   );
   return (
-    <section aria-label="Update" className="flex flex-col gap-2 p-(--sidebar-content-inset)">
+    <section
+      aria-label={gt("Update", { $context: "Mini Mode tab about app updates" })}
+      className="flex flex-col gap-2 p-(--sidebar-content-inset)"
+    >
       <div className="flex items-center gap-2 ps-(--sidebar-row-content-inset)">
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium text-sm">
             {APP_DISPLAY_NAME} {state?.currentVersion}
           </p>
           <p role="status" className="text-secondary-label text-xs">
-            {disabledReason ?? (state === null ? null : getDesktopUpdateButtonTooltip(state))}
+            {disabledReason ??
+              (state === null ? null : getDesktopUpdateButtonTooltip(state, messages))}
           </p>
         </div>
         <SidebarMenu className="w-auto shrink-0 flex-row">

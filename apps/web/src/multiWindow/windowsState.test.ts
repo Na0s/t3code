@@ -5,7 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { openWindow } from "./ui/mini.fixtures";
+import { openWindow } from "./ui/mini.test-fixtures";
 import {
   isMiniMainWindow,
   resolveWindowThemeOverride,

@@ -1,3 +1,4 @@
+import { T, useGT, useMessages } from "gt-react";
 import { useState } from "react";
 
 import type { EnvironmentPullRequestEntry } from "../../components/pullRequest/pullRequestList.logic";
@@ -51,16 +52,22 @@ export function MiniPullRequestList({
   readonly error: string | null;
   readonly onOpen: (url: string) => void;
 }) {
+  const gt = useGT();
+  const messages = useMessages();
   return (
-    <section aria-label="Pull requests" className="p-(--sidebar-content-inset)">
+    <section aria-label={gt("Pull requests")} className="p-(--sidebar-content-inset)">
       {entries === null ? (
-        <div role="status" aria-label="Loading pull requests" className="flex flex-col gap-2 p-2">
+        <div
+          role="status"
+          aria-label={gt("Loading pull requests")}
+          className="flex flex-col gap-2 p-2"
+        >
           <Skeleton className="h-4 w-48" />
           <Skeleton className="h-3 w-28" />
         </div>
       ) : entries.length === 0 ? (
         <p className="px-(--sidebar-row-content-inset) py-2 text-secondary-label text-sm">
-          {error ?? "No pull requests match your Pull requests page filter."}
+          {error ?? <T>No pull requests match your Pull requests page filter.</T>}
         </p>
       ) : (
         <ul>
@@ -68,7 +75,7 @@ export function MiniPullRequestList({
             const checks =
               entry.checksState === undefined
                 ? null
-                : pullRequestChecksStatePresentation(entry.checksState);
+                : pullRequestChecksStatePresentation(entry.checksState, messages);
             return (
               <li key={entry.url}>
                 <button

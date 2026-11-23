@@ -115,6 +115,8 @@
   "50fe114d093a5bc7": "Vollbildmodus ein/aus",
   "d8c6d6d9845353da": "Fenster",
   "c015841b7b2523c6": "Neues Fenster",
+  "d5203c78d46e1282": "Hauptfenster",
+  "f8e9094362fa962a": "Mini-Modus",
   "f184aa190588625e": "Minimieren",
   "c20a9deaed71bd1c": "Zoomen",
   "d207ba3a23f94223": "Alle nach vorne bringen",
@@ -123,6 +125,7 @@
   "202e13f15a3dcd30": "Link kopieren",
   "8af79268f2349f4c": "E-Mail-Adresse kopieren",
   "a9f9254d458e49fe": "Bild kopieren",
+  "0ec1ce287d61c59a": "Fenster {number}",
   "9c1b20fbc881de5d": "Desktop-Konfiguration",
   "1b14230874f19eb9": "Bilder"
 }

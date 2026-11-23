@@ -3,6 +3,7 @@ import type {
   DesktopWindowCloseRequest,
   DesktopWindowsBridge,
 } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/ui/button";
@@ -27,6 +28,7 @@ export function DesktopWindowsHost() {
 }
 
 function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindowsBridge }) {
+  const gt = useGT();
   const [request, setRequest] = useState<DesktopWindowCloseRequest | null>(null);
   const [name, setName] = useState("");
   const pendingRequestIdRef = useRef<string | null>(null);
@@ -53,7 +55,7 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
     pendingRequestIdRef.current = null;
     setRequest(null);
     bridge.resolveCloseRequest(request.requestId, decision).catch((cause: unknown) => {
-      notifyWindowActionFailure("Couldn't close the window", cause);
+      notifyWindowActionFailure(gt("Couldn't close the window"), cause);
     });
   };
   const savedName = normalizeWindowProfileName(name);
@@ -71,16 +73,20 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
     >
       <DialogPopup className="max-w-md" initialFocus={inputRef}>
         <DialogHeader>
-          <DialogTitle>Save this window?</DialogTitle>
+          <DialogTitle>
+            <T>Save this window?</T>
+          </DialogTitle>
           <DialogDescription>
-            A saved window keeps its project filter and theme. Reopen it from the command palette or
-            Settings.
+            <T>
+              A saved window keeps its project filter and theme. Reopen it from the command palette
+              or Settings.
+            </T>
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <Input
             ref={inputRef}
-            aria-label="Window name"
+            aria-label={gt("Window name")}
             maxLength={WINDOW_PROFILE_NAME_MAX_LENGTH}
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -98,7 +104,7 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
             size="sm"
             onClick={() => resolve({ action: "cancel" })}
           >
-            Cancel
+            <T>Cancel</T>
           </Button>
           <Button
             type="button"
@@ -106,10 +112,10 @@ function DesktopWindowsHostContent({ bridge }: { readonly bridge: DesktopWindows
             size="sm"
             onClick={() => resolve({ action: "discard" })}
           >
-            Don't Save
+            <T>Don't Save</T>
           </Button>
           <Button type="button" size="sm" disabled={savedName === null} onClick={save}>
-            Save
+            <T>Save</T>
           </Button>
         </DialogFooter>
       </DialogPopup>

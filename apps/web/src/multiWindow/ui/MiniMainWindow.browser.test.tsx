@@ -17,7 +17,7 @@ import {
   projectsFor,
   PULL_REQUESTS,
   UPDATE_AVAILABLE,
-} from "./mini.fixtures";
+} from "./mini.test-fixtures";
 import { MiniPanel } from "./MiniMainWindow";
 import { MiniPullRequestList } from "./MiniPullRequests";
 import { MiniUpdate } from "./MiniUpdate";

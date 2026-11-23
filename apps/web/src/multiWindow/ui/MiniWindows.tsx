@@ -1,4 +1,5 @@
 import type { DesktopOpenWindow } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { ListFilterIcon } from "lucide-react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
@@ -22,16 +23,20 @@ export function MiniWindows({
   readonly projectsFor: (projectScopeKeys: readonly string[]) => readonly MiniWindowProject[];
   readonly onFocusWindow: (windowId: number) => void;
 }) {
+  const gt = useGT();
   return (
-    <section aria-label="Windows" className="p-(--sidebar-content-inset)">
+    <section
+      aria-label={gt("Windows", { $context: "Mini Mode tab listing the app's open windows" })}
+      className="p-(--sidebar-content-inset)"
+    >
       {windows === null ? (
-        <div role="status" aria-label="Loading windows" className="flex flex-col gap-2 p-2">
+        <div role="status" aria-label={gt("Loading windows")} className="flex flex-col gap-2 p-2">
           <Skeleton className="h-3 w-24" />
           <Skeleton className="h-4 w-40" />
         </div>
       ) : windows.length === 0 ? (
         <p className="px-(--sidebar-row-content-inset) py-2 text-secondary-label text-sm">
-          No other windows are open.
+          <T>No other windows are open.</T>
         </p>
       ) : (
         <ul>
@@ -58,6 +63,7 @@ function MiniWindowCard({
   readonly projects: readonly MiniWindowProject[];
   readonly onFocus: () => void;
 }) {
+  const gt = useGT();
   // The desktop shell appends the window's name to its title, and the card already leads with it.
   // What is left names the open thread, or only the app when the window has none open.
   const nameSuffix = ` - ${window.name}`;
@@ -95,13 +101,19 @@ function MiniWindowCard({
           )}
           <span className="min-w-0 flex-1 truncate">
             {projects.length === 0
-              ? "All projects"
+              ? gt("All projects")
               : projects.map((project) => project.displayName).join(", ")}
           </span>
           {window.focused ? (
-            <span className="shrink-0 font-medium text-success-foreground">Focused</span>
+            <span className="shrink-0 font-medium text-success-foreground">
+              {gt("Focused", { $context: "state of a window that has focus" })}
+            </span>
           ) : (
-            <span className="shrink-0">{window.profileId === null ? "Unsaved" : "Saved"}</span>
+            <span className="shrink-0">
+              {window.profileId === null
+                ? gt("Unsaved", { $context: "state of a window without a saved profile" })
+                : gt("Saved", { $context: "state of a window with a saved profile" })}
+            </span>
           )}
         </span>
         <span className="mt-1 block truncate font-medium text-sm">{window.name}</span>

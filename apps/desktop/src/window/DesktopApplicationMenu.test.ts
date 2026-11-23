@@ -458,7 +458,8 @@ describe("DesktopApplicationMenu", () => {
         }
         assert.deepEqual(
           windowMenu.submenu.flatMap((item) => (item.label === undefined ? [] : [item.label])),
-          ["Mini Mode"],
+          // The role items carry translated labels too.
+          ["Mini Mode", "Minimize", "Zoom"],
         );
       }),
   );

@@ -1,5 +1,6 @@
 import { useRouter } from "@tanstack/react-router";
 import type { DesktopWindowsBridge } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import {
   AppWindowIcon,
   ChartNoAxesColumnIcon,
@@ -37,6 +38,7 @@ export function MiniMainWindow() {
 }
 
 function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBridge }) {
+  const gt = useGT();
   const router = useRouter();
   const windowsState = useDesktopWindowsState();
   const updateState = useDesktopUpdateState();
@@ -46,7 +48,7 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
 
   const expand = () => {
     bridge.setMiniMode(false).catch((cause: unknown) => {
-      notifyWindowActionFailure("Couldn't leave Mini Mode", cause);
+      notifyWindowActionFailure(gt("Couldn't leave Mini Mode"), cause);
     });
   };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the router: the panel shows no pages, so going to one (a search result, Settings) needs the full window
@@ -76,7 +78,7 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
               projectsFor={groupsForKeys}
               onFocusWindow={(windowId) => {
                 bridge.focus(windowId).catch((cause: unknown) => {
-                  notifyWindowActionFailure("Couldn't focus the window", cause);
+                  notifyWindowActionFailure(gt("Couldn't focus the window"), cause);
                 });
               }}
             />
@@ -108,6 +110,7 @@ export function MiniPanel({
   /** Only the showing tab's content mounts. */
   readonly tabs: Readonly<Record<MiniTab, ReactNode>>;
 }) {
+  const gt = useGT();
   const [tab, setTab] = useState<MiniTab>("usage");
   const tabItem = (id: MiniTab, label: string, icon: ReactNode) => (
     <SidebarHeaderIconButton
@@ -123,14 +126,26 @@ export function MiniPanel({
     <SidebarProvider className="h-dvh min-h-0">
       <div className="flex min-w-0 flex-1 flex-col bg-sidebar text-sidebar-foreground">
         <header className="drag-region flex h-(--workspace-topbar-height) shrink-0 items-center gap-0.5 px-(--sidebar-content-inset) wco:pr-(--workspace-native-controls-inset)">
-          <nav aria-label="Mini Mode tabs" className="flex items-center gap-0.5">
-            {tabItem("windows", "Windows", <LayersIcon />)}
+          <nav aria-label={gt("Mini Mode tabs")} className="flex items-center gap-0.5">
+            {tabItem(
+              "windows",
+              gt("Windows", { $context: "Mini Mode tab listing the app's open windows" }),
+              <LayersIcon />,
+            )}
             {pullRequestsSupported
-              ? tabItem("pullRequests", "Pull requests", <PullRequestGlyph.pullRequest />)
+              ? tabItem("pullRequests", gt("Pull requests"), <PullRequestGlyph.pullRequest />)
               : null}
-            {tabItem("usage", "Usage", <ChartNoAxesColumnIcon />)}
+            {tabItem(
+              "usage",
+              gt("Usage", { $context: "Mini Mode tab showing usage limits" }),
+              <ChartNoAxesColumnIcon />,
+            )}
             <span className="relative">
-              {tabItem("update", "Update", <CircleArrowUpIcon />)}
+              {tabItem(
+                "update",
+                gt("Update", { $context: "Mini Mode tab about app updates" }),
+                <CircleArrowUpIcon />,
+              )}
               {updateAvailable ? (
                 <span
                   aria-hidden
@@ -140,15 +155,18 @@ export function MiniPanel({
             </span>
           </nav>
           <span className="flex-1" />
-          <SidebarHeaderIconButton label="Search" onClick={onSearch}>
+          <SidebarHeaderIconButton label={gt("Search")} onClick={onSearch}>
             <SearchIcon />
           </SidebarHeaderIconButton>
           {onNewWindow === undefined ? null : (
-            <SidebarHeaderIconButton label="New Window" onClick={onNewWindow}>
+            <SidebarHeaderIconButton label={gt("New Window")} onClick={onNewWindow}>
               <AppWindowIcon />
             </SidebarHeaderIconButton>
           )}
-          <SidebarHeaderIconButton label="Expand" onClick={onExpand}>
+          <SidebarHeaderIconButton
+            label={gt("Expand", { $context: "button, leaves Mini Mode for the full window" })}
+            onClick={onExpand}
+          >
             <Maximize2Icon />
           </SidebarHeaderIconButton>
         </header>

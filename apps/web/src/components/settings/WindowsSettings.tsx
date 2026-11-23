@@ -1,9 +1,11 @@
 import type { DesktopWindowProfile, DesktopWindowsBridge } from "@t3tools/contracts";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useState, type ComponentProps } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useRenderedAppearance } from "../../hooks/useTheme";
+import { m as resolveMessage, type MessageResolver } from "../../i18n/messages";
 import { desktopWindowsBridge, readDesktopWindowContext } from "../../multiWindow/windowContext";
 import {
   selectCurrentWindow,
@@ -45,6 +47,7 @@ export function WindowsSettingsSection() {
 }
 
 function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBridge }) {
+  const gt = useGT();
   const windowsState = useDesktopWindowsState();
   const projectGroups = useProjectScopeGroups();
   const [creating, setCreating] = useState(false);
@@ -59,7 +62,7 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
   return (
     <SettingsSection
       id="windows"
-      title="Windows"
+      title={gt("Windows", { $context: "settings section about the app's windows" })}
       headerAction={
         <Button
           size="xs"
@@ -68,21 +71,26 @@ function WindowsSettingsContent({ bridge }: { readonly bridge: DesktopWindowsBri
           onClick={() => setCreating(true)}
         >
           <PlusIcon className="size-3" />
-          Add saved window
+          <T>Add saved window</T>
         </Button>
       }
     >
       <SettingsRow
-        title="Multiple windows"
-        description="Open more windows that share this app's connections. Turning this off keeps open windows open."
+        title={gt("Multiple windows")}
+        description={
+          <T>
+            Open more windows that share this app's connections. Turning this off keeps open windows
+            open.
+          </T>
+        }
         control={
           <Switch
             checked={multiWindowEnabled}
             disabled={windowsState === null}
-            aria-label="Multiple windows"
+            aria-label={gt("Multiple windows")}
             onCheckedChange={(checked) => {
               bridge.setMultiWindowEnabled(checked).catch((cause: unknown) => {
-                notifyWindowActionFailure("Couldn't change multiple windows", cause);
+                notifyWindowActionFailure(gt("Couldn't change multiple windows"), cause);
               });
             }}
           />
@@ -139,6 +147,7 @@ function SaveCurrentWindowRow({
   readonly bridge: DesktopWindowsBridge;
   readonly suggestedName: string;
 }) {
+  const gt = useGT();
   const [name, setName] = useState(suggestedName);
   const [saving, setSaving] = useState(false);
   const normalized = normalizeWindowProfileName(name);
@@ -147,19 +156,19 @@ function SaveCurrentWindowRow({
     setSaving(true);
     bridge
       .saveAsProfile(normalized)
-      .catch((cause: unknown) => notifyWindowActionFailure("Couldn't save this window", cause))
+      .catch((cause: unknown) => notifyWindowActionFailure(gt("Couldn't save this window"), cause))
       .finally(() => setSaving(false));
   };
   return (
     <SettingsRow
-      title="Save this window"
-      description="Keep this window's project filter and theme so you can reopen it later."
+      title={gt("Save this window")}
+      description={<T>Keep this window's project filter and theme so you can reopen it later.</T>}
       control={
         <div className="flex w-full items-center gap-2 sm:w-auto">
           <Input
             size="sm"
             className="w-full sm:w-44"
-            aria-label="Window name"
+            aria-label={gt("Window name")}
             maxLength={WINDOW_PROFILE_NAME_MAX_LENGTH}
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -170,7 +179,7 @@ function SaveCurrentWindowRow({
             }}
           />
           <Button size="sm" disabled={normalized === null || saving} onClick={save}>
-            Save
+            <T>Save</T>
           </Button>
         </div>
       }
@@ -178,9 +187,13 @@ function SaveCurrentWindowRow({
   );
 }
 
-function projectFilterSummary(projectGroups: ProjectScopeGroups, keys: readonly string[]): string {
+function projectFilterSummary(
+  projectGroups: ProjectScopeGroups,
+  keys: readonly string[],
+  resolve: MessageResolver = resolveMessage,
+): string {
   const names = projectGroups.groupsForKeys(keys).map((group) => group.displayName);
-  return names.length === 0 ? "All projects" : names.join(", ");
+  return names.length === 0 ? resolve(msg("All projects")) : names.join(", ");
 }
 
 interface WindowThemeOption {
@@ -193,6 +206,7 @@ interface WindowThemeOption {
 }
 
 function useWindowThemeOptions(projects: readonly SidebarProjectSnapshot[]): WindowThemeOption[] {
+  const gt = useGT();
   const themeCards = useThemeCards();
   const appearance = useRenderedAppearance();
   const projectColors = useProjectTintColors(projects);
@@ -200,7 +214,7 @@ function useWindowThemeOptions(projects: readonly SidebarProjectSnapshot[]): Win
     // Without a project filter there is no project colour to take on.
     {
       value: FOLLOW_MAIN_WINDOW_THEME,
-      label: projects.length > 0 ? "Project colour" : "Follow main window",
+      label: projects.length > 0 ? gt("Project colour") : gt("Follow main window"),
       previews: [],
       colors: projectColors,
     },
@@ -246,15 +260,19 @@ function WindowProfileRow({
   readonly isCurrentWindow: boolean;
   readonly canOpen: boolean;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const themeOptions = useWindowThemeOptions(projectGroups.groupsForKeys(profile.projectScopeKeys));
   const deleteProfile = async () => {
     const confirmed = await requestConfirmDialog(
-      `Delete the saved window "${profile.name}"?\nIf it is open, it stays open as an unsaved window.`,
+      gt('Delete the saved window "{name}"?\nIf it is open, it stays open as an unsaved window.', {
+        name: profile.name,
+      }),
       { variant: "destructive" },
     );
     if (confirmed !== true) return;
     await bridge.deleteProfile(profile.id).catch((cause: unknown) => {
-      notifyWindowActionFailure("Couldn't delete the saved window", cause);
+      notifyWindowActionFailure(gt("Couldn't delete the saved window"), cause);
     });
   };
 
@@ -264,28 +282,33 @@ function WindowProfileRow({
         <>
           <ProfileNameInput bridge={bridge} profile={profile} />
           {profile.isDefault ? (
-            <span className="font-normal text-muted-foreground"> (main window)</span>
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              <T>(main window)</T>
+            </span>
           ) : null}
         </>
       }
       description={
-        profile.isDefault
-          ? "Holds the connections and drafts every window shares."
-          : projectFilterSummary(projectGroups, profile.projectScopeKeys)
+        profile.isDefault ? (
+          <T>Holds the connections and drafts every window shares.</T>
+        ) : (
+          projectFilterSummary(projectGroups, profile.projectScopeKeys, m)
+        )
       }
       style={profile.isDefault ? undefined : themeWashStyle(themeOptions, profile.theme)}
       control={
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
           {profile.isDefault ? null : (
             <Label>
-              Theme
+              <T>Theme</T>
               <WindowThemeSelect
                 options={themeOptions}
                 value={profile.theme}
-                ariaLabel={`Theme of ${profile.name}`}
+                ariaLabel={gt("Theme of {name}", { name: profile.name })}
                 onChange={(theme) => {
                   bridge.updateProfile({ profileId: profile.id, theme }).catch((cause: unknown) => {
-                    notifyWindowActionFailure("Couldn't change the window theme", cause);
+                    notifyWindowActionFailure(gt("Couldn't change the window theme"), cause);
                   });
                 }}
               />
@@ -297,11 +320,13 @@ function WindowProfileRow({
               variant="outline"
               onClick={() => {
                 bridge.openProfile(profile.id).catch((cause: unknown) => {
-                  notifyWindowActionFailure("Couldn't open the window", cause);
+                  notifyWindowActionFailure(gt("Couldn't open the window"), cause);
                 });
               }}
             >
-              {isOpen ? "Focus" : "Open"}
+              {isOpen
+                ? gt("Focus", { $context: "button, brings an open window to the front" })
+                : gt("Open", { $context: "button, opens a saved window" })}
             </Button>
           )}
           {profile.isDefault ? null : (
@@ -311,14 +336,16 @@ function WindowProfileRow({
                   <Button
                     size="icon-sm"
                     variant="ghost-destructive"
-                    aria-label={`Delete ${profile.name}`}
+                    aria-label={gt("Delete {name}", { name: profile.name })}
                     onClick={() => void deleteProfile()}
                   />
                 }
               >
                 <Trash2Icon />
               </TooltipTrigger>
-              <TooltipPopup side="top">Delete saved window</TooltipPopup>
+              <TooltipPopup side="top">
+                <T>Delete saved window</T>
+              </TooltipPopup>
             </Tooltip>
           )}
         </div>
@@ -336,6 +363,7 @@ function NewWindowProfileRow({
   readonly projectGroups: ProjectScopeGroups;
   readonly onDone: () => void;
 }) {
+  const gt = useGT();
   const [name, setName] = useState("");
   const [projectScopeKeys, setProjectScopeKeys] = useState<readonly string[]>([]);
   const [theme, setTheme] = useState<string | null>(null);
@@ -348,7 +376,7 @@ function NewWindowProfileRow({
     bridge.createProfile({ name: normalized, projectScopeKeys, theme }).then(
       () => onDone(),
       (cause: unknown) => {
-        notifyWindowActionFailure("Couldn't save the window", cause);
+        notifyWindowActionFailure(gt("Couldn't save the window"), cause);
         setSaving(false);
       },
     );
@@ -357,8 +385,8 @@ function NewWindowProfileRow({
     <SettingsRow
       title={
         <WindowNameInput
-          aria-label="Name of the new window"
-          placeholder="New saved window"
+          aria-label={gt("Name of the new window")}
+          placeholder={gt("New saved window")}
           autoFocus
           value={name}
           onChange={(event) => setName(event.target.value)}
@@ -369,22 +397,24 @@ function NewWindowProfileRow({
           }}
         />
       }
-      description="Open it later from here, the command palette or the Window menu."
+      description={<T>Open it later from here, the command palette or the Window menu.</T>}
       style={themeWashStyle(themeOptions, theme)}
       control={
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={onDone}>
-            Cancel
+            <T>Cancel</T>
           </Button>
           <Button size="sm" disabled={normalized === null || saving} onClick={create}>
-            Save
+            <T>Save</T>
           </Button>
         </div>
       }
     >
       <div className="grid gap-3 pt-1 pb-3 sm:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1.5">
-          <Label render={<span />}>Projects</Label>
+          <Label render={<span />}>
+            <T>Projects</T>
+          </Label>
           <ProjectFilterSelect
             projectGroups={projectGroups}
             value={projectScopeKeys}
@@ -392,11 +422,13 @@ function NewWindowProfileRow({
           />
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
-          <Label render={<span />}>Theme</Label>
+          <Label render={<span />}>
+            <T>Theme</T>
+          </Label>
           <WindowThemeSelect
             options={themeOptions}
             value={theme}
-            ariaLabel="Theme of the new window"
+            ariaLabel={gt("Theme of the new window")}
             fullWidth
             onChange={setTheme}
           />
@@ -415,6 +447,8 @@ function ProjectFilterSelect({
   readonly value: readonly string[];
   readonly onChange: (keys: readonly string[]) => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   return (
     <Select
       multiple
@@ -423,8 +457,8 @@ function ProjectFilterSelect({
         if (Array.isArray(next)) onChange(next.filter((key) => typeof key === "string"));
       }}
     >
-      <SelectTrigger size="sm" aria-label="Projects of the new window">
-        <SelectValue>{projectFilterSummary(projectGroups, value)}</SelectValue>
+      <SelectTrigger size="sm" aria-label={gt("Projects of the new window")}>
+        <SelectValue>{projectFilterSummary(projectGroups, value, m)}</SelectValue>
       </SelectTrigger>
       <SelectPopup alignItemWithTrigger={false}>
         {projectGroups.groups.map((group) => (
@@ -546,6 +580,7 @@ function ProfileNameInput({
   readonly bridge: DesktopWindowsBridge;
   readonly profile: DesktopWindowProfile;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState({ base: profile.name, value: profile.name });
   if (draft.base !== profile.name) setDraft({ base: profile.name, value: profile.name });
   const commit = () => {
@@ -555,13 +590,13 @@ function ProfileNameInput({
       return;
     }
     bridge.updateProfile({ profileId: profile.id, name }).catch((cause: unknown) => {
-      notifyWindowActionFailure("Couldn't rename the window", cause);
+      notifyWindowActionFailure(gt("Couldn't rename the window"), cause);
       setDraft({ base: profile.name, value: profile.name });
     });
   };
   return (
     <WindowNameInput
-      aria-label={`Name of ${profile.name}`}
+      aria-label={gt("Name of {name}", { name: profile.name })}
       value={draft.value}
       onChange={(event) => setDraft({ base: profile.name, value: event.target.value })}
       onBlur={commit}

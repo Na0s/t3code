@@ -34,12 +34,12 @@ export function useCommandPaletteWindowItems(): ReadonlyArray<CommandPaletteActi
       items.push({
         kind: "action",
         value: `action:window-open:${profile.id}`,
-        title: `Open window: ${profile.name}`,
+        title: gt("Open window: {name}", { name: profile.name }),
         searchTerms: ["window", "open window", "saved window", profile.name],
         icon: <AppWindowIcon className={ITEM_ICON_CLASS} />,
         run: async () => {
           await bridge.openProfile(profile.id).catch((cause: unknown) => {
-            notifyWindowActionFailure("Couldn't open the window", cause);
+            notifyWindowActionFailure(gt("Couldn't open the window"), cause);
           });
         },
       });
@@ -50,7 +50,7 @@ export function useCommandPaletteWindowItems(): ReadonlyArray<CommandPaletteActi
     items.push({
       kind: "action",
       value: "action:window-mini-mode",
-      title: miniMode ? "Exit Mini Mode" : "Enter Mini Mode",
+      title: miniMode ? gt("Exit Mini Mode") : gt("Enter Mini Mode"),
       searchTerms: ["mini mode", "compact", "windows", "usage limits", "collapse", "expand"],
       icon: miniMode ? (
         <Maximize2Icon className={ITEM_ICON_CLASS} />
@@ -59,7 +59,7 @@ export function useCommandPaletteWindowItems(): ReadonlyArray<CommandPaletteActi
       ),
       run: async () => {
         await bridge.setMiniMode(!miniMode).catch((cause: unknown) => {
-          notifyWindowActionFailure("Couldn't change Mini Mode", cause);
+          notifyWindowActionFailure(gt("Couldn't change Mini Mode"), cause);
         });
       },
     });
