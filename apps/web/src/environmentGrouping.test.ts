@@ -107,6 +107,38 @@ describe("environment grouping", () => {
     },
   );
 
+  it("moves a scope saved for a folded project to the project that covers its folder", () => {
+    const shop = makeProject({
+      id: ProjectId.make("shop"),
+      title: "shop",
+      workspaceRoot: "/work/shop",
+      trackedFolders: [{ path: "/work/shop/api", name: "api", discovered: true }],
+    });
+    const api = makeProject({
+      id: ProjectId.make("api"),
+      title: "api",
+      workspaceRoot: "/work/shop/api",
+      repositoryIdentity,
+    });
+    const build = (foldCoveredProjects: boolean) =>
+      buildSidebarProjectSnapshots({
+        projects: [shop, api],
+        foldCoveredProjects,
+        settings: defaultGroupingSettings,
+        primaryEnvironmentId,
+        resolveEnvironmentLabel: () => null,
+      });
+    const savedForApi = deriveLogicalProjectKeyFromSettings(api, defaultGroupingSettings);
+    expect(build(false).map((group) => group.displayName)).toEqual(["shop", "api"]);
+
+    const groups = build(true);
+    expect(groups.map((group) => group.displayName)).toEqual(["shop"]);
+    expect(
+      resolveSidebarProjectScopeKey({ groups, key: savedForApi, canClearMissingScope: true }),
+    ).toBe(groups[0]?.projectKey);
+    expect(groups[0]?.memberProjectRefs.map((ref) => ref.projectId)).toEqual(["shop", "api"]);
+  });
+
   it("prefers an existing ordinary repository scope over a scratch alias", () => {
     const scratch = makeProject({ isScratch: true, repositoryIdentity });
     const ordinary = makeProject({

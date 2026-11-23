@@ -151,6 +151,26 @@ choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+### Projects with several repositories
+
+A project can [cover several repositories](./multi-repo-projects.md). When one of them also has
+a project of its own, in the same folder on that machine or for the same repository on any
+connected machine, that project shows in the sidebar as part of the project that covers it. Its
+threads read `api · shop`: the repository, then the covering project. Filtering the sidebar to the
+covering project shows them too, and a filter you had saved for the repository's own project now
+shows the covering project. The repository's project keeps its own settings, and you can still
+start a thread in it from the command palette.
+
+In the default sidebar, threads that show a status, such as Working, Input, or Done, come first.
+Below them, each project that covers other repositories gathers its threads, and those of the
+projects shown as part of it, under its name. A thread joins that group once it no longer shows a
+status, for example after you open a Done thread.
+
+This is on by default. Turn it off with **Settings → General → Gather multi-repo projects** on web
+and desktop to keep the active list in its usual order. Covered projects still show as part of the
+project that covers them. Each device keeps its own choice. The project-grouped sidebar below puts
+their threads in the covering project's folder.
+
 ### Group threads by project (beta)
 
 Turn on **Settings → Labs → Boring sidebar (group by project)** on web and desktop to put active

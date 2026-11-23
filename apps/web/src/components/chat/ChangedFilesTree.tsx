@@ -21,6 +21,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { observeResize } from "~/lib/observeResize";
 import { repositoryFilePath } from "@t3tools/client-runtime/state/thread-repositories";
+import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 
 const EMPTY_DIRECTORY_OVERRIDES: Record<string, boolean> = {};
 const VIRTUALIZE_AFTER_ROWS = 250;
@@ -42,6 +43,8 @@ export interface ChangedFilesGroup {
   readonly relativePath: string | undefined;
   /** Shown in place of the files when they cannot be listed. */
   readonly note?: string | undefined;
+  /** The repository's own project, named after its folder. */
+  readonly project?: ProjectFaviconProject | undefined;
 }
 
 type ChangedFileContextMenuHandler = (
@@ -246,6 +249,15 @@ function ChangedFilesGroupSection(props: {
         />
         <FolderGit2Icon className="size-3.5 shrink-0 text-muted-foreground/75" />
         <span className="truncate font-mono text-2xs text-foreground/90">{group.name}</span>
+        {group.project ? (
+          <span
+            data-changed-files-group-project=""
+            className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+          >
+            <ProjectFavicon project={group.project} className="size-3.5 shrink-0" />
+            <span className="truncate">{group.project.title}</span>
+          </span>
+        ) : null}
         {hasNonZeroStat(group.totals) && (
           <span className="ml-auto shrink-0 font-mono text-3xs tabular-nums">
             <DiffStatLabel additions={group.totals.additions} deletions={group.totals.deletions} />

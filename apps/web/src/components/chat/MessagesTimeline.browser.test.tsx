@@ -2298,6 +2298,49 @@ function ChangedFilesTimeline() {
 }
 
 describe("ChangedFilesCard", () => {
+  it("names a repository's own project after its folder row", async () => {
+    const file = (path: string) => ({
+      path,
+      kind: "modified" as const,
+      additions: 1,
+      deletions: 0,
+    });
+    const group = (name: string) => ({
+      key: name,
+      name,
+      files: [file("README.md")],
+      totals: { count: 1, additions: 1, deletions: 0 },
+      relativePath: name,
+    });
+    await using screen = await render(
+      <ChangedFilesCard
+        runId={RunId.make("run-1")}
+        files={[]}
+        totals={{ count: 2, additions: 2, deletions: 0 }}
+        groups={[
+          {
+            ...group("api"),
+            project: {
+              environmentId: EnvironmentId.make("environment-local"),
+              workspaceRoot: "/work/api",
+              title: "API service",
+              projectIcon: { kind: "monogram", text: "AS", color: "teal" },
+            },
+          },
+          group("web"),
+        ]}
+        allDirectoriesExpanded
+        resolvedTheme="light"
+        onToggleAllDirectories={() => {}}
+        onOpenTurnDiff={() => {}}
+      />,
+    );
+    const row = (name: string) =>
+      screen.container.querySelector(`[data-changed-files-group="${name}"] > button`)!;
+    expect(row("api").textContent).toContain("apiASAPI service");
+    expect(row("web").querySelector("[data-changed-files-group-project]")).toBeNull();
+  });
+
   it.each(["folder", "all folders"])(
     "measures %s collapse and expansion in the same commit",
     async (toggle) => {

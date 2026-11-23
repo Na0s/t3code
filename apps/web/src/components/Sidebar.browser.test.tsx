@@ -513,3 +513,78 @@ describe("sidebar settled pagination", () => {
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
   });
 });
+
+describe("sidebar multi-repo projects", () => {
+  it.each([true, false])(
+    "folds a covered project's threads into its covering project, gathered=%s",
+    async (gathered) => {
+      using stack = new DisposableStack();
+      const style = document.createElement("style");
+      style.textContent = appCss;
+      document.head.append(style);
+      stack.defer(() => style.remove());
+      const previousSettings = getClientSettings();
+      stack.defer(() => __setClientSettingsForTests(previousSettings));
+      __setClientSettingsForTests({
+        ...DEFAULT_CLIENT_SETTINGS,
+        sidebarGatherProjectThreads: gathered,
+      });
+      const shop = {
+        ...project("shop"),
+        trackedFolders: [{ path: "/projects/api", name: "api", discovered: true }],
+      };
+      const api = project("api");
+      const fleet = project("fleet");
+      vi.mocked(useProjects).mockReturnValue([shop, api, fleet]);
+      const shell = (
+        projectId: ProjectId,
+        index: number,
+        overrides: Partial<EnvironmentThreadShell> = {},
+      ) => ({ ...threadShell(projectId, index), ...overrides });
+      vi.mocked(useQuietThreadShells).mockReturnValue([
+        shell(api.id, 1),
+        shell(fleet.id, 2),
+        shell(shop.id, 3, { hasPendingUserInput: true }),
+        shell(shop.id, 4),
+      ]);
+      vi.mocked(useThreadRouteTarget).mockReturnValue(null);
+      vi.mocked(useHandleNewThread).mockReturnValue({
+        activeDraftThread: null,
+        activeThread: null,
+        defaultProjectRef: null,
+        defaultProjectFallbackReady: true,
+        handleNewThread: vi.fn(),
+        routeDraftId: null,
+        routeThreadRef: null,
+      });
+
+      await using screen = await render(
+        <SidebarProvider>
+          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+        </SidebarProvider>,
+      );
+      await expect.element(screen.getByText("Thread 4")).toBeInTheDocument();
+      await expect.element(screen.getByText("api · shop")).toBeInTheDocument();
+      const rows = () =>
+        [
+          ...screen.container.querySelectorAll(
+            '[data-testid="sidebar-gathered-header"], [data-testid="sidebar-row-card"]',
+          ),
+        ].map((row) =>
+          row.getAttribute("data-testid") === "sidebar-gathered-header"
+            ? `# ${row.lastElementChild?.textContent}`
+            : (row.textContent?.match(/Thread \d/)?.[0] ?? ""),
+        );
+      if (gathered) {
+        // The status thread leads; shop's threads, api's among them, gather at the first one.
+        expect(rows()).toEqual(["Thread 3", "# shop", "Thread 1", "Thread 4", "Thread 2"]);
+        const gatheredRow = screen.container.querySelector(
+          '[data-thread-item$=":thread-1"]',
+        ) as HTMLElement;
+        expect(getComputedStyle(gatheredRow).paddingInlineStart).toBe("12px");
+      } else {
+        expect(rows()).toEqual(["Thread 1", "Thread 2", "Thread 3", "Thread 4"]);
+      }
+    },
+  );
+});

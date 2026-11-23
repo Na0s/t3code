@@ -1,6 +1,7 @@
 import {
   OrchestrationProjectShell,
   OrchestrationV2ThreadShell,
+  ProjectTrackedFolders,
   RepositoryIdentity,
   ThreadPullRequestLink,
   type OrchestrationV2ShellSnapshot,
@@ -14,6 +15,7 @@ const sameLinks = Schema.toEquivalence(Schema.UndefinedOr(Schema.Array(ThreadPul
 const sameRepositoryIdentity = Schema.toEquivalence(
   Schema.UndefinedOr(Schema.NullOr(RepositoryIdentity)),
 );
+const sameTrackedFolders = Schema.toEquivalence(Schema.UndefinedOr(ProjectTrackedFolders));
 
 export function sameThreadPullRequests(
   left: OrchestrationV2ThreadShell["pullRequests"],
@@ -60,14 +62,30 @@ function retainRepositoryIdentity(
   previous: OrchestrationProjectShell | undefined,
   next: OrchestrationProjectShell,
 ): OrchestrationProjectShell {
+  let merged = next;
   if (
     next.repositoryIdentity == null &&
     previous?.repositoryIdentity != null &&
     previous.workspaceRoot === next.workspaceRoot
   ) {
-    return { ...next, repositoryIdentity: previous.repositoryIdentity };
+    merged = { ...merged, repositoryIdentity: previous.repositoryIdentity };
   }
-  return next;
+  // Tracked folders' identities resolve the same way, so a folder keeps the one it had.
+  const known = new Map(
+    previous?.trackedFolders?.flatMap((folder) =>
+      folder.repositoryIdentity ? [[folder.path, folder.repositoryIdentity] as const] : [],
+    ),
+  );
+  if (known.size > 0 && next.trackedFolders?.some((folder) => !folder.repositoryIdentity)) {
+    merged = {
+      ...merged,
+      trackedFolders: next.trackedFolders.map((folder) => {
+        const repositoryIdentity = folder.repositoryIdentity ?? known.get(folder.path);
+        return repositoryIdentity ? { ...folder, repositoryIdentity } : folder;
+      }),
+    };
+  }
+  return merged;
 }
 
 export interface MergeShellSnapshotOptions {
@@ -98,18 +116,25 @@ export function mergeShellSnapshotProjects(
       if (candidate === undefined || candidate.workspaceRoot !== project.workspaceRoot) {
         return project;
       }
+      let merged = project;
       if (resolvedRootSet?.has(project.workspaceRoot) === true) {
         // Refreshes re-resolve every root; an unchanged identity keeps the project's identity
         // so every subscriber (each pull request row, the sidebar) skips re-rendering.
-        if (sameRepositoryIdentity(project.repositoryIdentity, candidate.repositoryIdentity)) {
-          return project;
+        if (!sameRepositoryIdentity(project.repositoryIdentity, candidate.repositoryIdentity)) {
+          merged = { ...merged, repositoryIdentity: candidate.repositoryIdentity };
         }
-        return { ...project, repositoryIdentity: candidate.repositoryIdentity };
+      } else if (project.repositoryIdentity == null && candidate.repositoryIdentity != null) {
+        merged = { ...merged, repositoryIdentity: candidate.repositoryIdentity };
       }
-      if (project.repositoryIdentity == null && candidate.repositoryIdentity != null) {
-        return { ...project, repositoryIdentity: candidate.repositoryIdentity };
+      // A refresh also carries identities resolved for the project's tracked folders.
+      const { trackedFolders } = retainRepositoryIdentity(project, candidate);
+      if (
+        trackedFolders !== undefined &&
+        !sameTrackedFolders(project.trackedFolders, trackedFolders)
+      ) {
+        merged = { ...merged, trackedFolders };
       }
-      return project;
+      return merged;
     });
     return projects.every((project, index) => project === previous.projects[index])
       ? previous

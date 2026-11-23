@@ -55,9 +55,16 @@ thread's folder. A thread that changes one shows it as its own repository, with 
 Git actions, while the repository that holds it shows the changed pin. A submodule never
 gets a worktree of its own, because its parent repository decides where it is checked out.
 
+## In the sidebar
+
+If a repository the project covers has a project of its own, on this machine or on another
+connected machine, the sidebar shows that project as part of this one, and lists this project's
+threads together. See [Projects with several repositories](./thread-sidebar.md#projects-with-several-repositories).
+
 ## Review changes
 
-Each turn lists the files it changed, grouped by repository, and its diff covers all of them. See
+Each turn lists the files it changed, grouped by repository, and its diff covers all of them. A
+repository that has a project of its own shows that project's icon and name after its folder. See
 [Review turn changes](source-control.md#review-turn-changes).
 
 On web and desktop, the Diff pane's **Uncommitted**, **Changes**, and **Commits** sources read one

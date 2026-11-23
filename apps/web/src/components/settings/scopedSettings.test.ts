@@ -91,6 +91,7 @@ const group: SidebarProjectSnapshot = {
     { environmentId: server.environmentId, projectId },
     { environmentId: laptop.environmentId, projectId: laptopProjectId },
   ],
+  folded: [],
   groupedProjectCount: 2,
   environmentPresence: "remote-only",
   allRemoteMembersAreDesktopLocal: false,

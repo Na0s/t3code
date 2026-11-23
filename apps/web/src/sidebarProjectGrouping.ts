@@ -9,6 +9,7 @@ import {
   isPickableProjectMember,
   resolveScratchProjectScopeKey,
   selectGroupDefaultProject,
+  type FoldedProjectGroup,
   type ProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { msg } from "gt-react";
@@ -49,6 +50,7 @@ export interface SidebarProjectSnapshot extends Project {
   allRemoteMembersAreWsl: boolean;
   memberProjects: readonly SidebarProjectGroupMember[];
   memberProjectRefs: readonly ScopedProjectRef[];
+  folded: readonly FoldedProjectGroup[];
   remoteEnvironmentLabels: readonly string[];
   pinned: boolean;
   archived: boolean;
@@ -103,6 +105,8 @@ export function resolveSidebarProjectScopeKey(input: {
   if (input.key === null) return null;
   const group =
     input.groups.find((candidate) => candidate.projectKey === input.key) ??
+    // A scope saved for a project's own group follows it into the group it folded into.
+    input.groups.find((candidate) => candidate.folded.some((entry) => entry.key === input.key)) ??
     input.groups.find(
       (candidate) =>
         candidate.isScratch &&
@@ -147,6 +151,7 @@ export function buildSidebarProjectSnapshots(
     projects: ReadonlyArray<Project>;
     settings: ProjectGroupingSettings;
     groupScratchProjects?: boolean;
+    foldCoveredProjects?: boolean;
     primaryEnvironmentId: EnvironmentId | null;
     resolveEnvironmentLabel: (environmentId: EnvironmentId) => string | null;
     isDesktopLocalEnvironment?: (environmentId: EnvironmentId) => boolean;
@@ -158,6 +163,7 @@ export function buildSidebarProjectSnapshots(
     {
       projects: input.projects,
       groupScratchProjects: input.groupScratchProjects ?? false,
+      foldCoveredProjects: input.foldCoveredProjects ?? false,
       settings: input.settings,
       preferredEnvironmentId: input.primaryEnvironmentId,
     },
@@ -210,6 +216,7 @@ export function buildSidebarProjectSnapshots(
       allRemoteMembersAreWsl,
       memberProjects: members,
       memberProjectRefs: group.memberProjectRefs,
+      folded: group.folded,
       remoteEnvironmentLabels,
       pinned: group.pinned,
       archived: group.archived,

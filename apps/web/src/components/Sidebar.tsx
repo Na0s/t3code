@@ -110,6 +110,7 @@ import { configuredHostedAppUrl } from "../hostedPairing";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarFolderDrop } from "./sidebar/SidebarFolderDrop";
 import {
+  isCoveringProject,
   pickableProjectGroups,
   selectProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";
@@ -182,7 +183,10 @@ import {
 import {
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
+  gatherSidebarThreads,
   groupSidebarThreadsByProject,
+  resolveThreadLastVisitedAt,
+  sidebarRowShowsStatus,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -279,6 +283,7 @@ import {
   useSidebarDrafts,
 } from "./sidebar/SidebarDraftBlock";
 import {
+  SidebarGatheredHeader,
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
@@ -339,6 +344,7 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+const NO_GATHER_GROUPS: readonly SidebarProjectSnapshot[] = [];
 const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
@@ -441,6 +447,8 @@ function useSidebarThreads(input: {
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
+  // Groups whose active threads that show no status gather under their name; empty turns it off.
+  readonly gatherGroups: readonly SidebarProjectSnapshot[];
 }) {
   const {
     projectScopeKey,
@@ -454,6 +462,7 @@ function useSidebarThreads(input: {
     departingThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
+    gatherGroups,
   } = input;
   const shelfRouteThreadKey = routeRowThreadKey === departingThreadKey ? null : routeRowThreadKey;
   // Folders already separate the work, so boring mode has no Working shelf.
@@ -483,6 +492,7 @@ function useSidebarThreads(input: {
   );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
+  const localLastVisitedAtById = useUiStateStore((store) => store.threadLastVisitedAtById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
   const [settledTail, setSettledTail] = useState({
     scopeKey: projectScopeKey,
@@ -506,8 +516,43 @@ function useSidebarThreads(input: {
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
-  const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
-    partition;
+  const { pinnedThreads, workingThreads, snoozedThreads, settledThreads } = partition;
+  // Rows showing a status need the user, so they lead, ahead of the gathered groups.
+  const gatheredRuns =
+    folderGroups === null && gatherGroups.length > 0
+      ? gatherSidebarThreads(
+          gatherGroups,
+          partition.activeThreads,
+          (thread) =>
+            !sidebarRowShowsStatus(
+              {
+                ...thread,
+                lastVisitedAt: resolveThreadLastVisitedAt(
+                  thread.lastVisitedAt,
+                  localLastVisitedAtById[threadShellKey(thread)],
+                ),
+              },
+              threadWokeAt(thread, { now: partition.snoozeNow }),
+            ),
+        )
+      : null;
+  const activeThreads = gatheredRuns
+    ? gatheredRuns.flatMap((run) => run.threads)
+    : partition.activeThreads;
+  const activeGatheredByThreadKey = new Map<
+    string,
+    { readonly group: SidebarProjectSnapshot; readonly first: boolean; readonly last: boolean }
+  >();
+  for (const run of gatheredRuns ?? []) {
+    if (run.group === null) continue;
+    for (const [index, thread] of run.threads.entries()) {
+      activeGatheredByThreadKey.set(threadShellKey(thread), {
+        group: run.group,
+        first: index === 0,
+        last: index === run.threads.length - 1,
+      });
+    }
+  }
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -581,6 +626,8 @@ function useSidebarThreads(input: {
   }
   return {
     ...partition,
+    activeThreads,
+    activeGatheredByThreadKey,
     threads,
     workingShelfEnabled,
     searchableThreads: [
@@ -834,11 +881,21 @@ function useSidebarLookups() {
     projects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
   );
   const projectDisplayNameByKey = new Map(
-    projectGroups.flatMap((group) =>
-      group.memberProjects.map(
+    projectGroups.flatMap((group) => [
+      ...group.memberProjects.map(
         (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
       ),
-    ),
+      // A folded project's threads name the repository they work in, then the group.
+      ...group.folded.flatMap((folded) =>
+        folded.projectRefs.map(
+          (ref) =>
+            [
+              `${ref.environmentId}:${ref.projectId}`,
+              `${folded.folderName} · ${group.displayName}`,
+            ] as const,
+        ),
+      ),
+    ]),
   );
   const projectGroupByScopeKey = new Map(
     projectGroups.map((project) => [project.projectKey, project] as const),
@@ -1000,6 +1057,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const gatherProjectThreads = useClientSettings(
+    (settings) => settings.sidebarGatherProjectThreads,
+  );
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -1322,6 +1382,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     draggableThreadKeys,
     activeReorderableThreadKeys,
     activeThreads,
+    activeGatheredByThreadKey,
     workingThreads,
     snoozedThreads,
     settledThreads,
@@ -1370,6 +1431,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+    gatherGroups: gatherProjectThreads
+      ? projectGroups.filter((group) => group.memberProjects.some(isCoveringProject))
+      : NO_GATHER_GROUPS,
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -2043,6 +2107,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectFolders
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
+    // Gathered name rows come and go without moving any thread row.
+    [...activeGatheredByThreadKey].flatMap(([key, { first }]) => (first ? [key] : [])).join("\n"),
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
   ].join("\0");
@@ -3484,6 +3550,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
+                        // Sits among its group's gathered threads in the active list.
+                        gathered?: { readonly last: boolean },
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3509,6 +3577,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
+                            gathered={gathered && (gathered.last ? "last" : "member")}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3617,7 +3686,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          const gathered =
+                            item.section === "active"
+                              ? activeGatheredByThreadKey.get(item.key)
+                              : undefined;
+                          if (gathered?.first) {
+                            items.push(
+                              <SidebarGatheredHeader
+                                key={`gathered:${gathered.group.projectKey}`}
+                                group={gathered.group}
+                                onContextMenu={handleProjectFolderContextMenu}
+                              />,
+                            );
+                          }
+                          items.push(
+                            renderThreadRow(
+                              threadByKey.get(item.key)!,
+                              item.section,
+                              undefined,
+                              gathered,
+                            ),
+                          );
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {

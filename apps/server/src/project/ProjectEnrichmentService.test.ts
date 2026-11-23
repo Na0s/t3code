@@ -388,3 +388,41 @@ it.effect("keeps a lookup's identity when another root is invalidated mid-flight
     }).pipe(Effect.provide(layer(layerMetadata)));
   }),
 );
+
+it.effect("fills in tracked folder identities once they resolve, without asking for favicons", () =>
+  Effect.gen(function* () {
+    const faviconStarts = yield* Ref.make(0);
+    const layerMetadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (workspaceRoot) =>
+          Effect.succeed(workspaceRoot === "/shop/notes" ? null : identity(workspaceRoot)),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        invalidate: () => Effect.void,
+        resolvePath: () => Ref.update(faviconStarts, (count) => count + 1).pipe(Effect.as(null)),
+      }),
+    );
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+      const project = {
+        trackedFolders: [
+          { path: "/shop/api", name: "api" },
+          { path: "/shop/notes", name: "notes" },
+        ],
+      };
+      const read = ProjectEnrichment.withTrackedFolderIdentities(project, (root) =>
+        service.getAvailableRepositoryIdentity(root),
+      );
+
+      assert.deepStrictEqual(yield* read, project);
+      yield* waitForAvailable(service, "/shop/api", (value) => value.repositoryIdentity !== null);
+      yield* waitForAvailable(service, "/shop/notes", (value) => value.repositoryIdentityResolved);
+      assert.deepStrictEqual((yield* read).trackedFolders, [
+        { path: "/shop/api", name: "api", repositoryIdentity: identity("/shop/api") },
+        { path: "/shop/notes", name: "notes" },
+      ]);
+      assert.equal(yield* Ref.get(faviconStarts), 0);
+    }).pipe(Effect.provide(layer(layerMetadata)));
+  }),
+);

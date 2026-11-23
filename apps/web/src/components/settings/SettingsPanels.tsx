@@ -544,6 +544,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
+    ...(settings.sidebarGatherProjectThreads !==
+    DEFAULT_UNIFIED_SETTINGS.sidebarGatherProjectThreads
+      ? [gt("Gather multi-repo projects")]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? [gt("Auto-settle inactive threads")]
       : []),
@@ -735,6 +739,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarGatherProjectThreads: DEFAULT_UNIFIED_SETTINGS.sidebarGatherProjectThreads,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -978,6 +983,39 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label={gt("Working section")}
+            />
+          }
+        />
+        <SettingsRow
+          {...setting("gather-project-threads")}
+          description={
+            <T>
+              Threads that show a status come first. Below them, each project with several
+              repositories gathers its threads, and those of its repositories' own projects, under
+              its name.
+            </T>
+          }
+          resetAction={
+            settings.sidebarGatherProjectThreads !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarGatherProjectThreads ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset multi-repo project gathering to default")}
+                onClick={() =>
+                  updateSettings({
+                    sidebarGatherProjectThreads:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarGatherProjectThreads,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarGatherProjectThreads}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarGatherProjectThreads: Boolean(checked) })
+              }
+              aria-label={gt("Gather multi-repo projects")}
             />
           }
         />

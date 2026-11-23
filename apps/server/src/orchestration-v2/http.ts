@@ -73,12 +73,16 @@ export const layer = HttpApiBuilder.group(
           projects,
           (project) =>
             // Use available enrichment only; git probes can take a minute and exceed shell-snapshot budgets.
-            projectEnrichment.getAvailable(project.workspaceRoot).pipe(
-              Effect.map((enrichment) => ({
-                ...project,
-                repositoryIdentity: enrichment.repositoryIdentity,
-              })),
-            ),
+            projectEnrichment
+              .getAvailable(project.workspaceRoot)
+              .pipe(
+                Effect.flatMap((enrichment) =>
+                  ProjectEnrichmentService.withTrackedFolderIdentities(
+                    { ...project, repositoryIdentity: enrichment.repositoryIdentity },
+                    (root) => projectEnrichment.getAvailableRepositoryIdentity(root),
+                  ),
+                ),
+              ),
           { concurrency: 16 },
         ),
     );

@@ -1369,6 +1369,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
         }),
       request: () => Effect.void,
       readRepositoryIdentity: () => Effect.succeed(null),
+      getAvailableRepositoryIdentity: () => Effect.succeed(null),
       getAvailable: () =>
         Effect.succeed({
           repositoryIdentity: null,
