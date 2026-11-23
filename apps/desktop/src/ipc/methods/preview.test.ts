@@ -6,13 +6,17 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as LoopbackTunnel from "../../preview/LoopbackTunnel.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import * as PreviewIpc from "./preview.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
+import * as IpcChannels from "../channels.ts";
 
 const { fromPartition } = vi.hoisted(() => ({
   fromPartition: vi.fn(() => {
@@ -51,7 +55,7 @@ describe("preview IPC methods", () => {
             removeAllListeners: vi.fn(),
             on: vi.fn(),
           },
-          () => Effect.succeed(true),
+          () => Effect.succeedSome({ window: {} as Electron.BrowserWindow, isMain: true }),
         );
         yield* ipc.handle(method);
         return yield* Effect.promise(async () =>
@@ -108,6 +112,85 @@ describe("preview IPC methods", () => {
         const failure = yield* decodeCaptureFailure(result);
         for (const phrase of guidance) expect(failure.message).toContain(phrase);
       }),
+  );
+
+  effectIt.effect(
+    "scopes a secondary window's tabs and sends their events only to it, unscoped",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const appWindow = (id: number) =>
+            ({
+              id,
+              isDestroyed: () => false,
+              webContents: { send: vi.fn() },
+            }) as unknown as Electron.BrowserWindow;
+          const main = appWindow(1);
+          const secondary = appWindow(3);
+          const created: unknown[] = [];
+          let emitState:
+            | Parameters<PreviewManager.PreviewManager["Service"]["subscribeStateChanges"]>[0]
+            | undefined;
+          const manager = {
+            createTab: (tabId, _defaults, owner) =>
+              Effect.sync(() => {
+                created.push({ tabId, owner });
+                return {} as never;
+              }),
+            tabRoute: (tabId) =>
+              Effect.succeed(
+                tabId === "w3:tab"
+                  ? { window: Option.some(secondary), rendererTabId: "tab" }
+                  : { window: Option.some(main), rendererTabId: tabId },
+              ),
+            subscribeStateChanges: (listener) =>
+              Effect.sync(() => {
+                emitState = listener;
+              }),
+            subscribeRecordingInputs: () => Effect.void,
+            subscribePointerEvents: () => Effect.void,
+            subscribeOpenLinks: () => Effect.void,
+            subscribeFindResults: () => Effect.void,
+          } satisfies Partial<PreviewManager.PreviewManager["Service"]>;
+          let listener: DesktopIpc.DesktopIpcHandleListener | undefined;
+          const ipc = DesktopIpc.make(
+            {
+              removeHandler: vi.fn(),
+              handle: (_channel, registered) => {
+                listener = registered;
+              },
+              removeAllListeners: vi.fn(),
+              on: vi.fn(),
+            },
+            () => Effect.succeedSome({ window: secondary, isMain: false }),
+          );
+          yield* Effect.gen(function* () {
+            yield* ipc.handle(PreviewIpc.createTab);
+            yield* PreviewIpc.installPreviewEventForwarding();
+            yield* Effect.promise(async () => listener!({ sender: { id: 3 } }, { tabId: "tab" }));
+            yield* emitState!("w3:tab", { tabId: "w3:tab" } as never);
+          }).pipe(
+            Effect.provideService(
+              PreviewManager.PreviewManager,
+              manager as unknown as PreviewManager.PreviewManager["Service"],
+            ),
+            Effect.provideService(ElectronWindow.ElectronWindow, {
+              sendAll: () => Effect.void,
+            } as unknown as ElectronWindow.ElectronWindow["Service"]),
+            Effect.provideService(LoopbackTunnel.LoopbackTunnel, {
+              subscribeForwards: () => Effect.void,
+            } as unknown as LoopbackTunnel.LoopbackTunnel["Service"]),
+          );
+
+          expect(created).toEqual([
+            { tabId: "w3:tab", owner: { window: secondary, rendererTabId: "tab" } },
+          ]);
+          expect(vi.mocked(secondary.webContents.send).mock.calls).toEqual([
+            [IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, "tab", { tabId: "tab" }],
+          ]);
+          expect(vi.mocked(main.webContents.send)).not.toHaveBeenCalled();
+        }),
+      ),
   );
 
   beforeEach(() => {

@@ -195,6 +195,9 @@ through the pages you have visited, like a browser's back and forward buttons.
 [new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`
 (`mod+alt+n`) starts a thread [without a project](./thread-sidebar.md#start-without-a-project).
 
+`window.new` (`mod+alt+shift+n`) opens another window in the desktop app. See
+[Multiple windows](./multiple-windows.md).
+
 ## Reserved shortcuts
 
 In the desktop app, `mod+w` closes the focused terminal or the active right-panel

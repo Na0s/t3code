@@ -55,18 +55,18 @@ const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function
   });
 });
 
-const zoomMainWindow = Effect.fn("desktop.menu.zoomMainWindow")(function* (
+const zoomFocusedWindow = Effect.fn("desktop.menu.zoomFocusedWindow")(function* (
   direction: DesktopWindow.MainWindowZoomDirection,
 ): Effect.fn.Return<void, never, DesktopWindow.DesktopWindow> {
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  yield* desktopWindow.zoomMain(direction);
+  yield* desktopWindow.zoomFocused(direction);
 });
 
-const runMainContentsCommand = Effect.fn("desktop.menu.runMainContentsCommand")(function* (
+const runFocusedContentsCommand = Effect.fn("desktop.menu.runFocusedContentsCommand")(function* (
   command: DesktopWindow.MainWindowContentsCommand,
 ): Effect.fn.Return<void, never, DesktopWindow.DesktopWindow> {
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  yield* desktopWindow.runMainContentsCommand(command);
+  yield* desktopWindow.runFocusedContentsCommand(command);
 });
 
 const trackLabel = (channel: DesktopUpdateChannel) =>
@@ -224,10 +224,10 @@ export const make = Effect.gen(function* () {
       runMenuEffect("paste-as-text", dispatchMenuAction("paste-as-text"));
     };
     const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {
-      runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
+      runMenuEffect(`zoom-${direction}`, zoomFocusedWindow(direction));
     };
     const mainContentsClick = (command: DesktopWindow.MainWindowContentsCommand) => () => {
-      runMenuEffect(command, runMainContentsCommand(command));
+      runMenuEffect(command, runFocusedContentsCommand(command));
     };
     const template: Electron.MenuItemConstructorOptions[] = [];
 
@@ -396,6 +396,14 @@ export const make = Effect.gen(function* () {
         role: "windowMenu",
         label: m(msg("Window", { $context: "menu bar title" })),
         submenu: [
+          {
+            label: m(msg("New Window", { $context: "Window menu item" })),
+            // The renderer's window.new keybinding owns the chord.
+            accelerator: "CmdOrCtrl+Alt+Shift+N",
+            registerAccelerator: false,
+            click: () => runMenuEffect("new-window", dispatchMenuAction("new-window")),
+          },
+          { type: "separator" },
           { role: "minimize", label: m(msg("Minimize", { $context: "Window menu item" })) },
           {
             role: "zoom",

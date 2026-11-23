@@ -2289,6 +2289,86 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("keeps a secondary window's preview tab to that window until it closes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let closeSecondaryWindow: (() => void) | undefined;
+        let secondaryDestroyed = false;
+        const mainThrottling = vi.fn();
+        const secondaryHost = Object.assign(makeTestHostWebContents(), {
+          id: 9,
+          setBackgroundThrottling: vi.fn(),
+        });
+        const secondaryWindow = {
+          id: 3,
+          isDestroyed: () => secondaryDestroyed,
+          once: vi.fn((event: string, listener: () => void) => {
+            if (event === "closed") closeSecondaryWindow = listener;
+          }),
+          webContents: secondaryHost,
+        } as unknown as Electron.BrowserWindow;
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => Buffer.from("recording-frame"),
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        const mainHost = makeTestHostWebContents();
+        const webContentsById = new Map([
+          [42, makeTestPreviewWebContents(capturePage, 42, mainHost)],
+          [43, makeTestPreviewWebContents(capturePage, 43, secondaryHost)],
+        ]);
+        fromId.mockImplementation((id) =>
+          id === undefined ? null : (webContentsById.get(id) ?? null),
+        );
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn(),
+          webContents: Object.assign(mainHost, { setBackgroundThrottling: mainThrottling }),
+        } as never);
+        yield* manager.registerSecondaryWindow(secondaryWindow);
+        const tabClosed = yield* Deferred.make<void>();
+        yield* manager.subscribeStateChanges((tabId, state) =>
+          secondaryDestroyed && tabId === "w3:tab" && state.webContentsId === null
+            ? Deferred.succeed(tabClosed, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+
+        yield* manager.createTab("w3:tab", undefined, {
+          window: secondaryWindow,
+          rendererTabId: "tab",
+        });
+        const route = yield* manager.tabRoute("w3:tab");
+        expect(Option.getOrNull(route.window)).toBe(secondaryWindow);
+        expect(route.rendererTabId).toBe("tab");
+
+        // A guest that the main window hosts cannot take over the secondary window's tab.
+        const hijack = yield* Effect.exit(manager.registerWebview("w3:tab", 42));
+        expect(Exit.isFailure(hijack)).toBe(true);
+        if (Exit.isFailure(hijack)) {
+          expect(Option.getOrThrow(Cause.findErrorOption(hijack.cause))).toMatchObject({
+            _tag: "PreviewWebContentsNotFoundError",
+          });
+        }
+        yield* manager.registerWebview("w3:tab", 43);
+
+        yield* manager.startRecording("w3:tab");
+        expect(secondaryHost.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(mainThrottling).not.toHaveBeenCalled();
+
+        secondaryDestroyed = true;
+        closeSecondaryWindow?.();
+        yield* Deferred.await(tabClosed);
+        const afterClose = yield* Effect.exit(manager.startRecording("w3:tab"));
+        expect(Exit.isFailure(afterClose)).toBe(true);
+        if (Exit.isFailure(afterClose)) {
+          expect(Option.getOrThrow(Cause.findErrorOption(afterClose.cause))).toMatchObject({
+            _tag: "PreviewTabNotFoundError",
+          });
+        }
+        expect(mainThrottling).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
   effectIt.effect("releases frame capture when the main window closes", () =>
     withManager((manager) =>
       Effect.gen(function* () {
