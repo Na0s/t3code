@@ -956,11 +956,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "fleet-gateway",
-    title: "Fleet gateway",
+    title: msg("Fleet gateway"),
     to: "/settings/threads",
     scope: "environment-defaults",
     environmentOnly: true,
-    searchTerms: ["grokbot bot mention contact command"],
+    searchTerms: [msg("grokbot bot mention contact command")],
   },
   {
     id: "app-version",

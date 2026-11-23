@@ -1,7 +1,9 @@
+import { useGT } from "gt-react";
 import { useRef } from "react";
+
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingResetButton } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -9,6 +11,8 @@ import {
 } from "./useScopedSettings";
 
 export function FleetGatewaySettings() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const command = useScopedSettings((settings) => settings.fleetGatewayCommand);
   const mixed = useScopedSettingsMixed(["fleetGatewayCommand"]);
   const update = useUpdateScopedSettings();
@@ -18,11 +22,13 @@ export function FleetGatewaySettings() {
       serverScoped
       settingKeys={["fleetGatewayCommand"]}
       {...searchableSetting("fleet-gateway")}
-      description="Mention your Grokbots in the @ picker. Enter the gateway executable on this machine, followed by one argument per line. Leave empty to disconnect."
+      description={gt(
+        "Mention your Grokbots in the @ picker. Enter the gateway executable on this machine, followed by one argument per line. Leave empty to disconnect.",
+      )}
       resetAction={
         command.length > 0 || mixed ? (
           <SettingResetButton
-            label="Fleet gateway"
+            ariaLabel={gt("Reset Fleet gateway to default")}
             onClick={() => update({ fleetGatewayCommand: [] })}
           />
         ) : null
@@ -31,14 +37,14 @@ export function FleetGatewaySettings() {
       <div className="mt-3 max-w-2xl pb-3.5">
         <Textarea
           key={`${mixed}:${JSON.stringify(command)}`}
-          aria-label="Fleet gateway command"
+          aria-label={gt("Fleet gateway command")}
           rows={3}
           defaultValue={mixed ? "" : command.join("\n")}
           onChange={() => {
             edited.current = true;
           }}
           placeholder={
-            mixed ? "Mixed. Enter a command for the selected machines." : "t3-fleet-gateway"
+            mixed ? gt("Mixed. Enter a command for the selected machines.") : "t3-fleet-gateway"
           }
           onBlur={(event) => {
             if (!edited.current) return;

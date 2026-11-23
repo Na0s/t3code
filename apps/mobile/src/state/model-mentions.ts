@@ -29,6 +29,7 @@ const modelMentionsAtom = Atom.family((key: string) => {
         .map((bot) => ({
           source: `bot:${bot.id}`,
           label: `${bot.icon} ${bot.name}`,
+          // oxlint-disable-next-line t3code/no-untranslated-copy -- fills the provider-name slot, which stays English like other provider names
           providerLabel: "Fleet gateway",
           driver: "fleet-bot",
           accent: bot.color,

@@ -556,7 +556,7 @@ export function useComposerCommandMenu({
           type: "bot" as const,
           bot,
           label: bot.name,
-          description: "Grokbot · Fleet gateway",
+          description: messages(msg("Grokbot · Fleet gateway")),
         })),
         ...threadItems,
         ...environmentItems,

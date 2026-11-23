@@ -1,4 +1,4 @@
-import { useGT, useMessages } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 import { matchFleetBots } from "@t3tools/shared/fleetBotMentions";
 import { serverEnvironment } from "~/state/server";
 import {
@@ -220,7 +220,7 @@ export function useComposerMenuItems({
           type: "bot" as const,
           bot,
           label: bot.name,
-          description: "Grokbot · Fleet gateway",
+          description: messages(msg("Grokbot · Fleet gateway")),
         })),
         ...matchComposerThreadItems(
           {

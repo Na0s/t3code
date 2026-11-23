@@ -1,4 +1,5 @@
 import { contextChipAccentWithHueOf } from "~/themePalette";
+import { T, useGT } from "gt-react";
 import type { CSSProperties } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -50,6 +51,7 @@ export function FleetBotMentionChip(props: {
   source: string;
   inert?: boolean;
 }) {
+  const gt = useGT();
   const bot = useAtomValue(
     fleetBotPresentationAtom(`${props.environmentId ?? ""}\u0000${props.botId}`),
   );
@@ -63,7 +65,7 @@ export function FleetBotMentionChip(props: {
         style={{ "--context-chip-accent": accent } as CSSProperties}
         icon={icon}
         label={bot.name}
-        aria-label={`Grokbot ${bot.name}`}
+        aria-label={gt("Grokbot {name}", { name: bot.name })}
       />
     );
   return (
@@ -72,12 +74,14 @@ export function FleetBotMentionChip(props: {
       accent={accent}
       icon={icon}
       label={bot.name}
-      accessibleLabel={`Grokbot ${bot.name}`}
+      accessibleLabel={gt("Grokbot {name}", { name: bot.name })}
       copyMarkdown={props.source}
     >
       <div className="space-y-1 p-2 text-sm">
         <p className="font-medium">{bot.name}</p>
-        <p className="text-muted-foreground">Fleet gateway</p>
+        <p className="text-muted-foreground">
+          <T>Fleet gateway</T>
+        </p>
       </div>
     </ContextChipPopover>
   );
