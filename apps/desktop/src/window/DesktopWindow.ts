@@ -1674,9 +1674,13 @@ export const make = Effect.gen(function* () {
         if (previous.isMaximized) window.maximize();
       }
     }
-    // The panel's top bar stands in for the traffic lights. Windows and Linux keep their
-    // controls: Electron cannot take a title bar overlay off a window once it is created.
+    // The panel's top bar stands in for the traffic lights. Windows and Linux keep the title bar
+    // overlay, which Electron cannot take off a created window, so the panel keeps only Close.
     if (environment.platform === "darwin") window.setWindowButtonVisibility(!enabled);
+    else {
+      window.setMinimizable(!enabled);
+      window.setMaximizable(!enabled);
+    }
     yield* electronWindow.reveal(window);
     yield* syncWindows();
   });

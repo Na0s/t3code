@@ -14,10 +14,9 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { CommandPalette } from "../../components/CommandPalette";
 import { resolveDesktopUpdateButtonAction } from "../../components/desktopUpdate.logic";
 import { PullRequestGlyph } from "../../components/pullRequest/pullRequestIcons";
-import { SidebarUtilityItem } from "../../components/sidebar/SidebarChrome";
 import { SidebarHeaderIconButton } from "../../components/sidebar/SidebarThreadHeader";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import { SidebarMenu, SidebarProvider } from "../../components/ui/sidebar";
+import { SidebarProvider } from "../../components/ui/sidebar";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { usePullRequestsSupported } from "../../state/environments";
 import { desktopWindowsBridge } from "../windowContext";
@@ -111,18 +110,20 @@ export function MiniPanel({
 }) {
   const [tab, setTab] = useState<MiniTab>("usage");
   const tabItem = (id: MiniTab, label: string, icon: ReactNode) => (
-    <SidebarUtilityItem
-      icon={icon}
+    <SidebarHeaderIconButton
       label={label}
       isActive={tab === id}
+      aria-current={tab === id ? "page" : undefined}
       onClick={() => setTab(id)}
-    />
+    >
+      {icon}
+    </SidebarHeaderIconButton>
   );
   return (
     <SidebarProvider className="h-dvh min-h-0">
       <div className="flex min-w-0 flex-1 flex-col bg-sidebar text-sidebar-foreground">
-        <header className="drag-region flex h-(--workspace-topbar-height) shrink-0 items-center gap-1 px-(--sidebar-content-inset) wco:pr-(--workspace-native-controls-inset)">
-          <SidebarMenu aria-label="Mini Mode tabs" className="w-auto flex-row items-center">
+        <header className="drag-region flex h-(--workspace-topbar-height) shrink-0 items-center gap-0.5 px-(--sidebar-content-inset) wco:pr-(--workspace-native-controls-inset)">
+          <nav aria-label="Mini Mode tabs" className="flex items-center gap-0.5">
             {tabItem("windows", "Windows", <LayersIcon />)}
             {pullRequestsSupported
               ? tabItem("pullRequests", "Pull requests", <PullRequestGlyph.pullRequest />)
@@ -137,7 +138,7 @@ export function MiniPanel({
                 />
               ) : null}
             </span>
-          </SidebarMenu>
+          </nav>
           <span className="flex-1" />
           <SidebarHeaderIconButton label="Search" onClick={onSearch}>
             <SearchIcon />
