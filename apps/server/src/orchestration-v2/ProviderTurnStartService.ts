@@ -44,6 +44,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeFleetBotProjector } from "../fleetBots.ts";
 import { makeRestoreMissingWorktree } from "../workspace/restoreMissingWorktree.ts";
 import type * as TaskFolders from "../workspace/TaskFolders.ts";
 import * as EventSink from "./EventSink.ts";
@@ -292,6 +293,7 @@ export const layer: Layer.Layer<
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
+    const projectFleetBotMentions = yield* makeFleetBotProjector;
     const turnAnalytics = yield* ProviderUsageAnalytics.ProviderTurnAnalytics;
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -1019,10 +1021,19 @@ export const layer: Layer.Layer<
       let resumeFellBack = false;
       const messageText = withMessageSenderNote(
         providerMessage,
-        projectComposerContextForProvider({
-          text: providerMessage.text,
-          records: providerMessage.context?.records ?? [],
-        }),
+        yield* projectFleetBotMentions({
+          mentionText: providerMessage.text,
+          text: projectComposerContextForProvider({
+            text: providerMessage.text,
+            records: providerMessage.context?.records ?? [],
+          }),
+          threadId: input.threadId,
+          messageId: message.id,
+        }).pipe(
+          Effect.mapError(
+            (error) => new ProviderTurnStartError({ runId: run.id, cause: error.detail }),
+          ),
+        ),
       );
       const slashCommand = isSlashCommandMessage(providerMessage);
       const goalDriver =

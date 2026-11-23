@@ -1,3 +1,8 @@
+import {
+  formatFleetBotMention,
+  matchFleetBots,
+  type FleetBotPresentation,
+} from "@t3tools/shared/fleetBotMentions";
 import { threadPullRequestKeyOf } from "@t3tools/client-runtime/thread-pull-requests";
 import * as Dialog from "../../components/ui/Dialog";
 import type {
@@ -242,6 +247,8 @@ export function resolveComposerCommandSelection(input: {
     replacement = `/${item.command} `;
   } else if (item.type === "provider-slash-command") {
     replacement = `/${item.command.name} `;
+  } else if (item.type === "bot") {
+    replacement = `${formatFleetBotMention(item.bot.id)} `;
   } else if (item.type === "model") {
     replacement = `${formatComposerModelMention(item.option.selection.instanceId, item.option.selection.model)} `;
   }
@@ -270,6 +277,7 @@ export function useComposerCommandMenu({
   onOpenModelPicker,
   modelOptions,
   modelProviders,
+  fleetBots = [],
   onFreshSession,
   offersSideChat = false,
 }: {
@@ -296,6 +304,7 @@ export function useComposerCommandMenu({
   readonly onOpenModelPicker: () => void;
   readonly modelOptions?: ReadonlyArray<ModelOption>;
   readonly modelProviders?: ReadonlyArray<ServerProvider>;
+  readonly fleetBots?: ReadonlyArray<FleetBotPresentation>;
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
   readonly onFreshSession?: () => void;
   readonly offersSideChat?: boolean;
@@ -542,6 +551,13 @@ export function useComposerCommandMenu({
           ? buildComposerModelItems(modelOptions, trigger.query, modelProviders)
           : [];
       return [
+        ...matchFleetBots(fleetBots, trigger.query).map((bot) => ({
+          id: `bot:${bot.id}`,
+          type: "bot" as const,
+          bot,
+          label: bot.name,
+          description: messages(msg("Grokbot · Fleet gateway")),
+        })),
         ...threadItems,
         ...environmentItems,
         ...modelItems,

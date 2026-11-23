@@ -385,6 +385,18 @@ Type `@` and part of a model or provider name, such as `@opus`, to name that mod
 agent, for example when delegating. It does not change the thread's model. Join words with
 `:`, `/` or `-`, as in `@opus:opencode`.
 
+To contact a Grokbot through Fleet, connect a gateway that supports named bot
+mentions in **Settings → Threads → Advanced → Fleet gateway**. Enter its executable
+and any fixed arguments, one per line, on each machine where you run agents. The
+command must have access to the gateway's private routing manifest and host enrollment.
+Then type `@` and part of a bot's name to select it. The mention keeps that bot's
+icon and color, and gives the agent its routing instructions automatically.
+
+The agent sends the message requested in your prompt. Gateway acceptance means
+the receiver accepted delivery; it does not confirm that the bot responded. A
+mention does not transfer thread ownership or enable background notifications.
+Clear the gateway command to disconnect its bot picker.
+
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing
 the thumbnail asks first when the image is still mentioned in your text, then removes both. Files

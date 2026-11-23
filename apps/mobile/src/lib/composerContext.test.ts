@@ -163,6 +163,13 @@ describe("mobile composer context", () => {
     expect(restore("deleted")?.records ?? []).toEqual([]);
     expect(createComposerContextHistory()(source)).toBeUndefined();
   });
+  it("keeps a Fleet bot's stable source when its native inline reference chips", () => {
+    const source = "bot:researcher";
+    const tokens = collectComposerModelTokens(`Ask ${source} now`, new Set([source]));
+    expect(tokens.map(({ source, start, end }) => [source, start, end])).toEqual([[source, 4, 18]]);
+    expect(collectComposerModelTokens(`Ask ${source} now`, new Set())).toEqual([]);
+    expect(collectComposerModelTokens(`Ask \`${source}\` now`, new Set([source]))).toEqual([]);
+  });
   it("chips a model reference only once it is complete and names a known model", () => {
     const known = new Set(["model:codex/gpt-6.1"]);
     const modelTokens = (text: string) =>

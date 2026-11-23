@@ -85,6 +85,8 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
+import * as FleetProcessRunner from "../processRunner.ts";
+import * as FleetServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
@@ -100,11 +102,14 @@ const normalize = (target: string) => {
   }
   return `/${parts.join("/")}`;
 };
-const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+const layerWorktreeLocation = (
+  worktreesDir = managedWorktreesDir,
+  fleetGatewayCommand: ReadonlyArray<string> = [],
+) =>
   Layer.mergeAll(
     Path.layer,
     Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest({ fleetGatewayCommand }),
   );
 
 function startWithMissingWorktree(
@@ -457,6 +462,7 @@ it.each([
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
+  readonly fleetGatewayCommand?: ReadonlyArray<string>;
   readonly manualContinuation?: boolean;
   readonly nativeResumeUnsupported?: boolean;
   readonly steeringRestart?: boolean;
@@ -1349,8 +1355,16 @@ function makeLocalCommandHarness(input: {
         }),
         IdAllocator.layer,
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
-        layerWorktreeLocation(input.worktreesDir),
+        layerWorktreeLocation(input.worktreesDir, input.fleetGatewayCommand),
         layerNoTaskFolders,
+        ...(input.fleetGatewayCommand === undefined
+          ? []
+          : [
+              FleetProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+              Layer.mock(FleetServerEnvironment.ServerEnvironment)({
+                getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-fleet-test")),
+              }),
+            ]),
         input.fileSystem === undefined
           ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
@@ -3460,5 +3474,26 @@ effectIt.effect("rejects citation expansion before opening a provider session", 
       },
     ]);
     expect(harness.projection().messages[0]?.text).toBe(text);
+  }),
+);
+
+effectIt.effect("projects a selected Fleet bot through the provider turn start service", () =>
+  Effect.gen(function* () {
+    const catalog = { bots: [{ id: "design", name: "Design", icon: "◕", color: "#10b981" }] };
+    const fleetGatewayCommand = [
+      process.execPath,
+      "-e",
+      `process.stdout.write(${JSON.stringify(JSON.stringify(catalog))})`,
+    ];
+    const harness = makeLocalCommandHarness({
+      text: "Ask bot:design to review this flow",
+      fleetGatewayCommand,
+      sideChat: { contextRun: "current" },
+    });
+    yield* harness.start;
+    const text = harness.startTurn.mock.calls[0]?.[0].message.text;
+    expect(text).toContain("<fleet_bot_mentions>");
+    expect(text).toContain('"botId":"design","environmentId":"environment-fleet-test"');
+    expect(text).toContain(JSON.stringify([...fleetGatewayCommand, "bots", "send", "--json"]));
   }),
 );

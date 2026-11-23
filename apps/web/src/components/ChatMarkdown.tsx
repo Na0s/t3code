@@ -206,6 +206,7 @@ import {
 import type { Element as HastElement } from "hast";
 import { matchInlineSkills } from "@t3tools/shared/inlineSkills";
 import { collectComposerModelMentions } from "@t3tools/client-runtime/composer-model-mentions";
+import { collectFleetBotMentions } from "@t3tools/shared/fleetBotMentions";
 import { splitMarkdownBlocks } from "./chat/markdownStreamBlocks";
 import { MarkdownMermaidCodeBlock } from "./chat/MarkdownMermaidCodeBlock";
 import { MarkdownTable } from "./chat/MarkdownTable";
@@ -1927,13 +1928,14 @@ function hastClassName(node: HastElement): string | undefined {
   return Array.isArray(className) ? className.join(" ") : (className as string | undefined);
 }
 
-// Paragraphs and list items turn skill and model mentions in their text into chips, except in
+// Paragraphs and list items turn skill, model and bot mentions in their text into chips, except in
 // code and links, as SkillInlineText does.
 function hastTextHasChip(node: HastElement, skills: ReadonlyArray<ServerProviderSkill>): boolean {
   return node.children.some((child) =>
     child.type === "text"
       ? (skills.length > 0 && !matchInlineSkills(child.value, skills).next().done) ||
-        collectComposerModelMentions(child.value).length > 0
+        collectComposerModelMentions(child.value).length > 0 ||
+        collectFleetBotMentions(child.value).length > 0
       : child.type === "element" &&
         child.tagName !== "code" &&
         child.tagName !== "a" &&

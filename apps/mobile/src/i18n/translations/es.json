@@ -4996,6 +4996,7 @@
   "929781439a221aae": "Hacer una pregunta aparte en un chat lateral nuevo",
   "378c3404c430fc05": "Igual que /side",
   "08aa54cb113f64b1": "Iniciar una sesión nueva",
+  "4ee1267ad7979a2a": "Grokbot · Gateway de Fleet",
   "2a6969164260cdee": "Las pull requests no están disponibles para este proyecto.",
   "a0ce478324829283": "{term, select, mr {No se pudo vincular esta merge request} cr {No se pudo vincular esta solicitud de cambios} other {No se pudo vincular esta pull request}}",
   "962d13f9565f189b": "{term, select, mr {No se pudo desvincular esta merge request} cr {No se pudo desvincular esta solicitud de cambios} other {No se pudo desvincular esta pull request}}",

@@ -69,6 +69,7 @@ const schema = getSchemaByResolvedExtensions(
       skillLabel: { default: "" },
       skillDescription: { default: null },
     }),
+    stubAtom("composer-bot", { botId: { default: "" }, source: { default: "" } }),
     stubAtom("composer-model", {
       instanceId: { default: "" },
       model: { default: "" },
@@ -195,6 +196,7 @@ const plainSchema = getSchemaByResolvedExtensions(
       skillLabel: { default: "" },
       skillDescription: { default: null },
     }),
+    stubAtom("composer-bot", { botId: { default: "" }, source: { default: "" } }),
     stubAtom("composer-model", {
       instanceId: { default: "" },
       model: { default: "" },
@@ -1525,5 +1527,38 @@ describe("surroundSelectionWithMark", () => {
     doc.check();
     const state = EditorState.create({ doc });
     expect(surroundSelectionWithMark(state, 1, doc.content.size - 1, "`")).toBeNull();
+  });
+});
+
+describe("Fleet bot mention chips", () => {
+  it("roundtrips the bot id through insertion, catalog changes and undo", () => {
+    const value = "Ask bot:researcher now";
+    const skills = () => null;
+    const known = (id: string) => id === "researcher";
+    const doc = ProseMirrorNode.fromJSON(
+      schema,
+      buildDocJson(value, skills, { isKnownBot: known }),
+    );
+    doc.check();
+    expect(doc.firstChild?.child(1).type.name).toBe("composer-bot");
+    expect(doc.firstChild?.child(1).attrs).toMatchObject({
+      botId: "researcher",
+      source: "bot:researcher",
+    });
+    expect(serializeEditorDoc(doc).value).toBe(value);
+    const removed = EditorState.create({ doc }).tr;
+    for (const replacement of skillChipReplacements(doc, skills))
+      removed.replaceWith(replacement.from, replacement.to, replacement.node);
+    expect(removed.doc.textContent).toBe(value);
+    const restored = EditorState.create({ doc: removed.doc }).tr;
+    for (const replacement of skillChipReplacements(removed.doc, skills, undefined, known))
+      restored.replaceWith(replacement.from, replacement.to, replacement.node);
+    expect(restored.doc.firstChild?.child(1).type.name).toBe("composer-bot");
+    expect(serializeEditorDoc(restored.doc).value).toBe(value);
+    const sample = ProseMirrorNode.fromJSON(
+      schema,
+      buildDocJson("`bot:researcher` ", skills, { styling: true, isKnownBot: known }),
+    );
+    expect(sample.firstChild?.firstChild?.isText).toBe(true);
   });
 });
