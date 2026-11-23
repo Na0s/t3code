@@ -157,9 +157,8 @@ A project can [cover several repositories](./multi-repo-projects.md). When one o
 a project of its own, in the same folder on that machine or for the same repository on any
 connected machine, that project shows in the sidebar as part of the project that covers it. Its
 threads read `api · shop`: the repository, then the covering project. Filtering the sidebar to the
-covering project shows them too, and a filter you had saved for the repository's own project now
-shows the covering project. The repository's project keeps its own settings, and you can still
-start a thread in it from the command palette.
+covering project shows them too. The project filter lists the repository's own project indented
+under the covering project; pick it to see only that project's threads. It keeps its own settings.
 
 In the default sidebar, threads that show a status, such as Working, Input, or Done, come first.
 Below them, each project that covers other repositories gathers its threads, and those of the

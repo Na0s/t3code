@@ -14,7 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { isMacPlatform } from "@t3tools/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, fakeTimers, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -515,54 +515,59 @@ describe("sidebar settled pagination", () => {
 });
 
 describe("sidebar multi-repo projects", () => {
+  // shop covers api's folder; fleet stands alone. Thread 3 shows Input.
+  function setUp(stack: DisposableStack, gathered: boolean) {
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    stack.defer(() => style.remove());
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      sidebarGatherProjectThreads: gathered,
+    });
+    const shop = {
+      ...project("shop"),
+      trackedFolders: [{ path: "/projects/api", name: "api", discovered: true }],
+    };
+    const api = project("api");
+    const fleet = project("fleet");
+    vi.mocked(useProjects).mockReturnValue([shop, api, fleet]);
+    const shell = (
+      projectId: ProjectId,
+      index: number,
+      overrides: Partial<EnvironmentThreadShell> = {},
+    ) => ({ ...threadShell(projectId, index), ...overrides });
+    vi.mocked(useQuietThreadShells).mockReturnValue([
+      shell(api.id, 1),
+      shell(fleet.id, 2),
+      shell(shop.id, 3, { hasPendingUserInput: true }),
+      shell(shop.id, 4),
+    ]);
+    vi.mocked(useServerConfigs).mockReset();
+    vi.mocked(useThreadRouteTarget).mockReturnValue(null);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: null,
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn(),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+    return render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+  }
+
   it.each([true, false])(
     "folds a covered project's threads into its covering project, gathered=%s",
     async (gathered) => {
       using stack = new DisposableStack();
-      const style = document.createElement("style");
-      style.textContent = appCss;
-      document.head.append(style);
-      stack.defer(() => style.remove());
-      const previousSettings = getClientSettings();
-      stack.defer(() => __setClientSettingsForTests(previousSettings));
-      __setClientSettingsForTests({
-        ...DEFAULT_CLIENT_SETTINGS,
-        sidebarGatherProjectThreads: gathered,
-      });
-      const shop = {
-        ...project("shop"),
-        trackedFolders: [{ path: "/projects/api", name: "api", discovered: true }],
-      };
-      const api = project("api");
-      const fleet = project("fleet");
-      vi.mocked(useProjects).mockReturnValue([shop, api, fleet]);
-      const shell = (
-        projectId: ProjectId,
-        index: number,
-        overrides: Partial<EnvironmentThreadShell> = {},
-      ) => ({ ...threadShell(projectId, index), ...overrides });
-      vi.mocked(useQuietThreadShells).mockReturnValue([
-        shell(api.id, 1),
-        shell(fleet.id, 2),
-        shell(shop.id, 3, { hasPendingUserInput: true }),
-        shell(shop.id, 4),
-      ]);
-      vi.mocked(useThreadRouteTarget).mockReturnValue(null);
-      vi.mocked(useHandleNewThread).mockReturnValue({
-        activeDraftThread: null,
-        activeThread: null,
-        defaultProjectRef: null,
-        defaultProjectFallbackReady: true,
-        handleNewThread: vi.fn(),
-        routeDraftId: null,
-        routeThreadRef: null,
-      });
-
-      await using screen = await render(
-        <SidebarProvider>
-          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
-        </SidebarProvider>,
-      );
+      await using screen = await setUp(stack, gathered);
       await expect.element(screen.getByText("Thread 4")).toBeInTheDocument();
       await expect.element(screen.getByText("api · shop")).toBeInTheDocument();
       const rows = () =>
@@ -578,13 +583,43 @@ describe("sidebar multi-repo projects", () => {
       if (gathered) {
         // The status thread leads; shop's threads, api's among them, gather at the first one.
         expect(rows()).toEqual(["Thread 3", "# shop", "Thread 1", "Thread 4", "Thread 2"]);
-        const gatheredRow = screen.container.querySelector(
-          '[data-thread-item$=":thread-1"]',
-        ) as HTMLElement;
-        expect(getComputedStyle(gatheredRow).paddingInlineStart).toBe("12px");
       } else {
         expect(rows()).toEqual(["Thread 1", "Thread 2", "Thread 3", "Thread 4"]);
       }
     },
   );
+
+  it("lists a folded project under the project that covers it, indented like the sidebar", async () => {
+    using stack = new DisposableStack();
+    await using screen = await setUp(stack, true);
+    await expect.element(screen.getByText("api · shop").first()).toBeInTheDocument();
+    const iconX = (element: Element | null | undefined) =>
+      element?.querySelector("[data-slot=project-monogram]")?.getBoundingClientRect().left ?? NaN;
+    const gatheredCard = [...document.querySelectorAll("[data-testid=sidebar-row-card]")].find(
+      (card) => card.textContent?.includes("Thread 1"),
+    );
+    const sidebarIndent =
+      iconX(gatheredCard) - iconX(document.querySelector("[data-testid=sidebar-gathered-header]"));
+
+    const trigger = () => screen.container.querySelector<HTMLElement>('[aria-label^="Projects"]')!;
+    await userEvent.click(trigger());
+    // The menu opens in a portal outside the rendered sidebar.
+    const option = (name: string) => page.getByRole("option", { name, exact: true });
+    await expect.element(option("api")).toBeVisible();
+    const names = [...document.querySelectorAll("[role=option]")].map(
+      (row) => row.querySelector("span.truncate")?.textContent,
+    );
+    expect(names.indexOf("api")).toBe(names.indexOf("shop") + 1);
+    const menuIndent = iconX(option("api").element()) - iconX(option("shop").element());
+    expect(sidebarIndent).toBeGreaterThan(0);
+    expect(menuIndent).toBe(sidebarIndent);
+
+    await option("api").click();
+    await vi.waitFor(() => expect(trigger().getAttribute("aria-label")).toBe("Projects: api"));
+    await expect.element(screen.getByText("Thread 1")).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.container.textContent).not.toContain("Thread 4"));
+    await userEvent.click(trigger());
+    await expect.element(option("api")).toHaveAttribute("aria-selected", "true");
+    await expect.element(option("shop")).toHaveAttribute("aria-selected", "false");
+  });
 });

@@ -1525,7 +1525,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "[contain-intrinsic-size:auto_60px]",
-        props.gathered && "relative ps-3",
+        props.gathered && "relative ps-(--sidebar-gathered-indent)",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1533,7 +1533,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         <span
           aria-hidden
           className={cn(
-            "pointer-events-none absolute start-1.5 top-0 w-px bg-sidebar-border",
+            "pointer-events-none absolute start-[calc(var(--sidebar-gathered-indent)/2)] top-0 w-px bg-sidebar-border",
             props.gathered === "last" ? "bottom-2" : "-bottom-px",
           )}
         />

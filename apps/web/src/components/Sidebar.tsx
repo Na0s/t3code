@@ -887,7 +887,7 @@ function useSidebarLookups() {
       ),
       // A folded project's threads name the repository they work in, then the group.
       ...group.folded.flatMap((folded) =>
-        folded.projectRefs.map(
+        folded.memberProjectRefs.map(
           (ref) =>
             [
               `${ref.environmentId}:${ref.projectId}`,
@@ -898,15 +898,22 @@ function useSidebarLookups() {
     ]),
   );
   const projectGroupByScopeKey = new Map(
-    projectGroups.map((project) => [project.projectKey, project] as const),
+    projectGroups
+      .flatMap((project) => [project, ...project.folded])
+      .map((project) => [project.projectKey, project] as const),
   );
+  // A folded project stays pickable on its own, indented under the project that covers it.
   const projectScopeItems = [
-    { value: ADD_PROJECT_SCOPE_ITEM_VALUE, label: gt("Add project") },
-    { value: "all", label: gt("All projects") },
-    ...pickableProjectGroups(projectGroups).map((project) => ({
-      value: project.projectKey,
-      label: project.displayName,
-    })),
+    { value: ADD_PROJECT_SCOPE_ITEM_VALUE, label: gt("Add project"), indented: false },
+    { value: "all", label: gt("All projects"), indented: false },
+    ...pickableProjectGroups(projectGroups).flatMap((project) => [
+      { value: project.projectKey, label: project.displayName, indented: false },
+      ...pickableProjectGroups(project.folded).map((folded) => ({
+        value: folded.projectKey,
+        label: folded.displayName,
+        indented: true,
+      })),
+    ]),
   ];
   return {
     projects,
@@ -921,9 +928,15 @@ function useSidebarLookups() {
   };
 }
 
-function ProjectScopeRowIcon(props: { isSelected: boolean; children: ReactNode }) {
+function ProjectScopeRowIcon(props: {
+  isSelected: boolean;
+  indented: boolean;
+  children: ReactNode;
+}) {
   return (
-    <span className="relative flex shrink-0">
+    <span
+      className={cn("relative flex shrink-0", props.indented && "ms-(--sidebar-gathered-indent)")}
+    >
       {props.children}
       {props.isSelected ? (
         <span className="pointer-events-none absolute -right-1 -bottom-1 grid size-3 place-items-center rounded-full bg-primary ring-2 ring-popover">
@@ -1157,16 +1170,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // loaded. The stored keys are left alone, so the scope returns with its project.
   // An archived project's scope reads as all projects, matching the menu.
   const scopeGroups = pickableProjectGroups(projectGroups);
+  const allScopeGroups = projectGroups.flatMap((project) => [project, ...project.folded]);
   const archivedProjectKeys = new Set(
-    projectGroups.filter((project) => project.archived).map((project) => project.projectKey),
+    allScopeGroups.filter((project) => project.archived).map((project) => project.projectKey),
   );
   const chosenProjectScopeKeys = resolveSidebarProjectScopeKeys({
-    groups: projectGroups,
+    groups: allScopeGroups,
     keys: persistedProjectScopeKeys,
     settings: projectGroupingSettings,
     canClearMissingScope: allProjectSnapshotsReady && allProjectConfigsReady,
   }).filter((key) => !archivedProjectKeys.has(key));
-  const chosenProjectGroups = scopeGroups.filter((project) =>
+  const chosenProjectGroups = pickableProjectGroups(allScopeGroups).filter((project) =>
     chosenProjectScopeKeys.includes(project.projectKey),
   );
   const chosenScopeProjectKeys =
@@ -3290,7 +3304,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               if (project) handleProjectSettings(event, project);
                             }}
                           >
-                            <ProjectScopeRowIcon isSelected={isSelected}>
+                            <ProjectScopeRowIcon isSelected={isSelected} indented={item.indented}>
                               {project ? (
                                 <ProjectFavicon project={project} className="size-4 shrink-0" />
                               ) : (

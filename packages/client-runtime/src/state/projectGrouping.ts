@@ -341,19 +341,17 @@ export interface ProjectGroup<TProject extends EnvironmentProject = EnvironmentP
   /** Includes the projects of `folded` groups, whose threads show with this group's. */
   readonly memberProjectRefs: ReadonlyArray<ScopedProjectRef>;
   /** Groups folded in because a project here covers their folder, with that folder's name. */
-  readonly folded: ReadonlyArray<FoldedProjectGroup>;
+  readonly folded: ReadonlyArray<FoldedProjectGroup<TProject>>;
   /** Clients write every member together. When members still disagree, the project stays visible. */
   readonly pinned: boolean;
   readonly archived: boolean;
 }
 
-export interface FoldedProjectGroup {
-  readonly key: string;
+export interface FoldedProjectGroup<
+  TProject extends EnvironmentProject = EnvironmentProject,
+> extends ProjectGroup<TProject> {
   readonly folderName: string;
-  readonly projectRefs: ReadonlyArray<ScopedProjectRef>;
 }
-
-const NO_FOLDED_GROUPS: ReadonlyArray<FoldedProjectGroup> = [];
 
 /** The groups a project picker offers: archived groups left out, pinned ones first. */
 export function pickableProjectGroups<
@@ -495,7 +493,7 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(
       representative,
       members,
       memberProjectRefs: projectRefsByLogicalKey.get(key) ?? [],
-      folded: NO_FOLDED_GROUPS,
+      folded: [],
       pinned: members.some((member) => member.project.pinnedAt != null),
       archived: !members.some(({ project }) => isPickableProjectMember(project)),
     };
@@ -545,16 +543,12 @@ function foldCoveredProjectGroups<TProject extends EnvironmentProject>(
     }
     return target;
   };
-  const foldedInto = new Map<ProjectGroup<TProject>, FoldedProjectGroup[]>();
+  const foldedInto = new Map<ProjectGroup<TProject>, FoldedProjectGroup<TProject>[]>();
   for (const [group, entry] of coveredBy) {
     const target = foldTarget(group);
     if (target === undefined) continue;
     const folded = foldedInto.get(target) ?? [];
-    folded.push({
-      key: group.key,
-      folderName: entry.folder.name,
-      projectRefs: group.memberProjectRefs,
-    });
+    folded.push({ ...group, folderName: entry.folder.name });
     foldedInto.set(target, folded);
   }
   return groups.flatMap((group) => {
@@ -567,7 +561,7 @@ function foldCoveredProjectGroups<TProject extends EnvironmentProject>(
             ...group,
             memberProjectRefs: [
               ...group.memberProjectRefs,
-              ...folded.flatMap((entry) => entry.projectRefs),
+              ...folded.flatMap((entry) => entry.memberProjectRefs),
             ],
             folded,
           },

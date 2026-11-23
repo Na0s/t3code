@@ -107,7 +107,7 @@ describe("environment grouping", () => {
     },
   );
 
-  it("moves a scope saved for a folded project to the project that covers its folder", () => {
+  it("keeps a folded project pickable on its own, under the project that covers its folder", () => {
     const shop = makeProject({
       id: ProjectId.make("shop"),
       title: "shop",
@@ -128,15 +128,16 @@ describe("environment grouping", () => {
         primaryEnvironmentId,
         resolveEnvironmentLabel: () => null,
       });
-    const savedForApi = deriveLogicalProjectKeyFromSettings(api, defaultGroupingSettings);
     expect(build(false).map((group) => group.displayName)).toEqual(["shop", "api"]);
 
-    const groups = build(true);
-    expect(groups.map((group) => group.displayName)).toEqual(["shop"]);
-    expect(
-      resolveSidebarProjectScopeKey({ groups, key: savedForApi, canClearMissingScope: true }),
-    ).toBe(groups[0]?.projectKey);
-    expect(groups[0]?.memberProjectRefs.map((ref) => ref.projectId)).toEqual(["shop", "api"]);
+    const [group, ...rest] = build(true);
+    expect(rest).toEqual([]);
+    expect(group?.memberProjectRefs.map((ref) => ref.projectId)).toEqual(["shop", "api"]);
+    // A scope saved for api still names api's own threads.
+    expect(group?.folded.map((folded) => [folded.projectKey, folded.folderName])).toEqual([
+      [deriveLogicalProjectKeyFromSettings(api, defaultGroupingSettings), "api"],
+    ]);
+    expect(group?.folded[0]?.memberProjectRefs.map((ref) => ref.projectId)).toEqual(["api"]);
   });
 
   it("prefers an existing ordinary repository scope over a scratch alias", () => {
