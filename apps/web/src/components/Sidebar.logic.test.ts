@@ -1712,7 +1712,7 @@ describe("gatherUmbrellaThreads", () => {
     ]);
   });
 
-  it("leaves a thread showing a status in its own place", () => {
+  it("puts threads showing a status first, ahead of every umbrella", () => {
     expect(
       summarize(
         [
@@ -1726,9 +1726,9 @@ describe("gatherUmbrellaThreads", () => {
       ),
     ).toEqual([
       { umbrella: null, threads: ["api-done"] },
+      { umbrella: null, threads: ["northwind-working"] },
       { umbrella: null, threads: ["other-1"] },
       { umbrella: "northwind", threads: ["api-1", "northwind-1"] },
-      { umbrella: null, threads: ["northwind-working"] },
     ]);
   });
 });

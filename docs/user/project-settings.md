@@ -87,9 +87,9 @@ out.
 
 Projects you already have for a member fold into the umbrella: the same folder on the umbrella's
 machine, or the same repository on any connected machine. The sidebar gathers the umbrella's
-active threads and its members' in one place, indented, with the umbrella's icon beside the first
-and a line down to the last, and a member's thread names its member first. A thread showing a
-status such as Working, Input or Done keeps its own place until it no longer shows one. A command
+active threads and its members' under the umbrella's name, indented beside a line, and a member's
+thread names its member first. Threads showing a status such as Working, Input or Done come first,
+ahead of every umbrella, and join their umbrella once they no longer show one. A command
 palette search lists the umbrella with its matching members indented under it. Use **Add to umbrella** and **Remove _member_ from umbrella** from a project
 folder's menu in the sidebar or from the command palette. For a clone on another machine,
 removing it only stops grouping it there; its grouping rule in **Settings → Projects**

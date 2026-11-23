@@ -282,6 +282,7 @@ import {
 } from "../umbrellaMembership.logic";
 import {
   SidebarProjectFolderHeader,
+  SidebarUmbrellaHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
 import {
@@ -509,7 +510,7 @@ function useSidebarThreads(input: {
   });
 
   const { pinnedThreads, workingThreads, snoozedThreads, settledThreads } = partition;
-  // A row showing a status keeps its place, as it would with no umbrella.
+  // Rows showing a status need the user, so they lead, ahead of the umbrellas.
   const umbrellaRuns =
     folderGroups === null && umbrellaGroups.length > 0
       ? gatherUmbrellaThreads(
@@ -2080,6 +2081,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectFolders
       ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
       .join("\n") ?? "",
+    // Umbrella names come and go without moving any thread row.
+    [...activeUmbrellaByThreadKey].flatMap(([key, { first }]) => (first ? [key] : [])).join("\n"),
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",
   ].join("\0");
@@ -3463,9 +3466,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
-                            umbrella={umbrella?.group.memberProjects.find(isUmbrellaProject)}
-                            umbrellaFirst={umbrella?.first}
-                            umbrellaLast={umbrella?.last}
+                            umbrella={umbrella && (umbrella.last ? "last" : "member")}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3576,14 +3577,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
+                          const umbrella =
+                            item.section === "active"
+                              ? activeUmbrellaByThreadKey.get(item.key)
+                              : undefined;
+                          if (umbrella?.first) {
+                            items.push(
+                              <SidebarUmbrellaHeader
+                                key={`umbrella:${umbrella.group.projectKey}`}
+                                group={umbrella.group}
+                                onContextMenu={handleProjectFolderContextMenu}
+                              />,
+                            );
+                          }
                           items.push(
                             renderThreadRow(
                               threadByKey.get(item.key)!,
                               item.section,
                               undefined,
-                              item.section === "active"
-                                ? activeUmbrellaByThreadKey.get(item.key)
-                                : undefined,
+                              umbrella,
                             ),
                           );
                           continue;

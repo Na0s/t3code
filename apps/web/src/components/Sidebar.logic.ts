@@ -1098,8 +1098,8 @@ export function groupSidebarThreadsByProject<
 
 /**
  * The default sidebar's rows in runs: each umbrella's threads, its own and its members', gather
- * at the place of its first thread, and every other thread is a run of one with no umbrella. A
- * thread `gathers` rejects keeps its own place, as if it had no umbrella.
+ * at the place of its first thread, and every other thread is a run of one with no umbrella.
+ * Threads `gathers` rejects, the ones showing a status, lead in their own order as runs of one.
  */
 export function gatherUmbrellaThreads<
   TGroup extends {
@@ -1120,12 +1120,15 @@ export function gatherUmbrellaThreads<
       umbrellaByProject.set(`${ref.environmentId}:${ref.projectId}`, umbrella);
     }
   }
-  const runs: Array<{ readonly umbrella: TGroup | null; readonly threads: TThread[] }> = [];
+  const leading: Array<{ readonly umbrella: TGroup | null; readonly threads: TThread[] }> = [];
+  const runs: typeof leading = [];
   const runByUmbrella = new Map<TGroup, (typeof runs)[number]>();
   for (const thread of threads) {
-    const umbrella = gathers(thread)
-      ? umbrellaByProject.get(`${thread.environmentId}:${thread.projectId}`)
-      : undefined;
+    if (!gathers(thread)) {
+      leading.push({ umbrella: null, threads: [thread] });
+      continue;
+    }
+    const umbrella = umbrellaByProject.get(`${thread.environmentId}:${thread.projectId}`);
     if (umbrella === undefined) {
       runs.push({ umbrella: null, threads: [thread] });
       continue;
@@ -1139,7 +1142,7 @@ export function gatherUmbrellaThreads<
     runByUmbrella.set(umbrella, created);
     runs.push(created);
   }
-  return runs;
+  return [...leading, ...runs];
 }
 
 export type SidebarV2TopStatusKind =
