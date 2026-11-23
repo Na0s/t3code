@@ -42,9 +42,10 @@ Light, dark, and system appearance stay shared by every window.
 ## Mini Mode
 
 Choose **Enter Mini Mode** in the main window's command palette to turn the main window into a
-compact panel. **Expand** returns to the full app, as does opening a search result or the full
-settings. On macOS the panel has no close, minimise or zoom buttons.
+small panel; drag its edge for more room. **Expand** returns to the full app, as does opening a
+search result. On macOS the panel has no close, minimise or zoom buttons.
 
-The panel's tabs show your other open windows, the multiple windows switch, the list your Pull
-requests page opens with, each provider's usage limits, and whether an update is ready. It opens on
-**Usage**, which rereads the limits when the tab opens if they are more than five minutes old.
+The tabs along the panel's top show your other open windows, the list your Pull requests page opens
+with, each account's usage limits, and whether an update is ready. Search, New Window and Expand sit
+at the right. It opens on **Usage**, which shows each account's limits as small bars with the percent
+left, and rereads them when the tab opens if they are more than five minutes old.

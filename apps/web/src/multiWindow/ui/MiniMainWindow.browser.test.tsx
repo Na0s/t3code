@@ -20,7 +20,6 @@ import {
 } from "./mini.fixtures";
 import { MiniPanel } from "./MiniMainWindow";
 import { MiniPullRequestList } from "./MiniPullRequests";
-import { MiniSettings } from "./MiniSettings";
 import { MiniUpdate } from "./MiniUpdate";
 import { MiniUsageSection } from "./MiniUsage";
 import { MiniWindows } from "./MiniWindows";
@@ -44,8 +43,6 @@ const makeActions = () => ({
   expand: vi.fn(),
   newWindow: vi.fn(),
   focusWindow: vi.fn(),
-  multiWindowEnabledChange: vi.fn(),
-  openSettings: vi.fn(),
   openPullRequest: vi.fn(),
 });
 
@@ -78,13 +75,6 @@ function Panel({
             onFocusWindow={actions.focusWindow}
           />
         ),
-        settings: (
-          <MiniSettings
-            multiWindowEnabled={multiWindowEnabled}
-            onMultiWindowEnabledChange={actions.multiWindowEnabledChange}
-            onOpenSettings={actions.openSettings}
-          />
-        ),
         pullRequests: (
           <MiniPullRequestList
             entries={PULL_REQUESTS}
@@ -107,7 +97,7 @@ async function renderPanel(options: PanelOptions = {}) {
   return { screen, actions, openTab };
 }
 
-const TAB_REGIONS = ["Windows", "Settings", "Pull requests", "Usage", "Update"];
+const TAB_REGIONS = ["Windows", "Pull requests", "Usage", "Update"];
 
 describe("MiniPanel", () => {
   it("opens on Usage and shows one tab's content at a time", async () => {
@@ -115,9 +105,9 @@ describe("MiniPanel", () => {
     const { screen, openTab } = await renderPanel();
     await using _screen = screen;
 
-    await expect.element(screen.getByText("62% left")).toBeVisible();
+    await expect.element(screen.getByText("62%")).toBeVisible();
     expect(document.documentElement.scrollWidth).toBe(320);
-    for (const tab of ["Windows", "Settings", "Pull requests", "Update", "Usage"]) {
+    for (const tab of ["Windows", "Pull requests", "Update", "Usage"]) {
       await openTab(tab);
       await expect
         .element(screen.getByRole("button", { name: tab, exact: true }))
@@ -129,15 +119,20 @@ describe("MiniPanel", () => {
     }
   });
 
-  it("offers Search, New Window and Expand in the top bar, with only Search labelled", async () => {
+  it("puts the tabs at the left of the top bar and Search, New Window and Expand at its right", async () => {
     const { screen, actions } = await renderPanel();
     await using _screen = screen;
 
-    const search = screen.getByRole("button", { name: "Search" });
-    await expect.element(search).toHaveTextContent("Search");
-    await search.click();
-    expect(actions.search).toHaveBeenCalledOnce();
+    const left = (name: string) =>
+      screen.getByRole("button", { name, exact: true }).element().getBoundingClientRect();
+    expect(left("Windows").left).toBeLessThan(left("Update").left);
+    expect(left("Update").right).toBeLessThan(left("Search").left);
+    expect(left("Search").right).toBeLessThan(left("New Window").left);
+    expect(left("New Window").right).toBeLessThan(left("Expand").left);
+    // Flush with the panel's right edge, inside its content inset.
+    expect(320 - left("Expand").right).toBeLessThanOrEqual(12);
     for (const [name, action] of [
+      ["Search", actions.search],
       ["New Window", actions.newWindow],
       ["Expand", actions.expand],
     ] as const) {
@@ -146,6 +141,19 @@ describe("MiniPanel", () => {
       await button.click();
       expect(action).toHaveBeenCalledOnce();
     }
+  });
+
+  it("shows Claude's and OpenAI's limits together at the panel's default size", async () => {
+    const { screen } = await renderPanel();
+    await using _screen = screen;
+
+    await expect.element(screen.getByText("Claude · Max")).toBeInViewport();
+    await expect.element(screen.getByText("Codex · ChatGPT Pro 100 Subscription")).toBeInViewport();
+    for (const percent of ["62%", "41%", "6%", "78%"]) {
+      await expect.element(screen.getByText(percent, { exact: true })).toBeInViewport();
+    }
+    const viewport = screen.container.querySelector("[data-slot=scroll-area-viewport]")!;
+    expect(viewport.scrollHeight).toBe(viewport.clientHeight);
   });
 
   it("hides New Window while multiple windows are off, and PRs where no server supports them", async () => {
@@ -210,17 +218,6 @@ describe("MiniPanel", () => {
     await expect
       .element(screen.getByText("Claude: Could not read limits. Sign in again."))
       .toBeVisible();
-  });
-
-  it("Settings toggles multiple windows and leads to the full settings", async () => {
-    const { screen, actions, openTab } = await renderPanel();
-    await using _screen = screen;
-    await openTab("Settings");
-
-    await screen.getByRole("switch", { name: "Multiple windows" }).click();
-    expect(actions.multiWindowEnabledChange.mock.calls[0]?.[0]).toBe(false);
-    await screen.getByRole("button", { name: "All settings" }).click();
-    expect(actions.openSettings).toHaveBeenCalledOnce();
   });
 
   it("PRs opens a pull request on its host", async () => {

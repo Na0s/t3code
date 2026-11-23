@@ -4,9 +4,9 @@ import {
   AppWindowIcon,
   ChartNoAxesColumnIcon,
   CircleArrowUpIcon,
+  LayersIcon,
   Maximize2Icon,
   SearchIcon,
-  SettingsIcon,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
@@ -17,25 +17,19 @@ import { PullRequestGlyph } from "../../components/pullRequest/pullRequestIcons"
 import { SidebarUtilityItem } from "../../components/sidebar/SidebarChrome";
 import { SidebarHeaderIconButton } from "../../components/sidebar/SidebarThreadHeader";
 import { ScrollArea } from "../../components/ui/scroll-area";
-import {
-  SidebarFooter,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarProvider,
-} from "../../components/ui/sidebar";
+import { SidebarMenu, SidebarProvider } from "../../components/ui/sidebar";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { usePullRequestsSupported } from "../../state/environments";
 import { desktopWindowsBridge } from "../windowContext";
 import { useDesktopWindowsState } from "../windowsState";
 import { MiniPullRequests } from "./MiniPullRequests";
-import { MiniSettings } from "./MiniSettings";
 import { MiniUpdate } from "./MiniUpdate";
 import { MiniUsage } from "./MiniUsage";
 import { MiniWindows } from "./MiniWindows";
 import { useProjectScopeGroups } from "./useProjectScopeGroups";
 import { notifyWindowActionFailure, openNewDesktopWindow } from "./windowActions";
 
-type MiniTab = "windows" | "settings" | "pullRequests" | "usage" | "update";
+type MiniTab = "windows" | "pullRequests" | "usage" | "update";
 
 /** The main window's compact stand-in for the app shell while Mini Mode is on. */
 export function MiniMainWindow() {
@@ -88,17 +82,6 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
               }}
             />
           ),
-          settings: (
-            <MiniSettings
-              multiWindowEnabled={multiWindowEnabled}
-              onMultiWindowEnabledChange={(enabled) => {
-                bridge.setMultiWindowEnabled(enabled).catch((cause: unknown) => {
-                  notifyWindowActionFailure("Couldn't change multiple windows", cause);
-                });
-              }}
-              onOpenSettings={() => void router.navigate({ to: "/settings" })}
-            />
-          ),
           pullRequests: <MiniPullRequests />,
           usage: <MiniUsage />,
           update: <MiniUpdate />,
@@ -108,7 +91,7 @@ function MiniMainWindowContent({ bridge }: { readonly bridge: DesktopWindowsBrid
   );
 }
 
-/** The sidebar's top bar and bottom bar around one tab's content; the tabs never share the panel. */
+/** One top bar, tabs on the left and actions on the right, over one tab's content. */
 export function MiniPanel({
   pullRequestsSupported,
   updateAvailable,
@@ -138,12 +121,27 @@ export function MiniPanel({
   return (
     <SidebarProvider className="h-dvh min-h-0">
       <div className="flex min-w-0 flex-1 flex-col bg-sidebar text-sidebar-foreground">
-        <header className="drag-region flex h-(--workspace-topbar-height) shrink-0 items-center px-(--sidebar-content-inset) wco:pr-(--workspace-native-controls-inset)">
-          <SidebarMenuButton className="w-auto" onClick={onSearch}>
-            <SearchIcon />
-            <span>Search</span>
-          </SidebarMenuButton>
+        <header className="drag-region flex h-(--workspace-topbar-height) shrink-0 items-center gap-1 px-(--sidebar-content-inset) wco:pr-(--workspace-native-controls-inset)">
+          <SidebarMenu aria-label="Mini Mode tabs" className="w-auto flex-row items-center">
+            {tabItem("windows", "Windows", <LayersIcon />)}
+            {pullRequestsSupported
+              ? tabItem("pullRequests", "Pull requests", <PullRequestGlyph.pullRequest />)
+              : null}
+            {tabItem("usage", "Usage", <ChartNoAxesColumnIcon />)}
+            <span className="relative">
+              {tabItem("update", "Update", <CircleArrowUpIcon />)}
+              {updateAvailable ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-primary"
+                />
+              ) : null}
+            </span>
+          </SidebarMenu>
           <span className="flex-1" />
+          <SidebarHeaderIconButton label="Search" onClick={onSearch}>
+            <SearchIcon />
+          </SidebarHeaderIconButton>
           {onNewWindow === undefined ? null : (
             <SidebarHeaderIconButton label="New Window" onClick={onNewWindow}>
               <AppWindowIcon />
@@ -158,26 +156,6 @@ export function MiniPanel({
             {tabs[tab]}
           </ScrollArea>
         </main>
-        <SidebarFooter>
-          <SidebarMenu aria-label="Mini Mode tabs" className="flex-row items-center">
-            {tabItem("windows", "Windows", <AppWindowIcon />)}
-            {tabItem("settings", "Settings", <SettingsIcon />)}
-            {pullRequestsSupported
-              ? tabItem("pullRequests", "Pull requests", <PullRequestGlyph.pullRequest />)
-              : null}
-            {tabItem("usage", "Usage", <ChartNoAxesColumnIcon />)}
-            <span className="flex-1" />
-            <span className="relative">
-              {tabItem("update", "Update", <CircleArrowUpIcon />)}
-              {updateAvailable ? (
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-primary"
-                />
-              ) : null}
-            </span>
-          </SidebarMenu>
-        </SidebarFooter>
       </div>
     </SidebarProvider>
   );

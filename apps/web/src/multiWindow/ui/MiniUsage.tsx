@@ -11,7 +11,7 @@ import { useEffect, useEffectEvent, useState } from "react";
 
 import { providerClients } from "../../components/settings/providerDriverMeta";
 import { Button } from "../../components/ui/button";
-import { LimitWindows } from "../../components/usage/UsageLimits";
+import { LimitMeters } from "../../components/usage/UsageLimits";
 import { ensureLocalApi } from "../../localApi";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
@@ -47,7 +47,7 @@ export function MiniUsage() {
   return <MiniUsageSection presentations={presentations} now={now} />;
 }
 
-/** The composer's compact limit rows for every signed-in account. */
+/** Every signed-in account's limits as small meters, so Claude and OpenAI fit the panel together. */
 export function MiniUsageSection({
   presentations,
   now,
@@ -57,16 +57,15 @@ export function MiniUsageSection({
 }) {
   const accounts = collectLimitAccounts(presentations);
   return (
-    <section aria-label="Usage" className="flex flex-col gap-3 p-(--sidebar-content-inset)">
+    <section aria-label="Usage" className="flex flex-col gap-2 p-(--sidebar-content-inset)">
       {accounts.length === 0 ? <p className="font-medium text-sm">Usage unavailable</p> : null}
       {accounts.map((account) => (
-        <div key={account.key} className="flex flex-col gap-1">
-          <h3 className="truncate font-medium text-sm">
+        <div key={account.key} className="flex flex-col gap-0.5">
+          <h3 className="truncate font-medium text-xs">
             {account.displayName ?? providerClients.get(account.driver)?.label ?? account.driver}
             {account.plan ? ` · ${account.plan}` : null}
           </h3>
-          <LimitWindows
-            compact
+          <LimitMeters
             driver={account.driver}
             accentColor={account.accentColor}
             windows={account.limits.windows}
