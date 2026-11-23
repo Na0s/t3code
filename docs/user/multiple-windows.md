@@ -33,9 +33,9 @@ window by editing its name in place, pick its theme, open or focus it, or delete
 window** creates one without opening it. Deleting a saved window that is open leaves it open as an
 unsaved window. A window you have not saved yet can be saved from the same section.
 
-A window with a project filter uses **Project colour** by default: its projects' icon colours tint
-the top of its sidebar, and the rest of the window keeps the main window's theme. Projects whose
-icon is an image or an emoji add no colour. Pick a theme for a saved window to use that theme
+A window with a project filter uses **Project colour** by default: it keeps the main window's
+theme, and its projects' icon colours mark its entry in the list. Projects whose icon is an image or
+an emoji add no colour. Pick a theme for a saved window to use that theme
 instead. Changing the theme from inside a window with its own theme changes only that window.
 Light, dark, and system appearance stay shared by every window.
 

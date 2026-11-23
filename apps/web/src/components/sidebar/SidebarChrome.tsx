@@ -12,7 +12,6 @@ import {
   useCanNavigateHistory,
   type HistoryDirection,
 } from "../../navigationHistory";
-import { DesktopWindowTint } from "../../multiWindow/ui/DesktopWindowTint";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
@@ -69,7 +68,6 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
-      <DesktopWindowTint />
       <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
         <SidebarTrigger
           variant={backdropVariant ? "media-navigation" : "ghost"}

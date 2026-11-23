@@ -100,7 +100,7 @@ function Panel({
 }
 
 async function renderPanel(options: PanelOptions = {}) {
-  await page.viewport(320, 460);
+  await page.viewport(320, 184);
   const actions = makeActions();
   const screen = await render(<Panel {...options} actions={actions} />);
   const openTab = (name: string) => screen.getByRole("button", { name, exact: true }).click();
@@ -197,7 +197,7 @@ describe("MiniPanel", () => {
     await expect.element(screen.getByRole("button", { name: /redesign 1 / })).toBeInViewport();
     await expect.element(screen.getByRole("button", { name: /redesign 14 / })).not.toBeInViewport();
     expect(document.documentElement.scrollWidth).toBe(320);
-    expect(document.documentElement.scrollHeight).toBe(460);
+    expect(document.documentElement.scrollHeight).toBe(184);
     const viewport = screen.container.querySelector("[data-slot=scroll-area-viewport]")!;
     expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
     expect(viewport.scrollWidth).toBe(viewport.clientWidth);

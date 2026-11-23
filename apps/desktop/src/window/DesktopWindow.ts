@@ -123,8 +123,8 @@ const RENDERER_RECOVERY_RELOAD_DELAY_MS = 500;
 const RENDERER_RECOVERY_MAX_ATTEMPTS = 3;
 const RENDERER_RECOVERY_WINDOW_MS = 60_000;
 const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([-2, -7, -9, -102, -105, -106, -118]);
-const MINI_WINDOW_SIZE = { width: 320, height: 460 } as const;
-const MINI_WINDOW_MIN_SIZE = { width: 240, height: 320 } as const;
+const MINI_WINDOW_SIZE = { width: 320, height: 184 } as const;
+const MINI_WINDOW_MIN_SIZE = { width: 240, height: 160 } as const;
 const HUB_UNTHROTTLED_REASON = "hub-serving-windows";
 
 type WindowTitleBarOptions = Pick<
