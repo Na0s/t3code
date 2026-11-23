@@ -270,8 +270,8 @@ function CommandPaletteResultRow(props: {
         props.onExecuteItem(props.item);
       }}
     >
-      {/* With the row's gap, 20px: the sidebar's indent for an umbrella's threads. */}
-      {props.item.parentValue === undefined ? null : <span aria-hidden className="w-3 shrink-0" />}
+      {/* With the row's gap, 12px: the sidebar's indent for an umbrella's threads. */}
+      {props.item.parentValue === undefined ? null : <span aria-hidden className="w-1 shrink-0" />}
       <CommandPaletteTitleIcon>{props.item.icon}</CommandPaletteTitleIcon>
       {props.item.description || props.item.threadContentMatch ? (
         <span className="flex min-w-0 flex-1 flex-col">
