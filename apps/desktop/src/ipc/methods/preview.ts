@@ -39,6 +39,8 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
 
+import type * as Electron from "electron";
+
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as LoopbackTunnel from "../../preview/LoopbackTunnel.ts";
@@ -49,26 +51,46 @@ import { PREVIEW_WEBVIEW_PREFERENCES } from "../../preview/WebviewPreferences.ts
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
+/**
+ * A secondary window's tab ids are scoped to that window, so two windows can each show the
+ * same thread's preview. The main window keeps its ids as they are.
+ */
+const senderTabId = (tabId: string) =>
+  Effect.map(DesktopIpc.DesktopIpcSender, ({ window, isMain }) =>
+    isMain ? tabId : `w${window.id}:${tabId}`,
+  );
+
+/** Per-tab events go only to the window that shows the tab, under the id it knows. */
 export const installPreviewEventForwarding = Effect.fn(
   "desktop.ipc.preview.installEventForwarding",
 )(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const manager = yield* PreviewManager.PreviewManager;
+  // Pointer and recording-input events stream per frame, so routing them adds no span.
+  const sendToOwner = Effect.fnUntraced(function* (
+    tabId: string,
+    send: (contents: Electron.WebContents, rendererTabId: string) => void,
+  ) {
+    const { window, rendererTabId } = yield* manager.tabRoute(tabId);
+    if (Option.isNone(window) || window.value.isDestroyed()) return;
+    send(window.value.webContents, rendererTabId);
+  });
+  const forward =
+    (channel: string) =>
+    <E extends { readonly tabId: string }>(event: E) =>
+      sendToOwner(event.tabId, (contents, tabId) => contents.send(channel, { ...event, tabId }));
   yield* manager.subscribeStateChanges((tabId, state) =>
-    electronWindow.sendAll(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, tabId, state),
+    sendToOwner(tabId, (contents, rendererTabId) =>
+      contents.send(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, rendererTabId, {
+        ...state,
+        tabId: rendererTabId,
+      }),
+    ),
   );
-  yield* manager.subscribeRecordingInputs((event) =>
-    electronWindow.sendAll(IpcChannels.PREVIEW_RECORDING_INPUT_CHANNEL, event),
-  );
-  yield* manager.subscribePointerEvents((event) =>
-    electronWindow.sendAll(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, event),
-  );
-  yield* manager.subscribeOpenLinks((event) =>
-    electronWindow.sendAll(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL, event),
-  );
-  yield* manager.subscribeFindResults((event) =>
-    electronWindow.sendAll(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, event),
-  );
+  yield* manager.subscribeRecordingInputs(forward(IpcChannels.PREVIEW_RECORDING_INPUT_CHANNEL));
+  yield* manager.subscribePointerEvents(forward(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL));
+  yield* manager.subscribeOpenLinks(forward(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL));
+  yield* manager.subscribeFindResults(forward(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL));
   const tunnel = yield* LoopbackTunnel.LoopbackTunnel;
   yield* tunnel.subscribeForwards((forwards) =>
     electronWindow.sendAll(IpcChannels.PORT_FORWARD_CHANGE_CHANNEL, forwards),
@@ -85,7 +107,7 @@ const setForwardedShortcuts = DesktopIpc.makeIpcMethod({
   }),
 });
 
-const createTab = DesktopIpc.makeIpcMethod({
+export const createTab = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATE_TAB_CHANNEL,
   payload: DesktopPreviewCreateTabInputSchema,
   result: Schema.Void,
@@ -96,7 +118,12 @@ const createTab = DesktopIpc.makeIpcMethod({
     serverTab,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.createTab(tabId, { zoomFactor, colorScheme, serverTab });
+    const sender = yield* DesktopIpc.DesktopIpcSender;
+    yield* manager.createTab(
+      yield* senderTabId(tabId),
+      { zoomFactor, colorScheme, serverTab },
+      sender.isMain ? undefined : { window: sender.window, rendererTabId: tabId },
+    );
   }),
 });
 
@@ -106,7 +133,7 @@ const closeTab = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.closeTab")(function* ({ tabId }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.closeTab(tabId);
+    yield* manager.closeTab(yield* senderTabId(tabId));
   }),
 });
 
@@ -116,7 +143,7 @@ const registerWebview = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({ tabId, webContentsId }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.registerWebview(tabId, webContentsId);
+    yield* manager.registerWebview(yield* senderTabId(tabId), webContentsId);
   }),
 });
 
@@ -126,7 +153,7 @@ const navigate = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.navigate")(function* ({ tabId, url }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.navigate(tabId, url);
+    yield* manager.navigate(yield* senderTabId(tabId), url);
   }),
 });
 
@@ -141,7 +168,7 @@ const findInPage = DesktopIpc.makeIpcMethod({
     newSession,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.findInPage(tabId, text, { forward, newSession });
+    yield* manager.findInPage(yield* senderTabId(tabId), text, { forward, newSession });
   }),
 });
 
@@ -159,7 +186,7 @@ const tabMethod = (
     result: Schema.Void,
     handler: Effect.fn(name)(function* ({ tabId }) {
       const manager = yield* PreviewManager.PreviewManager;
-      yield* invoke(manager, tabId);
+      yield* invoke(manager, yield* senderTabId(tabId));
     }),
   });
 
@@ -214,7 +241,7 @@ const setZoomFactor = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.setZoomFactor")(function* ({ tabId, zoomFactor }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setZoomFactor(tabId, zoomFactor);
+    yield* manager.setZoomFactor(yield* senderTabId(tabId), zoomFactor);
   }),
 });
 const setColorScheme = DesktopIpc.makeIpcMethod({
@@ -223,7 +250,7 @@ const setColorScheme = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.setColorScheme")(function* ({ tabId, colorScheme }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setColorScheme(tabId, colorScheme);
+    yield* manager.setColorScheme(yield* senderTabId(tabId), colorScheme);
   }),
 });
 const setAudioMuted = DesktopIpc.makeIpcMethod({
@@ -232,7 +259,7 @@ const setAudioMuted = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.setAudioMuted")(function* ({ tabId, audioMuted }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setAudioMuted(tabId, audioMuted);
+    yield* manager.setAudioMuted(yield* senderTabId(tabId), audioMuted);
   }),
 });
 const setShown = DesktopIpc.makeIpcMethod({
@@ -241,7 +268,7 @@ const setShown = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.setShown")(function* ({ tabId, shown }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setShown(tabId, shown);
+    yield* manager.setShown(yield* senderTabId(tabId), shown);
   }),
 });
 const setCaptureDrawn = DesktopIpc.makeIpcMethod({
@@ -250,7 +277,7 @@ const setCaptureDrawn = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.setCaptureDrawn")(function* ({ tabId, drawn }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setCaptureDrawn(tabId, drawn);
+    yield* manager.setCaptureDrawn(yield* senderTabId(tabId), drawn);
   }),
 });
 const openDevTools = tabMethod(
@@ -277,7 +304,7 @@ export const startRecording = DesktopIpc.makeIpcMethod({
       showMousePresses: value.browserRecordingShowMousePresses,
     }));
     return yield* manager
-      .startRecording(tabId, Option.getOrUndefined(options))
+      .startRecording(yield* senderTabId(tabId), Option.getOrUndefined(options))
       .pipe(
         Effect.catch((error) => Effect.succeed(normalizeCaptureFailure(error, "recording-start"))),
       );
@@ -474,7 +501,7 @@ const pickElement = DesktopIpc.makeIpcMethod({
   result: Schema.NullOr(PreviewAnnotationSubmissionResultSchema),
   handler: Effect.fn("desktop.ipc.preview.pickElement")(function* ({ tabId, voice }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.pickElement(tabId, voice);
+    return yield* manager.pickElement(yield* senderTabId(tabId), voice);
   }),
 });
 
@@ -484,7 +511,7 @@ const updateAnnotationVoice = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.updateAnnotationVoice")(function* (state) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.updateAnnotationVoice(state);
+    yield* manager.updateAnnotationVoice({ ...state, tabId: yield* senderTabId(state.tabId) });
   }),
 });
 
@@ -497,7 +524,7 @@ const setAnnotationSendEnabled = DesktopIpc.makeIpcMethod({
     enabled,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setAnnotationSendEnabled(tabId, enabled);
+    yield* manager.setAnnotationSendEnabled(yield* senderTabId(tabId), enabled);
   }),
 });
 
@@ -507,9 +534,10 @@ export const captureScreenshot = DesktopIpc.makeIpcMethod({
   result: Schema.Union([DesktopPreviewScreenshotArtifactSchema, PreviewCaptureFailure]),
   handler: Effect.fn("desktop.ipc.preview.captureScreenshot")(function* ({ tabId }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager
-      .captureScreenshot(tabId)
-      .pipe(Effect.catch((error) => Effect.succeed(normalizeCaptureFailure(error, "screenshot"))));
+    return yield* manager.captureScreenshot(yield* senderTabId(tabId)).pipe(
+      Effect.map((artifact) => ({ ...artifact, tabId })),
+      Effect.catch((error) => Effect.succeed(normalizeCaptureFailure(error, "screenshot"))),
+    );
   }),
 });
 
@@ -539,7 +567,8 @@ const saveRecording = DesktopIpc.makeIpcMethod({
   result: DesktopPreviewRecordingArtifactSchema,
   handler: Effect.fn("desktop.ipc.preview.saveRecording")(function* ({ tabId, mimeType, data }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.saveRecording(tabId, mimeType, data);
+    const artifact = yield* manager.saveRecording(yield* senderTabId(tabId), mimeType, data);
+    return { ...artifact, tabId };
   }),
 });
 

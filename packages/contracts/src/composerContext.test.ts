@@ -118,6 +118,13 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     label: "vps",
     environmentId: "environment-vps",
   },
+  bot: {
+    ...base,
+    kind: "bot",
+    label: "Atlas",
+    environmentId: "environment-1",
+    projectId: "project-atlas",
+  },
   response: {
     ...base,
     kind: "response",

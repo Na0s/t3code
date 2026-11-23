@@ -34,8 +34,8 @@ import {
   readProjects,
   readThreadShell,
   readThreadShells,
-  useProjects,
   useQuietThreadShell,
+  useVisibleProjects,
 } from "../state/entities";
 import {
   draftModelSelectionApplies,
@@ -143,6 +143,8 @@ export function createNewThreadHandler(router: AnyRouter) {
       replace?: boolean;
       /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
       prompt?: string;
+      /** False for a caller that shows the draft itself instead of at `/draft/$draftId`. */
+      navigate?: boolean;
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     const projects = readProjects();
@@ -167,6 +169,14 @@ export function createNewThreadHandler(router: AnyRouter) {
       if (options?.prompt === undefined) return;
       if (composerDraftHasUserContent(getComposerDraft(draftId))) return;
       setPrompt(draftId, options.prompt);
+    };
+    const openDraftRoute = async (draftId: DraftId) => {
+      if (options?.navigate === false) return;
+      await router.navigate({
+        to: "/draft/$draftId",
+        params: { draftId },
+        replace: options?.replace ?? false,
+      });
     };
     const currentRouteTarget = getCurrentRouteTarget();
     const carrySourceShell =
@@ -403,11 +413,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         ) {
           return opened;
         }
-        await router.navigate({
-          to: "/draft/$draftId",
-          params: { draftId: emptyStoredDraftThread.draftId },
-          replace: options?.replace ?? false,
-        });
+        await openDraftRoute(emptyStoredDraftThread.draftId);
         return opened;
       })();
     }
@@ -464,11 +470,7 @@ export function createNewThreadHandler(router: AnyRouter) {
       }
       seedPrompt(draftId);
       defaultEnvMode?.applyProjectFile(draftId);
-      await router.navigate({
-        to: "/draft/$draftId",
-        params: { draftId },
-        replace: options?.replace ?? false,
-      });
+      await openDraftRoute(draftId);
       return { draftId, threadId };
     })();
   };
@@ -527,7 +529,7 @@ export function useHandleNewThread() {
         : useComposerDraftStore.getState().getDraftSession(routeTarget.draftId)
       : null,
   );
-  const projects = useProjects();
+  const projects = useVisibleProjects();
   const handleNewThread = useNewThreadHandler();
   const groupingSettings = useClientSettings(selectProjectGroupingSettings);
   const defaultProjectRef = resolveDefaultProjectRef(

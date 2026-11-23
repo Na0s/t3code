@@ -3787,6 +3787,28 @@ describe("streaming v2 row projection", () => {
     }
   });
 
+  it("rebuilds rows when a streamed reply gains a section marker", () => {
+    const initial = fixture("Status");
+    const previous = deriveMessagesTimelineRowsWithState(initial.input);
+    const timelineInput = {
+      ...initial.timelineInput,
+      visibleTurnItems: updateText(
+        initial.visibleTurnItems,
+        '<!-- t3bot:section kind="status-check" -->\nStatus',
+      ),
+    };
+    const input = {
+      ...initial.input,
+      timelineEntries: deriveTimelineEntriesFromVisibleTurnItemsWithState(
+        timelineInput,
+        initial.timeline,
+      ).entries,
+    };
+    const next = deriveMessagesTimelineRowsWithState(input, previous);
+    expect(next.rows).toEqual(deriveMessagesTimelineRows(input));
+    expect(next.rows.some((row) => row.id.startsWith("turn-fold:section-open:"))).toBe(true);
+  });
+
   it.each(["file", "image", "handoff", "streaming-image"] as const)(
     "keeps history references with %s previews through the v2 materializer",
     (kind) => {
@@ -5204,6 +5226,191 @@ describe("subagent continued by a later turn", () => {
       `turn-fold:${run2}`,
       "closing-2",
     ]);
+  });
+});
+
+describe("bot sections", () => {
+  // Local wall-clock times, so labels read the same in every time zone.
+  const time = (second: number) => new Date(2026, 0, 1, 11, 18, second).toISOString();
+  const statusCheck = '<!-- t3bot:section kind="status-check" -->\n';
+  const user = (id: string, run: string, second: number): TimelineEntry => ({
+    kind: "message",
+    id,
+    createdAt: time(second),
+    message: {
+      id: MessageId.make(id),
+      role: "user",
+      text: id,
+      runId: RunId.make(run),
+      createdAt: time(second),
+      updatedAt: time(second),
+      streaming: false,
+    },
+  });
+  const answer = (id: string, run: string, second: number, text = id): TimelineEntry => ({
+    kind: "message",
+    id,
+    createdAt: time(second),
+    message: {
+      id: MessageId.make(id),
+      role: "assistant",
+      text,
+      runId: RunId.make(run),
+      createdAt: time(second),
+      updatedAt: time(second),
+      streaming: false,
+    },
+  });
+  const work = (id: string, run: string, second: number): TimelineEntry => ({
+    kind: "work",
+    id,
+    createdAt: time(second),
+    entry: {
+      id,
+      runId: RunId.make(run),
+      createdAt: time(second),
+      label: "Ran command",
+      tone: "tool",
+      itemType: "command_execution",
+      toolLifecycleStatus: "completed",
+    },
+  });
+  const statusExchange = [
+    user("ask", "r1", 4),
+    answer("relay", "r1", 6, `${statusCheck}Ryder App: checks green.`),
+    user("reply", "r2", 10),
+    work("merge", "r2", 11),
+    answer("resumed", "r2", 14, "Done. Both threads resumed."),
+  ];
+  const rowsFor = (
+    timelineEntries: ReadonlyArray<TimelineEntry>,
+    options: {
+      expandedRunIds?: ReadonlyArray<string>;
+      isWorking?: boolean;
+      expandAllSections?: boolean;
+      toolCallVisibility?: "zen";
+    } = {},
+  ) =>
+    deriveMessagesTimelineRows({
+      timelineEntries,
+      expandedRunIds: new Set((options.expandedRunIds ?? []).map((id) => RunId.make(id))),
+      isWorking: options.isWorking ?? false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      ...(options.expandAllSections ? { expandAllSections: true } : {}),
+      ...(options.toolCallVisibility ? { toolCallVisibility: options.toolCallVisibility } : {}),
+    });
+
+  it.each<[string, ReadonlyArray<TimelineEntry>, Parameters<typeof rowsFor>[1], string[]]>([
+    [
+      "keeps the latest open section expanded with its work folds",
+      statusExchange,
+      {},
+      ["turn-fold:section-open:relay", "ask", "relay", "reply", "turn-fold:r2", "resumed"],
+    ],
+    [
+      "folds the open section when toggled",
+      statusExchange,
+      { expandedRunIds: ["section-open:relay"] },
+      ["turn-fold:section-open:relay"],
+    ],
+    [
+      "folds a section the next marker closed",
+      [
+        ...statusExchange,
+        user("later", "r3", 30),
+        answer("beat", "r3", 31, '<!-- t3bot:section kind="heartbeat" label="Sweep" -->\nQuiet.'),
+      ],
+      {},
+      ["turn-fold:section:relay", "turn-fold:section-open:beat", "later", "beat"],
+    ],
+    [
+      "opens a closed section from the expanded set, nested folds intact",
+      [...statusExchange, user("later", "r3", 30), answer("beat", "r3", 31, statusCheck)],
+      { expandedRunIds: ["section:relay"] },
+      [
+        "turn-fold:section:relay",
+        "ask",
+        "relay",
+        "reply",
+        "turn-fold:r2",
+        "resumed",
+        "turn-fold:section-open:beat",
+        "later",
+        "beat",
+      ],
+    ],
+    [
+      "closes at an end marker, inclusive",
+      [
+        user("before", "r0", 1),
+        answer("plain", "r0", 2),
+        ...statusExchange.slice(0, 4),
+        answer("resumed", "r2", 14, "Done.\n<!-- t3bot:section-end -->"),
+        user("after", "r3", 30),
+        answer("chat", "r3", 31),
+      ],
+      {},
+      ["before", "plain", "turn-fold:section:relay", "after", "chat"],
+    ],
+    [
+      "stays open while the turn that ends it still runs",
+      [
+        ...statusExchange.slice(0, 3),
+        answer("resumed", "r2", 14, "Done.\n<!-- t3bot:section-end -->"),
+      ],
+      { isWorking: true },
+      [
+        "turn-fold:section-open:relay",
+        "ask",
+        "relay",
+        "reply",
+        "working-indicator-row",
+        "resumed",
+        "live-activity-row",
+      ],
+    ],
+    [
+      "shows every section while find is open",
+      [...statusExchange, user("later", "r3", 30), answer("beat", "r3", 31, statusCheck)],
+      { expandAllSections: true, toolCallVisibility: "zen" },
+      [
+        "turn-fold:section:relay",
+        "ask",
+        "relay",
+        "reply",
+        "resumed",
+        "turn-fold:section-open:beat",
+        "later",
+        "beat",
+      ],
+    ],
+    [
+      "finds a marker that zen hides",
+      [
+        user("ask", "r1", 4),
+        answer("opening", "r1", 5, statusCheck),
+        work("lookup", "r1", 6),
+        answer("summary", "r1", 7),
+        user("later", "r3", 30),
+        answer("beat", "r3", 31, statusCheck),
+      ],
+      { toolCallVisibility: "zen" },
+      ["turn-fold:section:opening", "turn-fold:section-open:beat", "later", "beat"],
+    ],
+  ])("%s", (_name, timelineEntries, options, expected) => {
+    expect(rowsFor(timelineEntries, options).map((row) => row.id)).toEqual(expected);
+  });
+
+  it("labels the fold with the section start in local time", () => {
+    const [fold] = rowsFor(statusExchange);
+    expect(fold).toMatchObject({
+      kind: "turn-fold",
+      label: "Status Check - 11:18:04",
+      createdAt: time(4),
+      expanded: true,
+    });
   });
 });
 

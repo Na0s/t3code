@@ -102,7 +102,7 @@ import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   threadErrorText,
 } from "@t3tools/client-runtime/state/threads";
-import { useProjects } from "../../state/entities";
+import { useVisibleProjects } from "../../state/entities";
 import {
   projectThreadContentPresentation,
   threadSyncStatusLabel,
@@ -215,7 +215,7 @@ function ThreadUnavailableScreen(props: {
 /** A thread that can't load opens a new task in its environment instead of a dead end. */
 function UnavailableThreadDraftRedirect(props: { readonly environmentId: EnvironmentId }) {
   const navigation = useNavigation();
-  const projects = useProjects();
+  const projects = useVisibleProjects();
   const openDraft = useEffectEvent(() => {
     const project = projects.find((candidate) => candidate.environmentId === props.environmentId);
     navigation.dispatch(

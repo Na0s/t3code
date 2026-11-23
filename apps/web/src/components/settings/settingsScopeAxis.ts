@@ -72,6 +72,11 @@ export function projectAxisValue(search: SettingsScopeSearch): string {
   return search.project ?? ALL_PROJECTS_VALUE;
 }
 
+/** Whether a settings project menu row is a T3_BOT, which it labels "T3_BOT" beside where it lives. */
+export function projectScopeIsBot(group: Pick<SidebarProjectSnapshot, "memberProjects">): boolean {
+  return group.memberProjects.some((member) => member.isBot);
+}
+
 export function projectScopeMenuGroups(
   groups: readonly SidebarProjectSnapshot[],
   search: Pick<SettingsScopeSearch, "machine">,

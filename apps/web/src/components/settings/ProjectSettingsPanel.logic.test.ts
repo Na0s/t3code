@@ -5,6 +5,7 @@ import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
 import {
+  nextBotSettings,
   projectGroupTitleNeedsUpdate,
   scopeProjectSettingsGroup,
 } from "./ProjectSettingsPanel.logic";
@@ -189,5 +190,21 @@ describe("projectGroupTitleNeedsUpdate", () => {
       false,
     );
     expect(projectGroupTitleNeedsUpdate([renamed, renamed], "repo", true)).toBe(false);
+  });
+});
+
+describe("nextBotSettings", () => {
+  it("keeps the main thread and order through role edits and removes the bot when turned off", () => {
+    const mainThreadId = ThreadId.make("main");
+    const current = { role: "Orchestrator", mainThreadId, order: 2 };
+    expect(nextBotSettings(current, { role: "  PR babysitter " })).toEqual({
+      role: "PR babysitter",
+      mainThreadId,
+      order: 2,
+    });
+    expect(nextBotSettings(current, { role: " " })).toEqual({ mainThreadId, order: 2 });
+    expect(nextBotSettings(undefined, { enabled: true })).toEqual({});
+    expect(nextBotSettings(current, { enabled: true })).toBe(current);
+    expect(nextBotSettings(current, { enabled: false })).toBeNull();
   });
 });

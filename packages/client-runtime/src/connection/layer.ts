@@ -8,6 +8,7 @@ import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 
 import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionDriver from "./driver.ts";
+import * as HubConnection from "./hub.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionOnboarding from "./onboarding.ts";
 import { connectionRoutes, hasRelayRoute } from "./routes.ts";
@@ -71,10 +72,22 @@ export const watchDiscoveredCompatibility = Effect.fn("connection.watchDiscovere
   },
 );
 
-export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
-  const layerDriver = ConnectionDriver.layer.pipe(
-    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, RpcSession.layer(options))),
+/**
+ * With `hubLeases`, environments connect through another window's sessions
+ * (see `HubConnection`) instead of opening sockets of their own.
+ */
+export function layerWithOptions(
+  options: RpcSession.RpcSessionOptions,
+  hubLeases?: Layer.Layer<HubConnection.HubLeaseSource>,
+) {
+  const layerSessions = RpcSession.layer(options);
+  const layerSocketDriver = ConnectionDriver.layer.pipe(
+    Layer.provide(Layer.mergeAll(ConnectionResolver.layer, layerSessions)),
   );
+  const layerDriver: typeof layerSocketDriver =
+    hubLeases === undefined
+      ? layerSocketDriver
+      : HubConnection.layerHubDriver.pipe(Layer.provide(Layer.mergeAll(layerSessions, hubLeases)));
   const layerRegistry = EnvironmentRegistry.layer.pipe(Layer.provide(layerDriver));
   const layerOnboarding = ConnectionOnboarding.layer.pipe(Layer.provide(layerRegistry));
   const layerConnectionServices = Layer.mergeAll(

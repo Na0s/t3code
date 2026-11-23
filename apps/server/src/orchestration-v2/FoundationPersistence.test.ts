@@ -2767,7 +2767,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
-  it.effect("runs title generation beside critical work while serializing each lane", () =>
+  it.effect("runs title generation and bot mentions beside critical work, each in its lane", () =>
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
       const commandId = CommandId.make("command:foundation-title-effect-lane");
@@ -2776,6 +2776,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       const providerEffectId = "effect:foundation-title-effect-lane:b-provider";
       const nextTitleEffectId = "effect:foundation-title-effect-lane:c-title";
       const nextCriticalEffectId = "effect:foundation-title-effect-lane:d-critical";
+      const botEffectId = "effect:foundation-title-effect-lane:e-bot";
       yield* outbox.enqueue([
         {
           id: titleEffectId,
@@ -2810,6 +2811,16 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           threadId,
           request: { type: "terminal.cleanup" },
         },
+        {
+          id: botEffectId,
+          commandId,
+          threadId,
+          request: {
+            type: "bot-mention.deliver",
+            messageId: MessageId.make("message:foundation-title-effect-lane"),
+            projectId: ProjectId.make("project:foundation-title-effect-lane:bot"),
+          },
+        },
       ]);
 
       const title = yield* outbox.claimNext({
@@ -2825,6 +2836,14 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue(Option.isSome(provider));
       if (Option.isNone(provider)) return;
       assert.equal(provider.value.id, providerEffectId);
+
+      const bot = yield* outbox.claimNext({
+        workerId: "bot-lane-worker",
+      });
+      assert.isTrue(Option.isSome(bot));
+      if (Option.isNone(bot)) return;
+      assert.equal(bot.value.id, botEffectId);
+      yield* outbox.succeed({ effectId: bot.value.id, workerId: "bot-lane-worker" });
 
       assert.isTrue(
         Option.isNone(

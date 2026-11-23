@@ -22,9 +22,12 @@ export function createEnvironmentProjectAtoms(input: {
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
-  readonly serverConfigValueAtom?: (
-    environmentId: EnvironmentId,
-  ) => Atom.Atom<Pick<ServerConfig, "scratchWorkspaceRoot"> | null>;
+  readonly serverConfigValueAtom?: (environmentId: EnvironmentId) => Atom.Atom<
+    | (Pick<ServerConfig, "scratchWorkspaceRoot"> & {
+        readonly settings: Pick<ServerConfig["settings"], "bots">;
+      })
+    | null
+  >;
 }) {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
@@ -62,28 +65,28 @@ export function createEnvironmentProjectAtoms(input: {
     const ref = parseProjectKey(key);
     let previousSource: OrchestrationProjectShell | null = null;
     let previousIsScratch = false;
+    let previousIsBot = false;
     let previousValue: EnvironmentProject | null = null;
     return Atom.make((get) => {
       const source = get(environmentProjectIndexAtom(ref.environmentId)).get(ref.projectId) ?? null;
-      const scratch =
-        source !== null &&
-        isScratchProject(
-          source,
-          input.serverConfigValueAtom
-            ? get(input.serverConfigValueAtom(ref.environmentId))?.scratchWorkspaceRoot
-            : null,
-        );
-      if (source === previousSource && scratch === previousIsScratch) {
+      const config = input.serverConfigValueAtom
+        ? get(input.serverConfigValueAtom(ref.environmentId))
+        : null;
+      const scratch = source !== null && isScratchProject(source, config?.scratchWorkspaceRoot);
+      const bot = source !== null && Object.hasOwn(config?.settings.bots ?? {}, source.id);
+      if (source === previousSource && scratch === previousIsScratch && bot === previousIsBot) {
         return previousValue;
       }
       previousSource = source;
       previousIsScratch = scratch;
+      previousIsBot = bot;
       previousValue =
         source === null
           ? null
           : {
               ...scopeProject(ref.environmentId, source),
               ...(scratch ? { isScratch: true as const } : {}),
+              ...(bot ? { isBot: true as const } : {}),
             };
       return previousValue;
     }).pipe(Atom.withLabel(`environment-project:${key}`));
@@ -115,6 +118,17 @@ export function createEnvironmentProjectAtoms(input: {
     return previousProjects;
   }).pipe(Atom.withLabel("environment-project-list"));
 
+  /** projectsAtom without T3_BOT projects, for the main window's lists and pickers. */
+  let previousVisibleProjects: ReadonlyArray<EnvironmentProject> = [];
+  const visibleProjectsAtom = Atom.make((get) => {
+    const projects = get(projectsAtom);
+    if (!projects.some((project) => project.isBot)) return projects;
+    const next = projects.filter((project) => !project.isBot);
+    if (arrayElementsEqual(previousVisibleProjects, next)) return previousVisibleProjects;
+    previousVisibleProjects = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-visible-project-list"));
+
   const projectConfigsReadyAtom = Atom.make((get) => {
     const catalog = get(input.catalogValueAtom);
     if (!catalog.isReady) return false;
@@ -132,6 +146,7 @@ export function createEnvironmentProjectAtoms(input: {
     environmentProjectRefsAtom,
     projectRefsAtom,
     projectsAtom,
+    visibleProjectsAtom,
     projectConfigsReadyAtom,
     projectAtom: (ref: ScopedProjectRef) => projectAtomFamily(projectKey(ref)),
   };

@@ -167,6 +167,7 @@ import {
   type GuestShareCommand,
 } from "./GuestShareDecider.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import { botMentionDeliveryEffects } from "./botMentionEffects.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -16284,9 +16285,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       default:
         return yield* dispatchUnsupported(command);
     }
+    const decidedEvents = yield* Ref.get(events);
     return {
-      events: yield* Ref.get(events),
-      effects: yield* Ref.get(effects),
+      events: decidedEvents,
+      effects: [
+        ...(yield* Ref.get(effects)),
+        ...botMentionDeliveryEffects(command.commandId, decidedEvents),
+      ],
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
       ...(updateDelegatedCompletionOnlyRunId === undefined
         ? {}

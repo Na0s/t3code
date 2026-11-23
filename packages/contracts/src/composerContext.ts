@@ -10,6 +10,7 @@ import {
   GuestShareId,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnItemId,
@@ -30,6 +31,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "thread",
   "environment",
   "response",
+  "bot",
 ] as const;
 export type KnownComposerContextKind = (typeof COMPOSER_CONTEXT_KINDS)[number];
 
@@ -231,6 +233,18 @@ export const EnvironmentContextRecord = Schema.Struct({
 export type EnvironmentContextRecord = typeof EnvironmentContextRecord.Type;
 
 /**
+ * A T3_BOT, tagged so its own server delivers the message to the bot's main conversation. The
+ * label is the bot's name; the tagging thread's agent only reads that it was notified.
+ */
+export const BotContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("bot"),
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+});
+export type BotContextRecord = typeof BotContextRecord.Type;
+
+/**
  * An earlier assistant response the user is replying to. Only its identity and opening travel:
  * the agent rereads the rest by item id, so a reply costs the same however long the response is.
  */
@@ -286,6 +300,7 @@ export const KnownComposerContextRecord = Schema.Union([
   ThreadContextRecord,
   EnvironmentContextRecord,
   ResponseContextRecord,
+  BotContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;
 

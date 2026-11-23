@@ -1,3 +1,4 @@
+import type { ComposerBotItem } from "@t3tools/client-runtime/composerThreadItems";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -56,6 +57,7 @@ export type ComposerCommandItem =
       readonly label: string;
       readonly description: string;
     }
+  | ComposerBotItem
   | {
       readonly id: string;
       readonly type: "slash-command";
@@ -136,6 +138,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
       return "text.bubble";
     case "environment":
       return ENVIRONMENT_MACHINE_SYMBOLS[item.machine];
+    case "bot":
+      return "person.crop.circle";
   }
 }
 

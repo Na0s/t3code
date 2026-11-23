@@ -90,6 +90,7 @@ import {
   resolveTimelineMinimapVisibleRange,
   resolveTimelineMinimapHitStripWidth,
   TIMELINE_MINIMAP_TARGET_OFFSET,
+  timelineSectionFoldsByEntryId,
   timelineTurnFoldRunIdsByEntryId,
   liveAnswerPreview,
   type MessagesTimelineRow,
@@ -718,6 +719,19 @@ const ConversationTimeline = memo(function ConversationTimeline({
         previous.has(citedRunId) ? previous : new Set(previous).add(citedRunId),
       );
     }
+    const citedSection = timelineSectionFoldsByEntryId(timelineEntries, isWorking).get(
+      citedEntry.id,
+    );
+    if (citedSection) {
+      const { key, expandedByDefault } = citedSection;
+      setExpandedRunIds((previous) => {
+        if (previous.has(key) !== expandedByDefault) return previous;
+        const next = new Set(previous);
+        if (expandedByDefault) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    }
     const citedAttempt = citedEntry.attempt;
     if (citedAttempt?.status === "superseded") {
       setExpandedAttemptIds((previous) =>
@@ -771,6 +785,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     worktreeSetup,
     toolCallVisibility,
     revealedMessageId,
+    expandAllSections: findActive,
   });
   const rows = useStableRows(rawRows, listIdentityKey);
   const matchedApprovalRequestIds = new Set<string>();

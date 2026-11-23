@@ -22,6 +22,7 @@ export function composerDraftContentChanged(
     before.reviewComments !== after.reviewComments ||
     before.threadContexts !== after.threadContexts ||
     before.environmentContexts !== after.environmentContexts ||
+    before.botContexts !== after.botContexts ||
     before.replyTo !== after.replyTo
   );
 }

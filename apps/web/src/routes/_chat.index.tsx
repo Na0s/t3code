@@ -17,7 +17,7 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   readProject,
   useAllEnvironmentShellsBootstrapped,
-  useProjects,
+  useVisibleProjects,
   useVisibleThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
@@ -35,7 +35,7 @@ function ChatIndexRouteView() {
 }
 
 function IndexDraftLanding() {
-  const projects = useProjects();
+  const projects = useVisibleProjects();
   const threads = useVisibleThreadShells();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();

@@ -26,7 +26,7 @@ import { isTriagePrompt, replaceTriagePlaybookLink } from "@t3tools/shared/triag
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
-import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
+import { useServerConfigs, useThreadShells, useVisibleProjects } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
@@ -243,7 +243,7 @@ export function NewTaskFlowProvider(
     routeDraftId?: string;
   }>,
 ) {
-  const projects = useProjects();
+  const projects = useVisibleProjects();
   const messages = useMessages();
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();

@@ -51,7 +51,7 @@ import {
   useComposerDraftResetGeneration,
 } from "../../state/use-composer-drafts";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
-import { useProject, useVisibleThreadShells } from "../../state/entities";
+import { useProject, useProjects, useVisibleThreadShells } from "../../state/entities";
 import { useMentionableEnvironments } from "../../state/environments";
 import { useLinkedEnvironments } from "../../state/peerLinks";
 import { useEnvironmentScopeDenied } from "../../state/session";
@@ -430,6 +430,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     environments: offersLinkedEnvironments(props.serverConfig)
       ? mentionableEnvironments
       : NO_MACHINES,
+    projects: useProjects(),
+    bots: props.serverConfig?.settings.bots,
     linkedEnvironments: useLinkedEnvironments(props.environmentId),
     currentThreadId: props.selectedThread.id,
     projectCwd: props.projectCwd,

@@ -65,7 +65,7 @@ import {
   updateComposerDraftSettings,
   scheduleUnusedComposerAttachmentCleanup,
 } from "../../state/use-composer-drafts";
-import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
+import { useEnvironmentServerConfig, useVisibleProjects } from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
 import { projectEnvironment } from "../../state/projects";
 import { sourceControlEnvironment } from "../../state/sourceControl";
@@ -166,7 +166,7 @@ export function NewTaskDraftScreen(props: {
   const gt = useGT();
   const m = useMessages();
   const [creationMetadata] = useState(makeTurnCommandMetadata);
-  const projects = useProjects();
+  const projects = useVisibleProjects();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const isFocused = useIsFocused();

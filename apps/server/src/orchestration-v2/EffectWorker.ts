@@ -31,6 +31,7 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as BotMentionDelivery from "../bot/BotMentionDelivery.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
@@ -107,6 +108,7 @@ export const layerExecutor: Layer.Layer<
   Effect.gen(function* () {
     const runFinalization = yield* RunFinalizationService.RunFinalizationService;
     const resourceCleanup = yield* ResourceCleanupService.ResourceCleanupService;
+    const botMentions = yield* BotMentionDelivery.BotMentionDelivery;
     const checkpointRollback = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
@@ -687,6 +689,24 @@ export const layerExecutor: Layer.Layer<
                 kind: effect.request.kind,
               })
               .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
+          case "bot-mention.deliver":
+            return botMentions
+              .deliver({
+                sourceThreadId: effect.threadId,
+                messageId: effect.request.messageId,
+                projectId: effect.request.projectId,
+              })
+              .pipe(
+                Effect.asVoid,
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({

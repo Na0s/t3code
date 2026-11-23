@@ -122,7 +122,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     create: () => Effect.die("unexpected BrowserWindow creation"),
     main: Effect.succeedNone,
     currentMainOrFirst: Effect.succeedNone,
-    focusedMainOrFirst: Effect.succeedNone,
+    apps: Effect.succeed([]),
+    focusedApp: Effect.succeedNone,
+    registerApp: () => Effect.void,
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
     prepareReveal: () => Effect.succeed(false),
@@ -216,6 +218,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
           get: Effect.sync(() => testSettings),
           load: Effect.sync(() => testSettings),
           setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
+          updateBotWindow: () => Effect.die("unexpected bot window update"),
           setServerExposureMode: () => Effect.die("unexpected server exposure update"),
           setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
           setUpdateChannel: (channel) =>

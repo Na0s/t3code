@@ -392,6 +392,15 @@ export function ComposerContextSheet(props: {
             {record.kind === "environment" ? (
               <ContextField label={gt("Machine", { $context: "computer" })} value={record.label} />
             ) : null}
+            {record.kind === "bot" ? (
+              <ContextField
+                // oxlint-disable-next-line t3code/no-untranslated-copy -- T3_BOT is the feature's name
+                label="T3_BOT"
+                value={gt("Sending delivers this message to {name}''s main conversation.", {
+                  name: record.label,
+                })}
+              />
+            ) : null}
             {record.kind === "skill" ? (
               <View className="gap-3">
                 <ContextField

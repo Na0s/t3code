@@ -104,7 +104,7 @@ import {
   environmentContextRecord,
   terminalContextReference,
 } from "./lib/composerContextRecords";
-import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
+import { botContextRecord, threadContextRecord } from "@t3tools/shared/composerContextReferences";
 import {
   copiedComposerAttachmentFile,
   rememberCopiedComposerAttachments,
@@ -756,6 +756,57 @@ describe("composerDraftStore context persistence", () => {
       vi.resetModules();
     }
   });
+
+  it("shows a draft another desktop window saved, without reverting it on its next save", async () => {
+    const sharedStorage = createMemoryStorage();
+    vi.stubGlobal("localStorage", sharedStorage);
+    const context = { windowId: 2, isMain: false };
+    vi.stubGlobal(
+      "window",
+      Object.assign(new EventTarget(), {
+        desktopBridge: { windows: { getContext: () => context } },
+      }),
+    );
+    vi.useFakeTimers();
+    vi.resetModules();
+    try {
+      const thisWindow = await import("./composerDraftStore");
+      vi.resetModules();
+      const otherWindow = await import("./composerDraftStore");
+      const alphaRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("alpha-window-thread"));
+      const betaRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("beta-window-thread"));
+      const announceSave = () =>
+        window.dispatchEvent(
+          Object.assign(new Event("storage"), {
+            key: COMPOSER_DRAFT_STORAGE_KEY,
+            newValue: sharedStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY),
+          }),
+        );
+
+      thisWindow.useComposerDraftStore.getState().setPrompt(alphaRef, "alpha draft");
+      await vi.advanceTimersByTimeAsync(300);
+      otherWindow.useComposerDraftStore.getState().setPrompt(betaRef, "beta draft");
+      await vi.advanceTimersByTimeAsync(300);
+      announceSave();
+
+      const drafts = thisWindow.useComposerDraftStore.getState().draftsByThreadKey;
+      expect(drafts[scopedThreadKey(betaRef)]?.prompt).toBe("beta draft");
+      expect(drafts[scopedThreadKey(alphaRef)]?.prompt).toBe("alpha draft");
+
+      otherWindow.useComposerDraftStore.getState().setPrompt(betaRef, "beta edited");
+      await vi.advanceTimersByTimeAsync(300);
+      thisWindow.useComposerDraftStore.getState().setPrompt(alphaRef, "alpha edited");
+      await vi.advanceTimersByTimeAsync(300);
+
+      const saved = JSON.parse(sharedStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY) as string);
+      expect(saved.state.draftsByThreadKey[scopedThreadKey(betaRef)]?.prompt).toBe("beta edited");
+      expect(saved.state.draftsByThreadKey[scopedThreadKey(alphaRef)]?.prompt).toBe("alpha edited");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
 });
 
 describe("composerDraftStore thread contexts", () => {
@@ -842,6 +893,32 @@ describe("composerDraftStore environment contexts", () => {
         environmentId: "environment-vps",
       },
     ]);
+  });
+
+  it("tags a bot once and keeps it through persistence into the sent context", () => {
+    const atlas = botContextRecord(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: ProjectId.make("project-atlas") },
+      "Atlas",
+    );
+    const store = useComposerDraftStore.getState();
+    store.addBotContexts(threadRef, [atlas]);
+    store.addBotContexts(threadRef, [{ ...atlas, label: "renamed" }]);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    const restored = merge(
+      JSON.parse(
+        JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+      ),
+      useComposerDraftStore.getInitialState(),
+    ).draftsByThreadKey[scopedThreadKey(threadRef)];
+    expect(restored?.prompt).toBe(`[Atlas](t3-context://v1/bot/${atlas.contextId}) `);
+    expect(
+      buildMessageContext({
+        terminalContexts: [],
+        reviewComments: [],
+        previewAnnotations: [],
+        botContexts: restored?.botContexts ?? [],
+      })?.records,
+    ).toEqual([atlas]);
   });
 
   it("drops the chip with the record and removes an otherwise empty draft", () => {

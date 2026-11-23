@@ -61,6 +61,7 @@ import { readProject } from "../state/entities";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+import { isSecondaryDesktopWindow } from "../multiWindow/windowContext";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -160,6 +161,7 @@ function RootRouteBranch() {
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
+  const secondaryWindow = isSecondaryDesktopWindow();
 
   if (pathname === GUEST_PAGE_PATH) return <Outlet />;
 
@@ -186,13 +188,14 @@ function RootRouteBranch() {
   // first-run gate and the event router, whose first navigation would leave the page.
   const appHosts = (
     <>
-      {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+      {/* The desktop routes activations and web links to the main window, which also keeps the app awake. */}
+      {(primaryEnvironmentAuthenticated || localEnvironmentDisabled) && !secondaryWindow ? (
         <>
           <DesktopAppActivationCoordinator />
           <DesktopWebLinkCoordinator />
         </>
       ) : null}
-      {isElectron ? <RunningThreadKeepAlive /> : null}
+      {isElectron && !secondaryWindow ? <RunningThreadKeepAlive /> : null}
       <RelayClientInstallDialog />
       <ConnectOnboardingDialog />
       <SshPasswordPromptDialog />
@@ -210,8 +213,8 @@ function RootRouteBranch() {
   );
   const appShell = (
     <CommandPalette>
-      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-      <AppSidebarLayout showSidebar={!isWelcome}>
+      {/* Setup starts with an empty workspace, so the Welcome page has no thread list; the bot window has its own. */}
+      <AppSidebarLayout showSidebar={!isWelcome && pathname !== "/bot"}>
         <Outlet />
       </AppSidebarLayout>
     </CommandPalette>

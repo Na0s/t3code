@@ -48,14 +48,21 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
       ]),
     ),
   });
+  const botProjectsAtom = Atom.family((_environmentId: EnvironmentId) =>
+    Atom.make<ReadonlyArray<ProjectId>>([]),
+  );
   return {
     registry: AtomRegistry.make(),
     snapshotAtom,
     catalogValueAtom,
+    botProjectsAtom,
     threads: createEnvironmentThreadShellAtoms({
       catalogValueAtom,
       snapshotAtom,
       hiddenThreadTagsAtom: () => Atom.make(null),
+      botProjectIdsAtom: Atom.family((id: EnvironmentId) =>
+        Atom.make((get): ReadonlySet<ProjectId> => new Set(get(botProjectsAtom(id)))),
+      ),
     }),
   };
 }
@@ -676,6 +683,73 @@ describe("v2 thread shell lists", () => {
     } finally {
       dispose();
       harness.registry.dispose();
+    }
+  });
+
+  it("leaves bot project threads out of display lists but keeps them readable and notifiable", () => {
+    const harness = makeHarness([environmentId, remoteEnvironmentId]);
+    const botThread = {
+      ...v2ThreadShell,
+      id: ThreadId.make("bot-thread"),
+      projectId: otherProjectId,
+    };
+    harness.registry.set(harness.snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [v2ThreadShell, botThread],
+    });
+    harness.registry.set(harness.snapshotAtom(remoteEnvironmentId), {
+      ...v2ShellSnapshot,
+      threads: [botThread],
+    });
+    const { threads, registry } = harness;
+    const ids = (atom: Atom.Atom<ReadonlyArray<{ readonly id: ThreadId }>>) =>
+      registry.get(atom).map((thread) => thread.id);
+    const disposers = [
+      threads.visibleThreadShellsAtom,
+      threads.quietThreadShellsAtom,
+      threads.navigationThreadShellsAtom,
+      threads.botQuietThreadShellsAtom,
+    ].map((atom) => registry.mount(atom));
+    try {
+      const shownBefore = registry.get(threads.visibleThreadShellsAtom);
+      expect(shownBefore).toBe(registry.get(threads.threadShellsAtom));
+
+      // Bot status is per environment: the remote copy of the project stays a normal project.
+      registry.set(harness.botProjectsAtom(environmentId), [otherProjectId]);
+      for (const atom of [
+        threads.visibleThreadShellsAtom,
+        threads.quietThreadShellsAtom,
+        threads.navigationThreadShellsAtom,
+      ]) {
+        expect(registry.get(atom).map((thread) => `${thread.environmentId}:${thread.id}`)).toEqual([
+          `${environmentId}:${v2ThreadShell.id}`,
+          `${remoteEnvironmentId}:${botThread.id}`,
+        ]);
+      }
+      expect(ids(threads.threadShellsAtom)).toHaveLength(3);
+      expect(
+        ids(threads.threadShellsForProjectRefsAtom([{ environmentId, projectId: otherProjectId }])),
+      ).toEqual([botThread.id]);
+      expect(
+        registry.get(threads.threadShellAtom({ environmentId, threadId: botThread.id })),
+      ).not.toBeNull();
+      expect(registry.get(threads.hiddenThreadKeysAtom).size).toBe(0);
+      expect(
+        registry
+          .get(threads.botQuietThreadShellsAtom)
+          .map((thread) => `${thread.environmentId}:${thread.id}`),
+      ).toEqual([`${environmentId}:${botThread.id}`]);
+
+      const shown = registry.get(threads.visibleThreadShellsAtom);
+      registry.set(harness.botProjectsAtom(environmentId), [otherProjectId]);
+      expect(registry.get(threads.visibleThreadShellsAtom)).toBe(shown);
+
+      registry.set(harness.botProjectsAtom(environmentId), []);
+      expect(ids(threads.navigationThreadShellsAtom)).toHaveLength(3);
+      expect(registry.get(threads.botQuietThreadShellsAtom)).toEqual([]);
+    } finally {
+      for (const dispose of disposers) dispose();
+      registry.dispose();
     }
   });
 

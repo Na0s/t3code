@@ -724,6 +724,18 @@ describe("serverSettings helpers", () => {
     expect(current.usagePriceOverrides["example-model"]?.cacheReadCostPerMillionTokens).toBe(0.5);
   });
 
+  it("replaces and removes individual bots without clobbering other bots", () => {
+    const atlas = ProjectId.make("project-atlas");
+    const warden = ProjectId.make("project-warden");
+    const current = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      bots: { [atlas]: { role: "Orchestrator", order: 0 }, [warden]: { role: "PR babysitter" } },
+    });
+    const replaced = applyServerSettingsPatch(current, { bots: { [atlas]: { order: 1 } } });
+    expect(replaced.bots).toEqual({ [atlas]: { order: 1 }, [warden]: { role: "PR babysitter" } });
+    const removed = applyServerSettingsPatch(replaced, { bots: { [atlas]: null } });
+    expect(removed.bots).toEqual({ [warden]: { role: "PR babysitter" } });
+  });
+
   it("stores background activity profiles as a versioned object and syncs legacy aliases", () => {
     const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       backgroundActivity: {

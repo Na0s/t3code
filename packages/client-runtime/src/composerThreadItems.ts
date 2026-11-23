@@ -1,13 +1,15 @@
 import {
   isListedThreadLineage,
+  type BotSettings,
   type EnvironmentId,
   type EnvironmentMachineKind,
+  type ProjectId,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 
-import type { EnvironmentThreadShell } from "./state/models.ts";
+import type { EnvironmentProject, EnvironmentThreadShell } from "./state/models.ts";
 import { threadSearchSubject, type ThreadSearchShell } from "./state/threadSearch.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
@@ -137,5 +139,57 @@ export function matchComposerEnvironmentItems(
       machine: environment.machine,
       label: environment.label,
       description: resolve(msg("Machine", { $context: "noun, search result type" })),
+    }));
+}
+
+export interface ComposerBotItem {
+  readonly id: string;
+  readonly type: "bot";
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly label: string;
+  readonly description: string;
+}
+
+/**
+ * The composer environment's T3_BOTs the `@` picker offers. Tagging one has its server deliver
+ * the message to the bot, so bots on other machines stay out. Like threads, they need a query;
+ * "bot" lists them all.
+ */
+export function matchComposerBotItems(input: {
+  projects: ReadonlyArray<EnvironmentProject>;
+  bots: Readonly<Record<string, BotSettings | undefined>> | null | undefined;
+  environmentId: EnvironmentId;
+  query: string;
+}): ComposerBotItem[] {
+  const query = input.query.trim().toLowerCase();
+  if (query.length === 0 || !input.bots) return [];
+  const bots = input.bots;
+  return input.projects
+    .flatMap((project) => {
+      const settings = bots[project.id];
+      return project.environmentId === input.environmentId &&
+        project.archivedAt == null &&
+        settings !== undefined
+        ? [{ project, settings }]
+        : [];
+    })
+    .filter(({ project, settings }) =>
+      `${project.title} ${settings.role ?? ""} bot t3_bot`.toLowerCase().includes(query),
+    )
+    .sort(
+      (left, right) =>
+        (left.settings.order ?? Number.POSITIVE_INFINITY) -
+          (right.settings.order ?? Number.POSITIVE_INFINITY) ||
+        left.project.title.localeCompare(right.project.title),
+    )
+    .map(({ project, settings }) => ({
+      id: `bot:${project.environmentId}:${project.id}`,
+      type: "bot",
+      environmentId: project.environmentId,
+      projectId: project.id,
+      label: project.title,
+      // oxlint-disable-next-line t3code/no-untranslated-copy -- T3_BOT is the feature's name
+      description: settings.role?.trim() || "T3_BOT",
     }));
 }

@@ -214,6 +214,7 @@ const savedContent = (prompt: string) => ({
   previewAnnotations: [],
   threadContexts: [],
   environmentContexts: [],
+  botContexts: [],
 });
 
 const promptOf = (ref: ScopedThreadRef) =>

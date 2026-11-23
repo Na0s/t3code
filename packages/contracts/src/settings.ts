@@ -1377,6 +1377,15 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+/** A T3_BOT identity. The project carries the name and icon; its threads are the bot's conversations. */
+export const BotSettings = Schema.Struct({
+  role: Schema.optionalKey(TrimmedString),
+  /** Conversation that receives mentions; null or missing uses the bot's most recent thread. */
+  mainThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  order: Schema.optionalKey(Schema.Number),
+});
+export type BotSettings = typeof BotSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1621,6 +1630,9 @@ export const ServerSettings = Schema.Struct({
   usageModelAliases: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+
+  /** Bot projects are hidden from the main project and thread lists and shown in the bot window. */
+  bots: Schema.Record(ProjectId, BotSettings).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 
   /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
   usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
@@ -2014,6 +2026,9 @@ export const ServerSettingsPatch = Schema.Struct({
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
   ),
+
+  /** Each entry replaces the stored bot; null turns the project back into a normal project. */
+  bots: Schema.optionalKey(Schema.Record(ProjectId, Schema.NullOr(BotSettings))),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

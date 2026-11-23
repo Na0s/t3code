@@ -25,6 +25,7 @@ import {
   RuntimeMode,
   ThreadContextRecord,
   EnvironmentContextRecord,
+  BotContextRecord,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -91,12 +92,14 @@ import {
   terminalContextReference,
   threadContextReference,
   environmentContextReference,
+  botContextReference,
 } from "./lib/composerContextRecords";
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
 import { draftModelSelectionApplies } from "./lib/chatThreadActions";
 import { createDeferredStorage, createMemoryStorage } from "./lib/storage";
+import { readDesktopWindowContext } from "./multiWindow/windowContext";
 import { getDefaultServerModel } from "./providerModels";
 import {
   replaceComposerContextReferences,
@@ -112,6 +115,7 @@ const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isThreadContextRecord = Schema.is(ThreadContextRecord);
 const isEnvironmentContextRecord = Schema.is(EnvironmentContextRecord);
+const isBotContextRecord = Schema.is(BotContextRecord);
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
 const isResponseContextRecord = Schema.is(ResponseContextRecord);
@@ -345,6 +349,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
   environmentContexts: Schema.optionalKey(Schema.Array(EnvironmentContextRecord)),
+  botContexts: Schema.optionalKey(Schema.Array(BotContextRecord)),
   replyTo: Schema.optionalKey(ResponseContextRecord),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
@@ -474,6 +479,7 @@ export interface ComposerThreadDraftState {
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
   environmentContexts: EnvironmentContextRecord[];
+  botContexts: BotContextRecord[];
   /** The response this message replies to. It becomes a context record when the message is sent. */
   replyTo: ResponseContextRecord | null;
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
@@ -499,6 +505,7 @@ export function composerDraftHasUserContent(
     draft.reviewComments.length > 0 ||
     draft.threadContexts.length > 0 ||
     draft.environmentContexts.length > 0 ||
+    draft.botContexts.length > 0 ||
     draft.replyTo !== null
   );
 }
@@ -760,6 +767,16 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     records: ReadonlyArray<EnvironmentContextRecord>,
   ) => void;
+  /** Tags bots; already-tagged bots are skipped. */
+  addBotContexts: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<BotContextRecord>,
+    options?: ComposerContextAddOptions,
+  ) => void;
+  setBotContexts: (
+    threadRef: ComposerThreadTarget,
+    records: ReadonlyArray<BotContextRecord>,
+  ) => void;
   clearPersistedAttachments: (threadRef: ComposerThreadTarget) => void;
   syncPersistedAttachments: (
     threadRef: ComposerThreadTarget,
@@ -876,6 +893,7 @@ const EMPTY_PREVIEW_ANNOTATIONS: PreviewAnnotationPayload[] = [];
 const EMPTY_REVIEW_COMMENTS: ReviewCommentContext[] = [];
 const EMPTY_THREAD_CONTEXTS: ThreadContextRecord[] = [];
 const EMPTY_ENVIRONMENT_CONTEXTS: EnvironmentContextRecord[] = [];
+const EMPTY_BOT_CONTEXTS: BotContextRecord[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_FILES);
 Object.freeze(EMPTY_IDS);
@@ -884,6 +902,7 @@ Object.freeze(EMPTY_PREVIEW_ANNOTATIONS);
 Object.freeze(EMPTY_REVIEW_COMMENTS);
 Object.freeze(EMPTY_THREAD_CONTEXTS);
 Object.freeze(EMPTY_ENVIRONMENT_CONTEXTS);
+Object.freeze(EMPTY_BOT_CONTEXTS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
 const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
@@ -903,6 +922,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   reviewComments: EMPTY_REVIEW_COMMENTS,
   threadContexts: EMPTY_THREAD_CONTEXTS,
   environmentContexts: EMPTY_ENVIRONMENT_CONTEXTS,
+  botContexts: EMPTY_BOT_CONTEXTS,
   replyTo: null,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
@@ -922,6 +942,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     reviewComments: [],
     threadContexts: [],
     environmentContexts: [],
+    botContexts: [],
     replyTo: null,
     modelSelectionByProvider: {},
     activeProvider: null,
@@ -1036,6 +1057,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.reviewComments.length === 0 &&
     draft.threadContexts.length === 0 &&
     draft.environmentContexts.length === 0 &&
+    draft.botContexts.length === 0 &&
     draft.replyTo === null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
@@ -2176,6 +2198,9 @@ function normalizePersistedDraftsByThreadId(
     const environmentContexts = Array.isArray(draftCandidate.environmentContexts)
       ? draftCandidate.environmentContexts.filter(isEnvironmentContextRecord)
       : [];
+    const botContexts = Array.isArray(draftCandidate.botContexts)
+      ? draftCandidate.botContexts.filter(isBotContextRecord)
+      : [];
     const previewAnnotations = Array.isArray(draftCandidate.previewAnnotations)
       ? draftCandidate.previewAnnotations.filter(isPreviewAnnotationPayload)
       : [];
@@ -2294,6 +2319,7 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
       environmentContexts.length === 0 &&
+      botContexts.length === 0 &&
       replyTo === null &&
       !hasModelData &&
       !runtimeMode &&
@@ -2322,6 +2348,7 @@ function normalizePersistedDraftsByThreadId(
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
       ...(environmentContexts.length > 0 ? { environmentContexts } : {}),
+      ...(botContexts.length > 0 ? { botContexts } : {}),
       ...(replyTo ? { replyTo: replyTo as DeepMutable<ResponseContextRecord> } : {}),
       ...(hasModelData
         ? {
@@ -2348,6 +2375,7 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.reviewComments?.length ?? 0) > 0 ||
     (draft.threadContexts?.length ?? 0) > 0 ||
     (draft.environmentContexts?.length ?? 0) > 0 ||
+    (draft.botContexts?.length ?? 0) > 0 ||
     draft.replyTo !== undefined
   );
 }
@@ -2428,6 +2456,7 @@ export function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
       draft.environmentContexts.length === 0 &&
+      draft.botContexts.length === 0 &&
       draft.replyTo === null &&
       !hasModelData &&
       draft.runtimeMode === null &&
@@ -2486,6 +2515,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.environmentContexts.length > 0
         ? { environmentContexts: draft.environmentContexts.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.botContexts.length > 0
+        ? { botContexts: draft.botContexts.map((record) => ({ ...record })) }
         : {}),
       ...(draft.replyTo
         ? { replyTo: { ...draft.replyTo } as DeepMutable<ResponseContextRecord> }
@@ -2757,6 +2789,7 @@ function toHydratedThreadDraft(
       ...(persistedDraft.previewAnnotations ?? []).map(previewAnnotationContextReference),
       ...(persistedDraft.threadContexts ?? []).map(threadContextReference),
       ...(persistedDraft.environmentContexts ?? []).map(environmentContextReference),
+      ...(persistedDraft.botContexts ?? []).map(botContextReference),
       ...files.map(fileContextReference),
     ]),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
@@ -2773,6 +2806,7 @@ function toHydratedThreadDraft(
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
     environmentContexts: persistedDraft.environmentContexts?.map((record) => ({ ...record })) ?? [],
+    botContexts: persistedDraft.botContexts?.map((record) => ({ ...record })) ?? [],
     replyTo: persistedDraft.replyTo ?? null,
     modelSelectionByProvider,
     activeProvider,
@@ -4347,6 +4381,68 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
+        addBotContexts: (threadRef, records, options) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          const existingIds = new Set(
+            (get().draftsByThreadKey[threadKey]?.botContexts ?? []).map(
+              (record) => record.contextId,
+            ),
+          );
+          const incoming = records.filter((record) => {
+            if (existingIds.has(record.contextId)) return false;
+            existingIds.add(record.contextId);
+            return true;
+          });
+          if (incoming.length === 0) return;
+          const references = incoming.map(botContextReference);
+          const placedAtCaret =
+            options?.appendReference !== false &&
+            options?.insertAtCaret !== false &&
+            (contextInsertionHandlers.get(threadKey)?.(references) ?? false);
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const known = new Set(existing.botContexts.map((record) => record.contextId));
+            const accepted = incoming.filter((record) => !known.has(record.contextId));
+            if (accepted.length === 0) return state;
+            return {
+              draftsByThreadKey: {
+                ...state.draftsByThreadKey,
+                [threadKey]: {
+                  ...existing,
+                  prompt:
+                    placedAtCaret || options?.appendReference === false
+                      ? existing.prompt
+                      : ensureInlineContextReferences(
+                          existing.prompt,
+                          accepted.map(botContextReference),
+                        ),
+                  botContexts: [...existing.botContexts, ...accepted],
+                },
+              },
+            };
+          });
+        },
+        setBotContexts: (threadRef, records) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          const botContexts = records.filter(isBotContextRecord).map((record) => ({ ...record }));
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const retainedIds = new Set(botContexts.map((record) => record.contextId));
+            let prompt = existing.prompt;
+            for (const previous of existing.botContexts) {
+              if (retainedIds.has(previous.contextId)) continue;
+              prompt = removeInlineContextReference(prompt, previous.contextId).prompt;
+            }
+            prompt = ensureInlineContextReferences(prompt, botContexts.map(botContextReference));
+            const nextDraft = { ...existing, prompt, botContexts };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
         removeReviewComment: (threadRef, commentId) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey || !commentId) return;
@@ -4482,6 +4578,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ...current.reviewComments.map(reviewCommentContextReference),
                 ...current.threadContexts.map(threadContextReference),
                 ...current.environmentContexts.map(environmentContextReference),
+                ...current.botContexts.map(botContextReference),
                 ...current.previewAnnotations.map(previewAnnotationContextReference),
               ]),
               images: [],
@@ -4579,6 +4676,145 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
 composerDraftLoadedState = partializeComposerDraftStoreState(composerDraftStore.getState());
 
 export const useComposerDraftStore = composerDraftStore;
+
+type DraftRecordKey =
+  | "draftsByThreadKey"
+  | "draftThreadsByThreadKey"
+  | "logicalProjectDraftThreadKeyByLogicalProjectKey";
+const DRAFT_RECORD_KEYS: ReadonlyArray<DraftRecordKey> = [
+  "draftsByThreadKey",
+  "draftThreadsByThreadKey",
+  "logicalProjectDraftThreadKeyByLogicalProjectKey",
+];
+const DRAFT_STICKY_KEYS = [
+  "stickyModelSelectionByProvider",
+  "stickyOptionsByModelByProvider",
+  "stickyActiveProvider",
+] as const;
+
+interface AdoptedComposerDrafts {
+  /** Entries another window saved that this window had not changed; undefined removes one. */
+  readonly records: { readonly [K in DraftRecordKey]: Record<string, unknown> };
+  readonly sticky: Partial<
+    Pick<PersistedComposerDraftStoreState, (typeof DRAFT_STICKY_KEYS)[number]>
+  >;
+  /** The baseline the next write merges against, now including the adopted entries. */
+  readonly baseline: PersistedComposerDraftStoreState;
+  readonly changed: boolean;
+}
+
+/**
+ * The read side of `mergeComposerDraftStates`: what another window saved since `baseline`
+ * replaces this window's entry only where this window has not changed it since.
+ */
+function adoptStoredComposerDrafts(
+  stored: PersistedComposerDraftStoreState,
+  local: PersistedComposerDraftStoreState,
+  baseline: PersistedComposerDraftStoreState,
+): AdoptedComposerDrafts {
+  let changed = false;
+  const nextBaseline: Record<string, unknown> = { ...baseline };
+  const records = {} as Record<DraftRecordKey, Record<string, unknown>>;
+  for (const field of DRAFT_RECORD_KEYS) {
+    const storedRecord: Readonly<Record<string, unknown>> = stored[field];
+    const localRecord: Readonly<Record<string, unknown>> = local[field];
+    const baselineRecord: Readonly<Record<string, unknown>> = baseline[field];
+    const adopted: Record<string, unknown> = {};
+    const nextBaselineRecord: Record<string, unknown> = { ...baselineRecord };
+    for (const key of new Set([...Object.keys(storedRecord), ...Object.keys(baselineRecord)])) {
+      if (Equal.equals(storedRecord[key], baselineRecord[key])) continue;
+      if (!Equal.equals(localRecord[key], baselineRecord[key])) continue;
+      adopted[key] = storedRecord[key];
+      if (storedRecord[key] === undefined) delete nextBaselineRecord[key];
+      else nextBaselineRecord[key] = storedRecord[key];
+      changed = true;
+    }
+    records[field] = adopted;
+    nextBaseline[field] = nextBaselineRecord;
+  }
+  const sticky: Record<string, unknown> = {};
+  for (const field of DRAFT_STICKY_KEYS) {
+    if (Equal.equals(stored[field], baseline[field])) continue;
+    if (!Equal.equals(local[field], baseline[field])) continue;
+    sticky[field] = stored[field];
+    nextBaseline[field] = stored[field];
+    changed = true;
+  }
+  return {
+    records,
+    sticky,
+    baseline: nextBaseline as PersistedComposerDraftStoreState,
+    changed,
+  };
+}
+
+function applyRecordChanges<V>(
+  current: Readonly<Record<string, V>>,
+  adopted: Readonly<Record<string, unknown>>,
+  hydrate: (value: never) => V,
+): Record<string, V> {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(adopted)) {
+    if (value === undefined) delete next[key];
+    else next[key] = hydrate(value as never);
+  }
+  return next;
+}
+
+function adoptOtherWindowDrafts(text: string): void {
+  let parsed: StorageValue<unknown>;
+  try {
+    parsed = JSON.parse(text) as StorageValue<unknown>;
+  } catch {
+    return;
+  }
+  if (parsed.version !== COMPOSER_DRAFT_STORAGE_VERSION) return;
+  const baseline = composerDraftLastWrite?.local ?? composerDraftLoadedState;
+  if (baseline === null) return;
+  const stored = normalizeCurrentPersistedComposerDraftStoreState(parsed.state);
+  const adopted = adoptStoredComposerDrafts(
+    stored,
+    partializeComposerDraftStoreState(composerDraftStore.getState()),
+    baseline,
+  );
+  composerDraftLastWrite = { text, local: adopted.baseline, merged: stored };
+  if (!adopted.changed) return;
+  composerDraftStore.setState((state) => ({
+    draftsByThreadKey: applyRecordChanges(
+      state.draftsByThreadKey,
+      adopted.records.draftsByThreadKey,
+      toHydratedThreadDraft,
+    ),
+    draftThreadsByThreadKey: applyRecordChanges(
+      state.draftThreadsByThreadKey,
+      adopted.records.draftThreadsByThreadKey,
+      toHydratedDraftThreadState,
+    ) as Record<string, DraftThreadState>,
+    logicalProjectDraftThreadKeyByLogicalProjectKey: applyRecordChanges(
+      state.logicalProjectDraftThreadKeyByLogicalProjectKey,
+      adopted.records.logicalProjectDraftThreadKeyByLogicalProjectKey,
+      (value: string) => value,
+    ),
+    ...("stickyModelSelectionByProvider" in adopted.sticky
+      ? { stickyModelSelectionByProvider: adopted.sticky.stickyModelSelectionByProvider ?? {} }
+      : {}),
+    ...("stickyOptionsByModelByProvider" in adopted.sticky
+      ? { stickyOptionsByModelByProvider: adopted.sticky.stickyOptionsByModelByProvider ?? {} }
+      : {}),
+    ...("stickyActiveProvider" in adopted.sticky
+      ? { stickyActiveProvider: adopted.sticky.stickyActiveProvider ?? null }
+      : {}),
+  }));
+}
+
+// Desktop windows share drafts through storage; each picks up what the others save.
+if (readDesktopWindowContext() !== null && typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === COMPOSER_DRAFT_STORAGE_KEY && event.newValue !== null) {
+      adoptOtherWindowDrafts(event.newValue);
+    }
+  });
+}
 
 export function subscribeComposerDraftModelReconciliation(input: {
   readonly registry: AtomRegistry.AtomRegistry;

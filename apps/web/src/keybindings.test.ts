@@ -400,6 +400,39 @@ describe("thread navigation helpers", () => {
   });
 });
 
+describe("desktop window shortcuts", () => {
+  it.each([
+    { key: "n", command: "window.new", neighbour: "chat.newWithoutProject" },
+    { key: "b", command: "bot.open", neighbour: "rightPanel.toggle" },
+  ] as const)(
+    "$command opens a window only in the desktop app, apart from $neighbour",
+    ({ key, command, neighbour }) => {
+      const shortcut = event({ key, ctrlKey: true, altKey: true, shiftKey: true });
+      assert.strictEqual(
+        resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "Linux",
+          context: { isDesktop: true },
+        }),
+        command,
+      );
+      assert.isNull(
+        resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform: "Linux",
+          context: { isDesktop: false },
+        }),
+      );
+      assert.strictEqual(
+        resolveShortcutCommand(
+          event({ key, ctrlKey: true, altKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          { platform: "Linux", context: { isDesktop: true } },
+        ),
+        neighbour,
+      );
+    },
+  );
+});
+
 describe("model picker navigation helpers", () => {
   it("keeps default model jumps off the web even while the picker is open", () => {
     const input = event({ key: "3", metaKey: true });

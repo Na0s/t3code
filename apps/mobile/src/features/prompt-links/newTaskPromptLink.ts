@@ -402,7 +402,7 @@ function resolveLink(linkSearch: string) {
   const activityOf = (project: EnvironmentProject) =>
     lastActivity.get(`${project.environmentId}:${project.id}`) ?? "";
   const projects = findPromptLinkProjects(
-    [...appAtomRegistry.get(environmentProjects.projectsAtom)].sort((left, right) =>
+    [...appAtomRegistry.get(environmentProjects.visibleProjectsAtom)].sort((left, right) =>
       activityOf(right).localeCompare(activityOf(left)),
     ),
     repository,

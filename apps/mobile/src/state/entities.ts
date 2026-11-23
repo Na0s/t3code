@@ -197,11 +197,16 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
 }
 
+/** Projects without T3_BOT projects, for lists and pickers. */
+export function useVisibleProjects(): ReadonlyArray<EnvironmentProject> {
+  return useAtomValue(environmentProjects.visibleProjectsAtom);
+}
+
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
 }
 
-/** Thread shells minus those the tag filter hides, for lists that show threads to the user. */
+/** Thread shells minus tag-hidden and T3_BOT threads, for lists that show threads to the user. */
 export function useVisibleThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.visibleThreadShellsAtom);
 }

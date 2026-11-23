@@ -436,7 +436,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
-      /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
+      /** Shown inside another view (a side chat, the bot window), which keeps the workspace UI. */
       embedded?: SideChatParentPanel;
       routeKind: "server";
       draftId?: never;
@@ -447,7 +447,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
-      embedded?: never;
+      embedded?: SideChatParentPanel;
       routeKind: "draft";
       draftId: DraftId;
     };

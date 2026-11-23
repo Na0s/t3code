@@ -47,9 +47,9 @@ import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import {
   useDelegatedUnderParent,
-  useProjects,
   useServerConfigs,
   useThreadShell,
+  useVisibleProjects,
   useVisibleThreadShells,
 } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
@@ -232,7 +232,7 @@ export function CommandPalette(props: {
   const { themeVariables } = useAppearancePreferences();
   const selectDetail = useSelectWorkspaceDetail();
   const runCommand = props.onCommand;
-  const projects = useProjects();
+  const projects = useVisibleProjects();
   const threads = useVisibleThreadShells();
   const delegatedUnderParent = useDelegatedUnderParent();
   const activeThreadRef = parseActiveThreadPath(props.pathname);

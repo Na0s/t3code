@@ -9,6 +9,7 @@ import {
 import {
   type DesktopUpdateChannel,
   type EnvironmentId,
+  type ProjectId,
   type ProviderInstanceId,
   type ServerConfig,
   type ServerConfigStreamEvent,
@@ -1372,6 +1373,18 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:hidden-thread-tags:${environmentId}`),
     ),
   );
+  const botProjectIdsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get): ReadonlySet<ProjectId> =>
+        new Set(Object.keys(get(settingsValueAtom(environmentId))?.bots ?? {}) as ProjectId[]),
+    ).pipe(
+      Atom.withEquality(
+        (a: ReadonlySet<ProjectId>, b: ReadonlySet<ProjectId>) =>
+          a.size === b.size && [...a].every((id) => b.has(id)),
+      ),
+      Atom.withLabel(`environment-data:server:bot-project-ids:${environmentId}`),
+    ),
+  );
   const usagePricesAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const overrides = get(settingsValueAtom(environmentId))?.usagePriceOverrides ?? {};
@@ -1530,6 +1543,7 @@ export function createServerEnvironmentAtoms<R, E>(
     updateStateAtom,
     settingsValueAtom,
     hiddenThreadTagsAtom,
+    botProjectIdsAtom,
     usageModelFilterAtom,
     providersValueAtom,
     providerAuthState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
