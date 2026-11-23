@@ -24,6 +24,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { VcsNestedRepositories } from "../vcs/VcsNestedRepositories.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 
@@ -67,6 +68,15 @@ export class WorkspaceFolders extends Context.Service<
       /** The thread's `forThread` folders; passed in so the project is walked once. */
       readonly folders: ReadonlyArray<ThreadFolder>;
     }) => Effect.Effect<ReadonlyArray<ThreadFolder>, WorkspaceFoldersError>;
+    /**
+     * The repositories a project covers inside `worktreeRoot`, the Git checkout of `cwd`: those of
+     * the project whose folder `cwd` is, or of the task folder it is in. Relative with `/`
+     * separators; a submodule stays with the repository that pins it.
+     */
+    readonly nestedRepositories: (input: {
+      readonly cwd: string;
+      readonly worktreeRoot: string;
+    }) => Effect.Effect<ReadonlyArray<string>>;
     readonly list: (
       input: WorkspaceListFoldersInput,
     ) => Effect.Effect<WorkspaceListFoldersResult, WorkspaceFoldersError>;
@@ -529,6 +539,49 @@ const make = Effect.gen(function* () {
     ]);
   });
 
+  const nestedRepositories: WorkspaceFolders["Service"]["nestedRepositories"] = Effect.fn(
+    "WorkspaceFolders.nestedRepositories",
+  )(function* (input) {
+    const taskFolder = yield* taskFolders
+      .findContaining(input.cwd)
+      .pipe(Effect.orElseSucceed(() => null));
+    const folders =
+      taskFolder !== null
+        ? taskFolder.repositories.map((repository) => repository.worktreePath)
+        : yield* projects.findActiveByWorkspaceRoot(input.cwd).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed([]),
+                onSome: (project) =>
+                  Effect.map(foldersOf(project), (tracked) => tracked.map((folder) => folder.path)),
+              }),
+            ),
+            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+          );
+    if (folders.length === 0) return [];
+    const root = yield* realPath(input.worktreeRoot);
+    const inside = yield* Effect.forEach(
+      folders,
+      (folder) =>
+        realPath(folder).pipe(
+          Effect.map((real) =>
+            real !== root && isWithinRoot(path, real, root)
+              ? [path.relative(root, real).split(path.sep).join("/")]
+              : [],
+          ),
+        ),
+      { concurrency: DETECTION_CONCURRENCY },
+    );
+    const submodules = new Set(
+      parseGitmodulesPaths(
+        yield* fileSystem
+          .readFileString(path.join(root, ".gitmodules"))
+          .pipe(Effect.orElseSucceed(() => "")),
+      ),
+    );
+    return [...new Set(inside.flat())].filter((relative) => !submodules.has(relative));
+  });
+
   const list: WorkspaceFolders["Service"]["list"] = Effect.fn("WorkspaceFolders.list")(
     function* (input) {
       const project = yield* readProject(input.projectId);
@@ -542,7 +595,15 @@ const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
 
-  return WorkspaceFolders.of({ forThread, submodules, list, scan });
+  return WorkspaceFolders.of({ forThread, submodules, nestedRepositories, list, scan });
 });
 
 export const layer = Layer.effect(WorkspaceFolders, make);
+
+/** Lets Git views of a project's checkout leave out the repositories the project covers in it. */
+export const layerVcsNestedRepositories = Layer.effect(
+  VcsNestedRepositories,
+  Effect.gen(function* () {
+    return (yield* WorkspaceFolders).nestedRepositories;
+  }),
+);

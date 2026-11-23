@@ -55,6 +55,7 @@ import {
 import { autoPullProjects } from "../serverRuntimeStartup.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
+import { VcsNestedRepositories } from "./VcsNestedRepositories.ts";
 import { gitConfigEnv } from "./VcsProcess.ts";
 
 const encodeGitCommandError = Schema.encodeEffect(Schema.fromJsonString(GitCommandError));
@@ -3958,6 +3959,54 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           insertions: 3,
           deletions: 1,
         });
+      }),
+    );
+
+    it.effect("leaves the repositories a project covers out of its checkout's Git views", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(VcsNestedRepositories, (input) =>
+            Effect.succeed(input.worktreeRoot === cwd ? ["api", "web"] : []),
+          ),
+        );
+        // `web` is also listed in .gitignore: naming it in git add's pathspec would fail.
+        for (const nested of ["api", "web"]) {
+          yield* fileSystem.makeDirectory(`${cwd}/${nested}`);
+          yield* initRepoWithCommit(`${cwd}/${nested}`);
+          yield* writeTextFile(cwd, `${nested}/dirty.txt`, "nested change\n");
+        }
+        yield* writeTextFile(cwd, ".gitignore", "web/\n");
+        yield* git(cwd, ["add", ".gitignore"]);
+        yield* git(cwd, ["commit", "-m", "ignore web"]);
+        yield* writeTextFile(cwd, "notes.txt", "root change\n");
+
+        const status = yield* driver.statusDetailsLocal(cwd, { includeBranchChanges: true });
+        assert.deepStrictEqual(status.workingTree.files, [
+          { path: "notes.txt", insertions: 0, deletions: 0 },
+        ]);
+        assert.deepStrictEqual(status.branchChanges, {
+          baseRef: null,
+          insertions: 1,
+          deletions: 0,
+        });
+        const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
+        const workingTree = preview.sources.find((source) => source.kind === "working-tree");
+        assert.deepStrictEqual(
+          workingTree?.files?.map((file) => file.path),
+          ["notes.txt"],
+        );
+        assert.notInclude(workingTree?.diff, "api");
+
+        yield* driver.commit(cwd, "Root change", "", { stage: {} });
+        assert.deepStrictEqual((yield* git(cwd, ["ls-tree", "--name-only", "HEAD"])).split("\n"), [
+          ".gitignore",
+          "README.md",
+          "notes.txt",
+        ]);
+        assert.isFalse((yield* driver.statusDetailsLocal(cwd)).hasWorkingTreeChanges);
       }),
     );
 
